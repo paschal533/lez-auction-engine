@@ -4,5 +4,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::arithmetic_side_effects)]
 
+pub mod error;
 pub mod math;
+pub mod schedule;
 pub mod units;

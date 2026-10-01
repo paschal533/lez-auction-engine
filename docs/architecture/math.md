@@ -145,7 +145,9 @@ If `q == u128::MAX` and we need to add 1 for ceiling, `checked_add` returns `Non
 
 **Example of no overflow**: `mul_div_ceil(u128::MAX, 2, 2)` returns `Ok(u128::MAX)` because `(u128::MAX * 2) / 2 = u128::MAX` with no remainder, so no rounding up is needed.
 
-**Ceiling overflow with remainder**: If the quotient is `u128::MAX` and the remainder is non-zero, ceiling must add 1 to the quotient, causing overflow. Such cases return `Err(MathError::Overflow)`. These edge cases are verified by the proptest suite, which ensures correctness across the full u128 input space.
+**Ceiling overflow with remainder**: If the quotient is `u128::MAX` and the remainder is non-zero, ceiling must add 1 to the quotient, causing overflow. Such cases return `Err(MathError::Overflow)`.
+
+**Concrete example** (see test `ceil_overflow_with_remainder`): Let `x = 7`, `y = 2·(u128::MAX / 7) + 1`, `d = 2`. Since `2^128 ≡ 4 (mod 7)`, we have `2^129 - 1 ≡ 0 (mod 7)`, so `y = (2^129 - 1) / 7` exactly. The product `x·y = 2^129 - 1` divides by 2 to give `q = u128::MAX, r = 1`. Thus `mul_div_floor(x, y, d) = Ok(u128::MAX)` and `mul_div_ceil(x, y, d) = Err(MathError::Overflow)`.
 
 ## Test Coverage
 
@@ -157,4 +159,4 @@ The test suite includes:
 
 ## Safety
 
-All functions are implemented in safe Rust with `#[forbid(unsafe_code)]` and `#![deny(clippy::arithmetic_side_effects)]`.
+The crate denies `clippy::arithmetic_side_effects` globally. The `math.rs` and `units.rs` modules opt out with `#![allow(clippy::arithmetic_side_effects)]` because every operation in these modules is provably bounded as documented inline. All functions use only safe Rust with `#[forbid(unsafe_code)]`.

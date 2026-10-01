@@ -131,6 +131,21 @@ mod tests {
         assert_eq!(mul_div_ceil(6, 10, 4), Ok(15));
     }
 
+    #[test]
+    fn ceil_overflow_with_remainder() {
+        // Construct x·y such that dividing by d yields q = u128::MAX with r = 1.
+        // Use x = 7, y = 2·(u128::MAX / 7) + 1, d = 2.
+        // Reasoning: 2^128 ≡ 4 (mod 7), so 2^129 - 1 ≡ 0 (mod 7).
+        // Thus y = (2^129 - 1) / 7 exactly, and x·y = 2^129 - 1.
+        // Dividing by 2: q = u128::MAX, r = 1.
+        // ceil adds 1 to u128::MAX, causing overflow.
+        let x = 7u128;
+        let y = 2 * (u128::MAX / 7) + 1;
+        let d = 2u128;
+        assert_eq!(mul_div_floor(x, y, d), Ok(u128::MAX));
+        assert_eq!(mul_div_ceil(x, y, d), Err(MathError::Overflow));
+    }
+
     fn reference(x: u128, y: u128, d: u128) -> Option<(u128, u128)> {
         let p = U256::from(x) * U256::from(y);
         let (q, r) = p.div_rem(U256::from(d));

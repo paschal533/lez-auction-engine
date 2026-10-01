@@ -18,7 +18,7 @@
 **Success criteria for the PoC.**
 1. A reviewer can run one script on a clean machine with Nix. It starts a standalone LEZ v0.2.4 sequencer, deploys the stablecoin (with our hooks) and the engine, opens a position, makes it liquidatable, liquidates it, places partial bids, settles, and shows the result. The same flow can be driven in Basecamp through our app.
 2. A human-narrated demo video, recorded by the author and not AI-narrated, plus `SUBMISSION.md` with full, linked transaction hashes and reproduction steps.
-3. CI is green on `main` and runs: unit and property tests, sequencer end-to-end tests in dev mode, one real-proof (`RISC0_DEV_MODE=0`) end-to-end job, C++ module tests, QML tests, a Basecamp offscreen end-to-end test, IDL and header drift checks, the cycle-count regression check, and the `REQUIREMENTS.md` coverage check.
+3. CI is green on `main` and runs: unit and property tests, sequencer end-to-end tests in dev mode, one real-proof (`RISC0_DEV_MODE=0`) end-to-end job (nightly on `main` and on every tag; S2), C++ module tests, QML tests, a Basecamp offscreen end-to-end test, IDL and header drift checks, the cycle-count regression check, and the `REQUIREMENTS.md` coverage check.
 4. Every RFP-014 hard requirement is mapped in `REQUIREMENTS.md` to a test (PoC), a milestone (promise), or a descoping with a reason.
 5. The stablecoin's own upstream test suite passes unchanged with our hooks appended, and the hooks are offered upstream as a PR to `logos-blockchain/lez-programs`.
 
@@ -34,7 +34,7 @@
 
 ### 2.1 In the PoC (sub-project A)
 - `auction_core` pure Rust crate: math, discount schedule, state machine, accounting, invariants.
-- `auction_engine` SPEL program: `init_config`, `set_collateral_config`, `liquidate`, `bid`, `expire`, `restart`, `claim_leftover`, `settle_debt`.
+- `auction_engine` SPEL program: `init_config`, `set_collateral_config`, `liquidate`, `bid`, `expire` (which also restarts), `observe_feed`, `claim_leftover`, `settle_debt`.
 - Stablecoin hooks, appended at the end of the instruction enum: `set_liquidation_engine` and `liquidate_position`.
 - `auction_sdk` (Rust lib), `auction_ffi` (C ABI), `auction_cli`.
 - `auction_engine_module`, a C++ universal core module.
@@ -140,7 +140,7 @@ collateral_out(coin, t) := floor( coin · P / (RAY − d(t)) )     (256-bit inte
 ```
 
 - R comes from the host's `compute_current_redemption_price_wide` evaluated at the clock time. The engine must assert it fits in `u128`.
-- **If `valid(M)` is false, the collateral type is paused.** `liquidate` and `bid` revert with `PriceFeedStale` or `PriceFeedOutOfRange`. There is no fallback price; the requirement is RFP R2/R4.
+- **If `valid(M)` is false, the collateral type is paused.** `liquidate` and `bid` revert with `PriceFeedStale` or `PriceFeedOutOfRange`. There is no fallback price; the requirement is RFP R2/R4. *This deliberately overrides research-6 Q1's "fall back to P = R when stale" (see ADR-005). Do not "fix" it back.*
 - When the lot binds (the remaining collateral is less than `collateral_out`), the bidder receives the remaining lot and is charged `ceil(lot · (RAY − d) / P)`, not their full input. GEB charges the full bid here; we deliberately do not.
 - The `TwapQ64` adapter (Q64.64 → RAY, plus checks on the underlying observations) is implemented and unit-tested in `auction_core`. It is **not** used live until upstream reconciles the oracle scales (lez-programs PR #401).
 
@@ -155,74 +155,84 @@ collateral_out(coin, t) := floor( coin · P / (RAY − d(t)) )     (256-bit inte
 
 | Account | Seeds | Holds | Written by |
 |---|---|---|---|
-| `EngineConfig` | `["CONFIG", salt]` | admin; host stablecoin program id; stablecoin token def; `global_cap`; `global_on_auction`; `live_auctions: [AuctionId; 512]` + len | admin; `liquidate`, terminal transitions |
-| `CollateralConfig` | `["COLL", config, collateral_def]` | oracle account id; max oracle age; price band lo/hi; penalty bps; keeper tip/chip/cap; per-type cap and on-auction; schedule; ttl; min bid; `chost`; max restarts; `paused` (admin switch) | admin; `liquidate`, terminal transitions |
-| `Accounting` | `["ACCT", config]` | `unbacked_debt`, `total_shortfall_booked`, `total_penalty_collected`, `total_debt_burned` | bid (penalty and debt totals), terminal transitions, `settle_debt` |
+| `EngineConfig` | `["CONFIG", salt]` | admin; host stablecoin program id; stablecoin token def; `global_cap`; `global_reserved`; `live_auctions: [AuctionId; 512]` + len | admin; `liquidate`; chain-ending transitions |
+| `CollateralConfig` | `["COLL", config, collateral_def]` | oracle account id; max oracle age; price band lo/hi; penalty bps; keeper tip/chip/cap; per-type cap and `type_reserved`; schedule; ttl; min bid; `debt_floor`; `chost`; max restarts; `admin_paused`; **type-level pause clock:** `paused_since_ms: Option<u64>`, `paused_total_ms`, `last_seen_oracle_ts` | admin; `liquidate`; chain-ending transitions; pause observation (§5.7) |
+| `Accounting` | `["ACCT", config]` | `unbacked_debt`, `total_shortfall_booked`, `total_penalty_collected`, `total_debt_burned`, `total_debt_settled` | bid (per spike S6, or only at chain end), chain-ending transitions, `settle_debt` |
 | `SurplusBuffer` holding | `["BUFFER", config]` token holding (stablecoin) | penalty coins | bid (transfer in), `settle_debt` (burn) |
-| `LiquidationRecord` | `["LIQREC", config, position]` | `count: u64` | `liquidate`, `restart` |
-| `Auction` | `["AUCTION", config, position, nonce: u64]` | status; position; owner; keeper; collateral def; `collateral_seized`, `collateral_sold`, `collateral_left`, `keeper_reward`, `leftover_claimable`; `debt_principal`, `amount_to_raise`, `debt_raised`, `penalty_raised`; `start_ms`, `ttl_ms`; schedule snapshot; `paused_total_ms`, `paused_since_ms`, `last_seen_oracle_ts`; `restart_index`; predecessor and successor | its own instructions |
+| `ProtocolCollateral` holding | `["PCOLL", config, collateral_def]` token holding (collateral) | unsold collateral after a final expiry; reserved for sub-project B (debt auction or admin-gated sale) | final expiry (transfer in) |
+| `LiquidationRecord` | `["LIQREC", config, position]` | `count: u64` | `liquidate`, `expire` (when it restarts) |
+| `Auction` | `["AUCTION", config, position, nonce: u64]` | status; position; owner; keeper; collateral def; `collateral_seized`, `collateral_sold`, `collateral_left`, `keeper_reward`, `leftover_claimable`, `leftover_claimed`; `debt_principal`, `amount_to_raise`, `reserved_amount`, `debt_raised`, `penalty_raised`; `start_ms`, `ttl_ms`; schedule snapshot; `type_paused_total_at_start`; `restart_index`; predecessor and successor | its own instructions |
 | `AuctionVault` holding | `["VAULT", auction]` token holding (collateral) | seized collateral | token program via chained calls |
+
+**Capacity of `live_auctions`.** When the list is full, `liquidate` reverts with `LiveAuctionsFull`. The capacity of 512 is fixed in the PoC; invariant 12 holds only below capacity. This is noted in `THREAT_MODEL.md`.
 
 **Auction uniqueness (ADR-004, research-6 Q3).** A liquidated position can be refilled and liquidated again. `LiquidationRecord.count` gives each liquidation a new nonce. `liquidate` takes `nonce` as an argument, asserts `nonce == record.count`, and increments the count. Every address is derivable at signing time. Alternatives rejected:
 - a clock- or block-id seed: unknown when the transaction is signed;
 - a global sequence number: two keepers in the same block race and one fails, violating R3;
 - a counter map on the host: an unbounded hot global account.
 
-**Isolation (R3).** A `bid` writes only its `Auction`, its `AuctionVault`, `Accounting` totals, the `SurplusBuffer`, and the bidder's holdings. Whether `Accounting` totals are updated per bid or only at terminal transitions is decided by spike S6; the rest of the design does not depend on the outcome. `EngineConfig` and `CollateralConfig` are written only by `liquidate` and terminal transitions.
+**Isolation (R3).** A **non-final** `bid` writes only its `Auction`, its `AuctionVault`, the `SurplusBuffer`, and the bidder's holdings, plus the `Accounting` totals if spike S6 chooses per-bid updates. A bid that ends the chain is itself a chain-ending transition and also writes the cap counters, `live_auctions` and `Accounting`. `EngineConfig.global_reserved` and `CollateralConfig.type_reserved` change only at `liquidate` (reserve) and at chain end (release). Caps therefore count the reservation made at liquidation, not the amount still to raise (Maker's `digs`-per-take is not used).
 
 ### 5.5 State machine (F6)
 
 ```
 liquidate ──► Auctioning ──bid (partial)──┐
                  │  ▲─────────────────────┘
-                 ├─ debt_raised + penalty_raised ≥ amount_to_raise, or collateral_left = 0 ──► Settled  (terminal)
-                 └─ effective_elapsed ≥ ttl (permissionless expire) ──────────────────────► Expired  (terminal)
-                                                    │
-                       restart (if restart_index < max_restarts) ──► NEW Auction (nonce = record.count++),
-                                                                     remaining lot/target, fresh schedule
-                       else ──► final: shortfall booked, remaining collateral → leftover rules (§5.8)
+                 ├─ raised ≥ amount_to_raise, or collateral_left = 0 ─────────► Settled   (terminal, ENDS CHAIN)
+                 └─ t_eff ≥ ttl → expire:
+                       ├─ restart_index < max_restarts ──► Expired (terminal) + NEW successor Auction
+                       │                                    in the same tx (nonce = record.count++),
+                       │                                    remaining lot/target and reservation carried over
+                       └─ restart_index = max_restarts ───► Expired (terminal, ENDS CHAIN, "final")
 ```
 
-- Every handler asserts the expected status first. Terminal accounts are immutable except for `leftover_claimable` being reduced by `claim_leftover`.
+- **Chain-ending transitions** are Settled and final Expired. They book the shortfall, release the cap reservation, remove the auction from `live_auctions`, and apply the leftover rules (§5.8). A restart ends no chain: it carries the remainder over.
+- Every handler asserts the expected status first. Terminal accounts are immutable except for `leftover_claimed` increasing through `claim_leftover`.
 - "Liquidated" is not a stored state. `liquidate` atomically seizes the collateral and creates the auction directly in `Auctioning` (P1).
+- An auction can never stay Expired-but-restartable. `expire` restarts it in the same transaction, so nobody has to remember to call a separate restart.
 
 ### 5.6 Engine instructions
 
 | Instruction | Signer | Effect (all checks before effects; chained token calls last) |
 |---|---|---|
 | `init_config(salt, params)` | admin | Creates `EngineConfig`, `Accounting` and `SurplusBuffer`. Every parameter is bounds-checked. |
-| `set_collateral_config(params)` | admin | Creates or updates `CollateralConfig`. Bounds-checked. It can set `paused`. It can **never** move auction collateral. |
-| `liquidate(position, nonce)` | anyone (keeper) | 1. The price feed must be valid (§5.2) and the type must not be paused. 2. Compute the host health check result and `debt_to_cover` under the remaining capacity `min(global, per-type)`, using Maker's dust rule (liquidate the whole position if a partial liquidation would leave dust). 3. Create the `LiquidationRecord` on first use, assert the nonce, and increment the count. 4. Create the `Auction` and `AuctionVault`. 5. Chained call to `stablecoin.liquidate_position(expected_collateral, expected_normalized_debt)`, which moves all the collateral into the vault. 6. Compute the keeper reward (§5.9) and transfer it from the vault to the keeper. 7. Set `amount_to_raise = ceil(debt × (1e4 + penalty_bps) / 1e4)`, update counters, and append to `live_auctions`. |
+| `set_collateral_config(params)` | admin | Creates or updates `CollateralConfig`. Bounds-checked. It can set `admin_paused`, which also opens or closes the type-level pause clock (§5.7). Schedule changes apply only to auctions started afterwards, because each auction snapshots its schedule. It can **never** move auction collateral. |
+| `liquidate(position, nonce)` | anyone (keeper) | **Full-position seizure only** (ADR-012). All computation happens first, from pre-state. 1. The price feed must be valid (§5.2) and the type must not be paused; this also runs the pause observation (§5.7). 2. Read the position's collateral `c` and nominal debt `D` (the stablecoin's accrued debt, rounded up). Compute `amount_to_raise = ceil(D × (1e4 + penalty_bps) / 1e4)`. Revert with `CapacityExhausted` unless `amount_to_raise` fits both `cap − reserved` budgets, and with `LiveAuctionsFull` if the list is full. 3. Create the `LiquidationRecord` on first use, assert `nonce == count`, and increment the count. 4. Compute the keeper reward (§5.9) in collateral from the **predicted post-seize vault balance `c`**. 5. Write the `Auction` (lot `c − reward`), reserve the capacity, append to `live_auctions`. 6. Chained calls run after the engine's output is final, in this order: initialise the `AuctionVault` holding → `stablecoin.liquidate_position(c, normalized_debt)`, which transfers all `c` from the host vault into `AuctionVault` → `Token::Transfer(reward)` from `AuctionVault` to the keeper. The host re-checks undercollateralisation and the expected amounts, so a stale quote reverts the whole transaction. |
 | `bid(auction, coin_in_max, min_collateral_out)` | bidder | Requires a valid feed (pauses otherwise, §5.7) and status `Auctioning`. Computes `d(t_eff)`, `P`, the fill and the charged amount. Rejects if `collateral_out < min_collateral_out`, if the charge is below `min_bid` (unless it finishes the auction), or if the remainder `0 < amount_to_raise − raised < chost` (no dust). Payment order (debt first): `Token::Burn` the debt part from the bidder, then `Token::Transfer` the penalty part to `SurplusBuffer`, then `Token::Transfer` the collateral from the vault to the bidder. Settles in the same transaction when the target is reached or the lot is empty. |
-| `expire(auction)` | anyone | Requires `t_eff ≥ ttl`. Sets status `Expired`. |
-| `restart(expired_auction, nonce)` | anyone | Requires `restart_index < max_restarts`. Creates a new auction (`nonce == record.count`, then increments) with the remaining lot and remaining target and a fresh schedule snapshot. Moves the remaining collateral from the old vault to the new vault with a chained transfer, and links predecessor and successor. Requires a valid feed. |
-| `claim_leftover(auction)` | position owner | Pays out `leftover_claimable` collateral (pull, because the owner may be a private or group account). |
+| `expire(auction, next_nonce)` | anyone | Runs the pause observation (§5.7) first. Requires `t_eff ≥ ttl`, so a paused type cannot expire because its clock is frozen. Sets `Expired`. **If `restart_index < max_restarts`:** in the same transaction, creates the successor auction (`next_nonce == record.count`, then increments) with `collateral_seized = predecessor.collateral_left`, `debt_principal = predecessor.debt_principal − debt_raised`, `amount_to_raise = predecessor.amount_to_raise − raised`, the same `reserved_amount`, `keeper_reward = 0`, `restart_index + 1`, and a fresh schedule snapshot. It moves the remaining collateral from the old vault to the new vault with a chained transfer, links predecessor and successor, and replaces the entry in `live_auctions`. **Otherwise (final):** runs the chain-ending effects of §5.8. `next_nonce` is ignored when final. |
+| `claim_leftover(auction)` | position owner | Pays out `leftover_claimable − leftover_claimed` collateral (pull, because the owner may be a private or group account). Only settled auctions that raised their target have any leftover. |
 | `settle_debt(amount)` | anyone | Burns `min(amount, buffer balance, unbacked_debt)` from `SurplusBuffer` and reduces `unbacked_debt` (GEB `settleDebt`). |
 
 ### 5.7 Pause and frozen discount (ADR-007)
-- **Pause conditions** apply per collateral type: an invalid feed (§5.2) or `CollateralConfig.paused`. While paused, `liquidate`, `bid` and `restart` revert for that type only. Other types and all non-liquidation host operations continue (R4, R5).
-- **Frozen discount.** While a type is paused, its auctions' effective clocks stop, so stalling the oracle cannot push the discount up. `t_eff = now − start_ms − paused_total_ms − (paused_since_ms ? now − paused_since_ms : 0)`. `ttl` is measured in the same effective time.
-- **Recording pause intervals is an open mechanism, decided in spike S5.** The candidates:
-  - (a) a permissionless `poke_pause(auction)` that sets `paused_since_ms` when the feed is observed invalid, and a matching clear on the first valid interaction. Every `liquidate`, `bid` and `restart` also performs this observation.
-  - (b) derive the stale intervals from `last_seen_oracle_ts` and the oracle timestamp at each interaction (stale from `last_ts + max_age` until the new `ts`). This is exact only if the oracle cannot update unseen, so it may need the oracle's observation history.
-  - (c) a combination of (a) and (b).
+- **Pause conditions** apply per collateral type: an invalid feed (§5.2) or `CollateralConfig.admin_paused`. While paused, `liquidate`, `bid` and the restart branch of `expire` revert for that type only. Other types and all non-liquidation host operations continue (R4, R5).
+- **The pause clock is type-level.** All auctions of a type share one oracle and one admin switch, so pausing is a type event. `CollateralConfig` holds `paused_since_ms: Option<u64>` and `paused_total_ms`. Each auction snapshots `type_paused_total_at_start`.
+- **Frozen discount.** `t_eff = (now − start_ms) − (type.paused_total_ms − auction.type_paused_total_at_start) − (type.paused_since_ms.map(|s| now − max(s, start_ms)).unwrap_or(0))`, floored at 0. `ttl` is measured in the same effective time. Stalling the oracle or an admin pause therefore cannot push the discount up or expire an auction.
+- **Admin pause.** `set_collateral_config(admin_paused = true)` sets `paused_since_ms = now` if it is not already set. Unpausing adds the interval to `paused_total_ms` and clears it. This is exact, because the admin transaction carries the clock.
+- **Pause observation.** `liquidate`, `bid`, `expire` and a permissionless `observe_feed(collateral)` perform it. If the feed is invalid and `paused_since_ms` is unset, set it. If the feed is valid, there is no admin pause, and `paused_since_ms` is set, close the interval. **How precisely the onset of a stale period is timed is decided in spike S5.** The candidates:
+  - (a) the onset is the observation time (simple; the discount can run until someone observes);
+  - (b) the onset is derived as `last_seen_oracle_ts + max_age`, which is exact when the oracle could not have updated unseen;
+  - (c) (b) bounded by the oracle's observation history.
 
-  Acceptance criterion for S5: a property test shows an adversary who controls only the oracle's update timing cannot obtain a discount larger than the schedule gives over the auction's fresh-feed time, within one block of tolerance. If no candidate meets this, fall back to (a) and document the residual risk in `THREAT_MODEL.md`.
+  Acceptance criterion for S5: a property test shows an adversary who controls only the oracle's update timing **or** observation timing cannot obtain more discount than the schedule gives over the type's unpaused time, within one block. Admin pauses are covered by the same test. If only (a) is feasible, keepers and the app call `observe_feed` on every refresh, and the residual risk goes in `THREAT_MODEL.md`.
 
 ### 5.8 Accounting, settlement and leftovers (R6)
-- On **Settled**: `leftover_claimable = collateral_left`. Normally this is 0 when the lot ran out, or what remains when the target was reached.
-- On **final expiry** (no restarts left):
-  - `shortfall = debt_principal − debt_raised` (penalty excluded), and `Accounting.unbacked_debt += shortfall`;
-  - the remaining collateral becomes `leftover_claimable` for the owner. This is the RAI behaviour. The debt has already been removed from the position and is accounted as unbacked, and the protocol cannot sell this lot at any discount. Sub-project B revisits this together with debt auctions and F4.
+**Chain-ending effects** apply on Settled and on final Expired, and happen exactly once per chain:
+1. `shortfall = max(0, debt_principal − debt_raised)` (penalty excluded). `Accounting.unbacked_debt += shortfall`, and `total_shortfall_booked += shortfall`. A lot that runs out before the debt is covered books a shortfall too.
+2. Release `reserved_amount` from `type_reserved` and `global_reserved`, and remove the auction from `live_auctions`.
+3. Collateral:
+   - **Settled because the target was raised:** `leftover_claimable = collateral_left`, owed to the position owner (GEB behaviour).
+   - **Settled because the lot ran out:** nothing remains.
+   - **Final Expired:** the remaining `collateral_left` moves by chained transfer to the engine's `ProtocolCollateral` holding. **It does not go to the defaulted owner** (no moral hazard, and value is preserved). Sub-project B sells it through debt auctions or an admin-gated sale, and its proceeds then reduce `unbacked_debt`.
 - The surplus buffer receives only penalty coins. `settle_debt` nets the buffer against `unbacked_debt`.
 - **Supply invariant**, extending the host's invariant 7: `stablecoin_supply ≤ Σ position nominal debt + Σ live (debt_principal − debt_raised) + unbacked_debt`.
 - Stability fees are **not** routed into the buffer in the PoC. Doing so would require a host-wide debt counter on every position operation, breaking the host's design (research-6 Q2).
 
 ### 5.9 Keeper reward and caps
-- `reward_coin = min(tip + chip_bps·debt_to_cover/1e4, reward_cap)`, paid only if `debt_to_cover ≥ chost`.
+- `reward_coin = min(tip + chip_bps·D/1e4, reward_cap)`, paid only if `D ≥ debt_floor`, where `D` is the position's full nominal debt.
 - It is converted to collateral at `P` and rounded down, then paid from the seized lot when the auction is created.
-- Code enforces `reward_coin ≤ penalty_bps·debt_to_cover/1e4`. The reward is carved out of the penalty, so self-liquidation never pays.
-- Caps: `liquidate` shrinks `debt_to_cover` to fit the remaining per-type and global capacity (Maker `hole`/`Hole`). It reverts with `CapacityExhausted` only when no capacity is left.
+- Code enforces `reward_coin ≤ penalty_bps·D/1e4`. The reward is carved out of the penalty, so self-liquidation never pays **when the lot covers the penalty**. If there is a shortfall, the reward is paid from collateral that would otherwise reduce bad debt. That residual is documented in `THREAT_MODEL.md`, and the reward cap bounds it.
+- Caps: `liquidate` reserves `amount_to_raise` against the per-type and global capacity (Maker `hole`/`Hole`) and reverts with `CapacityExhausted` if the whole position does not fit. There is no partial seizure (ADR-012). Partial liquidation is listed as a possible M2 extension; it needs extra hook arguments.
+- **`debt_floor` and `chost`.** `debt_floor` is an engine `CollateralConfig` parameter, because the host has no dust or floor parameter. `chost = ceil(debt_floor × (1e4 + penalty_bps) / 1e4)`, which is Maker's `dust·chop`. It is used by the bid dust rule (§5.6) and the final-bid rules.
 
 ### 5.10 Stablecoin hooks (vendored at `64c0120`, offered upstream)
 - **Appended** at the end of `stablecoin_core::Instruction`; the wire format is the variant index. Engine state lives in a **new** PDA, `LiquidationEngineState { engine_authority_id }`. `ProtocolParameters` is untouched, so existing decoders, the module FFI and fixtures keep working (research-2).
@@ -247,7 +257,8 @@ liquidate ──► Auctioning ──bid (partial)──┐
 | ttl | 2 h effective | 10 min – 7 d |
 | max restarts | 3 | ≤ 10 |
 | min bid | 25 LSC (demo) | > 0 |
-| chost | debt floor × penalty | ≥ min bid |
+| debt_floor | 100 LSC (demo) | > 0 |
+| chost | derived: `ceil(debt_floor × (1e4 + penalty_bps)/1e4)` = 110 LSC | ≥ min bid |
 | keeper tip / chip / cap | 5 LSC / 10 bps / 50 LSC (demo) | reward ≤ penalty |
 | max oracle age | 60 min | ≤ 24 h |
 | price band | 9000–11000 bps of R | lo ≤ 10000 ≤ hi, within [5000, 20000] |
@@ -255,20 +266,21 @@ liquidate ──► Auctioning ──bid (partial)──┐
 | `live_auctions` capacity | 512 | fits within 100 KiB |
 
 ### 5.12 Invariants (tested in `auction_core` with proptest; asserted on-chain where cheap)
-1. `collateral_seized == collateral_sold + collateral_left + keeper_reward` (+ `claimed` after settlement). `collateral_sold` is tracked independently of `collateral_left`.
-2. The vault balance equals `collateral_left − claimed` at all times. It is 0 after all claims.
+1. `collateral_seized == keeper_reward + collateral_sold + collateral_left`. `collateral_sold` is tracked independently of `collateral_left`, and `collateral_left` is never reduced by claims. After a restart, the successor's `collateral_seized` equals its predecessor's `collateral_left`.
+2. The vault balance equals `collateral_left − leftover_claimed` while the vault holds the lot. It is 0 after a restart transfer, a final-expiry transfer to `ProtocolCollateral`, or a full claim.
 3. Each fill satisfies `charged ≤ coin_in_max` and `collateral_out ≥ min_collateral_out`. `debt_raised + penalty_raised ≤ amount_to_raise`.
 4. `d(t)` is monotone non-decreasing in `t_eff`, bounded by the schedule's maximum. `P` stays within the band.
 5. Status is monotone, and terminal states are absorbing.
 6. After every bid, the remaining amount to raise is either 0 or ≥ `chost`.
-7. `Σ live (amount_to_raise − raised)` equals the type's on-auction total. `Σ type == global ≤ global_cap`.
-8. On a terminal transition, `shortfall == max(0, debt_principal − debt_raised)` and `total_shortfall_booked == Σ shortfall`.
+7. `Σ live chains reserved_amount == type_reserved ≤ type_cap`, and `Σ types == global_reserved ≤ global_cap`. A reservation is made at `liquidate`, carried across a restart, and released exactly once at chain end.
+8. At each chain end, `shortfall == max(0, debt_principal − debt_raised)` computed on the **final** auction of the chain, which carries the chain's remaining principal. The sum of `debt_raised` over the chain plus the shortfall equals the original principal, and `total_shortfall_booked == Σ shortfall`. No shortfall is booked on a restart.
 9. Buffer balance = `total_penalty_collected − Σ settle_debt burns`. After `settle_debt(u128::MAX)`, `min(buffer, unbacked_debt) == 0`.
 10. Host and engine conservation: the change in host debt equals `Σ debt_principal seized`, and the change in host collateral equals `Σ collateral_seized`.
 11. Supply invariant (§5.8).
-12. Liveness (fuzz): an unsafe position with a valid feed and remaining capacity can always be liquidated.
+12. Liveness (fuzz): an unsafe position with a valid feed, remaining capacity for its whole `amount_to_raise`, and space in `live_auctions` can always be liquidated.
 13. Split-bid neutrality: n bids summing to X at the same `t_eff` never yield more collateral than one bid of X.
-14. The frozen clock: `t_eff` never advances while paused (S5 property).
+14. The frozen clock: `t_eff` never advances while the type is paused, whether by admin or by the feed (S5 property).
+15. Collateral destination: auction collateral only ever leaves to a bidder, the keeper (at `liquidate`), a successor vault, the owner (leftover only after the target is raised), or `ProtocolCollateral` (final expiry).
 
 ## 6. Off-chain layers
 
@@ -286,7 +298,7 @@ liquidate ──► Auctioning ──bid (partial)──┐
 
 ### 6.3 `auction_engine_module` (C++ universal core module)
 - `AuctionEngineImpl : LogosModuleContext`, `metadata.json` with `type: core`, `interface: universal`, `dependencies: ["lez_core"]`, `external_libraries: [{name: "auction_ffi"}]`.
-- Methods: `getConfig`, `listAuctions`, `getAuction`, `listAtRiskPositions`, `rescan`, `quoteLiquidation`, `quoteBid`, `liquidate`, `bid`, `expire`, `restart`, `claimLeftover`, `awaitTx`.
+- Methods: `getConfig`, `listAuctions`, `getAuction`, `listAtRiskPositions`, `rescan`, `quoteLiquidation`, `quoteBid`, `liquidate`, `bid`, `expire`, `observeFeed`, `claimLeftover`, `settleDebt`, `awaitTx`.
 - **Each declaration stays on one line**; the generator silently drops multi-line declarations. A test calls every method.
 - Every method returns `{status, error, …}` with stable error codes.
 - Submission uses `lez_core.send_generic_public_transaction`, the 4-argument 0.4.1 form, with instruction bytes as risc0 u32 words in little-endian.
@@ -335,7 +347,7 @@ On lez_core ≥ 0.4.3 the mechanism switches to `poll_transaction_status`.
 |---|---|---|
 | `auction_core` | math, schedule, state machine, accounting; invariants 1–14 | TDD unit tests; `proptest`; a differential model in Python big-int; Kani for `mul_div` and `d(t)` |
 | Stablecoin hooks | non-engine caller rejected; zero binding rejected; healthy position rejected; mismatched amounts rejected; stale oracle rejected; happy path. **Upstream suite runs unchanged.** | SPEL unit tests + the existing lez-programs tests |
-| `auction_engine` | full path on the real stablecoin; partial bids; lot binds; dust rule; min bid; expire, restart and final expiry; re-liquidation of a position; every illegal transition refused (F6); 2+ concurrent auctions (R3); stale and out-of-range pause per type (R2/R4); frozen discount; caps; `settle_debt`; R6 conservation | `integration_tests` on a standalone v0.2.4 sequencer, dev mode |
+| `auction_engine` | full path on the real stablecoin; partial bids; lot binds; dust rule; min bid; `expire` with restart and with final expiry (collateral to `ProtocolCollateral`); lot exhausted with a shortfall booked; re-liquidation of a position; `CapacityExhausted` and `LiveAuctionsFull`; admin pause freezes the discount; every illegal transition refused (F6); 2+ concurrent auctions (R3); stale and out-of-range pause per type (R2/R4); frozen discount; caps; `settle_debt`; R6 conservation | `integration_tests` on a standalone v0.2.4 sequencer, dev mode |
 | Real proofs | the full happy path end to end | `RISC0_DEV_MODE=0`, nightly and on tags (S2) |
 | SDK / FFI | quote equals the on-chain result; JSON fixtures per op; panic safety; header drift | Rust tests, CI diff |
 | C++ module | every method; error mapping; `awaitTx` states (Included, Dropped) | `LOGOS_CMOCK` FFI mocks + `mockModule("lez_core")` |
@@ -481,9 +493,10 @@ Execution: `superpowers:writing-plans` produces the task plan. Then `superpowers
 - ADR-002: standalone repo; a reusable engine plus appended host hooks offered upstream (approach 1).
 - ADR-003: GEB increasing-discount auction with Maker safety rails (tip+chip reward carved from the penalty, caps, dust rule, slippage bounds, restart).
 - ADR-004: auction addressing via the `LiquidationRecord` nonce.
-- ADR-005: bid price = band-clamped market price around the redemption price, collateral per coin; no fallback price.
+- ADR-005: bid price = band-clamped market price around the redemption price, collateral per coin; no fallback price. This overrides research-6 Q1's fallback to R, because RFP R2 requires a pause.
 - ADR-006: piecewise-linear schedule of ≤ 8 points, snapshotted per auction.
-- ADR-007: stale or out-of-range feed pauses the type; discount clock frozen while paused.
+- ADR-007: stale or out-of-range feed, or an admin pause, pauses the type. A type-level pause clock freezes the discount and ttl of all its auctions.
+- ADR-012: full-position seizure only, with whole-position cap reservation. `expire` restarts in the same transaction. Final-expiry collateral goes to `ProtocolCollateral`, not to the owner. Shortfall is booked at every chain end. (These follow from the spec review on 2026-10-01.)
 - ADR-008: PoC discovery by block scan plus `live_auctions`; indexer and events later.
 - ADR-009: transaction confirmation by signer-nonce polling; dropped after 5 blocks.
 - ADR-010: debt-first payment order; penalty into the surplus buffer; accounting only in the engine; no stability-fee routing in the PoC.

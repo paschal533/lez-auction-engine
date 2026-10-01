@@ -14,3 +14,12 @@ pub enum ConfigError {
     ChostBelowMinBid,
     MintCapAboveHardCap,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PauseReason {
+    AdminPaused,
+    Stale,
+    ZeroPrice,
+    LowConfidence,
+    OutOfRange,
+}

@@ -264,7 +264,7 @@ An auction can be larger than the type cap. Should it be blocked? Should unsold 
 **Decision**
 (C): An oversized position `(amount_to_raise > cap − reserved)` is allowed only if both type and global reservations are 0 (it goes alone). When it settles, it releases its (over-size) reservation. There is no restart: a fixed starting price would mean restarting just resets the discount to the start, pointless. There is no expiry: `redo` in Maker exists because Maker fixes the starting price; we don't. Expiry would book a shortfall while unsold collateral exists (minting against recoverable debt, dilution without loss). Instead, unsold auctions sit at max discount until settled.
 
-Vault sweep (full seizure only): on full seizure, transfer the **whole** vault balance (not just the lot), sweeping any donations. Shortfall is booked only when the lot is exhausted.
+Vault sweep (full seizure only): the hook requires vault balance ≥ position collateral (not equal); on full seizure, transfer the **whole** vault balance, sweeping any donations. Shortfall is booked only when the lot is exhausted.
 
 **Trade-offs**
 One oversized auction at a time can hold the global cap. This is documented in `THREAT_MODEL.md` as an accepted residual. Partial liquidation (M1) reduces the impact.
@@ -298,18 +298,18 @@ Accepted (spec v5)
 ## ADR-014: Pricing at ~$40k; Separate Audit Line
 
 **Context**
-Two open proposals bid $48k and $55k. bleu won RFP-015 (L) and RFP-016 (XL) for $55k combined after negotiation, by filing early. A lower price and early filing may improve odds.
+Open bids are #159 Web3spell $48k and #187 Antumbra $55k. bleu won RFP-015 (L) and RFP-016 (XL) for $55k combined after negotiation.
 
 **Options**
-- (A) Price at $40k, no audit; accept audit risk.
-- (B) Price at $45k, include light audit; mid-range.
-- (C) Price at ~$40k + separate audit line ($10–12k) named to a tier-1 firm that Logos may contract directly.
+- (A) ~$38–42k build + separate audit line (~$10–12k, tier-1 firm that Logos contracts) — below both open bids without matching bleu's combined-RFP discount. **Chosen.**
+- (B) bleu-level ~$28–32k — matches the bleu precedent; most competitive but thin margin for a solo developer over 12 weeks.
+- (C) Keep the earlier $48k draft — priced at the open bids.
 
 **Decision**
-(C): Build price ~$40k over 12 weeks (from §15 milestone table), separate audit line ~$10–12k naming a tier-1 firm that Logos may contract directly. A variant without M5 (the GUI) comes to ~$35k. This price is below both open bids ($48k, $55k).
+(A): Build price ~$38–42k (planned ~$40k) over 12 weeks, separate audit line ~$10–12k named to a tier-1 firm that Logos may contract directly. A variant without M5 (the GUI) comes to ~$35k.
 
 **Trade-offs**
-None.
+Lower than open bids improves competitiveness but leaves less margin for a solo developer over 12 weeks. The audit is separate so its cost does not distort the build price.
 
 **Status**
 Accepted (spec v5)
@@ -384,7 +384,7 @@ The `bad_debt_freeze_threshold` is an absolute value set by the admin, default 1
 If a debt auction is live, `check_solvency` reverts with `RecoveryInProgress` and freezes nothing. With a protocol token configured and working, `check_solvency` never freezes, even if debt auctions keep closing untaken.
 
 **Trade-offs**
-None significant. This matches the RFP and is documented in `THREAT_MODEL.md` as an accepted residual.
+With a working protocol token configured, `check_solvency` never freezes, even if debt auctions keep closing untaken (accepted residual recorded in `THREAT_MODEL.md`; governance monitors). The freeze threshold departs from F4's literal "exceeds the buffer" wording but prevents one-unit rounding errors from freezing the system.
 
 **Status**
 Accepted (spec v5)

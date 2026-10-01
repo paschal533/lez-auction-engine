@@ -25,7 +25,7 @@ Accepted (spec v5)
 ## ADR-002: Standalone Repo with Upstream Hooks
 
 **Context**
-The engine uses two new Solana program instructions in the stablecoin: `liquidate_position` and `engine_freeze_new_debt`. These are offered upstream as a PR to the stablecoin (lez-programs).
+The engine uses three new LEZ program instructions in the stablecoin: `set_liquidation_engine`, `liquidate_position`, and `engine_freeze_new_debt`. These are offered upstream as a PR to the stablecoin (lez-programs).
 
 **Options**
 - (A) Embed a vendored copy of the stablecoin and modify it locally.
@@ -258,13 +258,13 @@ An auction can be larger than the type cap. Should it be blocked? Should unsold 
 
 **Options**
 - (A) Reject oversized positions; limits usability.
-- (B) Allow oversized but hold both caps (caps themselves become too restrictive).
-- (C) Allow oversized alone (if all existing caps are free, liquidate alone); Settled never exits.
+- (B) Allow oversized but hold both caps; caps themselves become restrictive.
+- (C) Allow oversized alone (if all existing caps are free, liquidate alone).
 
 **Decision**
 (C): An oversized position `(amount_to_raise > cap − reserved)` is allowed only if both type and global reservations are 0 (it goes alone). When it settles, it releases its (over-size) reservation. There is no restart: a fixed starting price would mean restarting just resets the discount to the start, pointless. There is no expiry: `redo` in Maker exists because Maker fixes the starting price; we don't. Expiry would book a shortfall while unsold collateral exists (minting against recoverable debt, dilution without loss). Instead, unsold auctions sit at max discount until settled.
 
-Vault sweep: transfer the **whole** vault balance (not just the lot), sweeping any donations.
+Vault sweep (full seizure only): on full seizure, transfer the **whole** vault balance (not just the lot), sweeping any donations. Shortfall is booked only when the lot is exhausted.
 
 **Trade-offs**
 One oversized auction at a time can hold the global cap. This is documented in `THREAT_MODEL.md` as an accepted residual. Partial liquidation (M1) reduces the impact.
@@ -298,18 +298,18 @@ Accepted (spec v5)
 ## ADR-014: Pricing at ~$40k; Separate Audit Line
 
 **Context**
-Two open proposals bid $48k and $55k. bleu won RFP-015 and -016 ($55k combined) by filing early. A lower price and early filing may improve odds.
+Two open proposals bid $48k and $55k. bleu won RFP-015 (L) and RFP-016 (XL) for $55k combined after negotiation, by filing early. A lower price and early filing may improve odds.
 
 **Options**
 - (A) Price at $40k, no audit; accept audit risk.
 - (B) Price at $45k, include light audit; mid-range.
-- (C) Price at ~$40k + separate audit line ($10–12k) named to a tier-1 firm (Logos contracts directly).
+- (C) Price at ~$40k + separate audit line ($10–12k) named to a tier-1 firm that Logos may contract directly.
 
 **Decision**
-(C): Build price $40k, separate audit line ~$10–12k. The build is 12 weeks, the audit is orthogonal. A variant without M5 (the GUI) comes to ~$35k.
+(C): Build price ~$40k over 12 weeks (from §15 milestone table), separate audit line ~$10–12k naming a tier-1 firm that Logos may contract directly. A variant without M5 (the GUI) comes to ~$35k. This price is below both open bids ($48k, $55k).
 
 **Trade-offs**
-None significant; Logos may negotiate.
+None.
 
 **Status**
 Accepted (spec v5)
@@ -353,6 +353,8 @@ Partial liquidation (M1) requires the hook to accept amounts smaller than the fu
 (B): The PoC passes full amounts `(collateral_amount, normalized_debt)`, so M1 is an engine-only change with no second upstream PR. The host enforces a proportionality bound (owner protection independent of engine correctness):
 `collateral_to_seize ≤ min(Position.collateral_amount, ceil(Position.collateral_amount · normalized_debt_to_cover / Position.normalized_debt · (1e4 + MAX_PENALTY_BPS) / 1e4))`
 
+Vault sweep applies on full seizure only: transfer the entire vault balance (sweeping donations).
+
 **Trade-offs**
 None; this is the final shape.
 
@@ -373,12 +375,16 @@ F4 (debt auction) and F5 (surplus auction) need to start protocol-token minting 
 **Decision**
 (B): An absolute mint cap (demo: 5,000 mock tokens) set at init and never price-derived. The `protocol_token_ref_price` is an admin parameter (RAY). Optionally, if `protocol_token_oracle_id` is set and valid, override it, clamped to ±20% of the admin price (a manipulated oracle cannot move it further). An invalid optional oracle falls back to the admin price; it does not pause.
 
-`check_solvency` never freezes during a live debt auction (recovery in progress). Freeze only if `unbacked_debt > bad_debt_freeze_threshold` and:
-- (a) no protocol token is configured; or
-- (b) freeze-on-bad-debt is true, no debt auction is live, and `start_debt_auction` would fail with `MintCapConfig`, `MintAuthorityMissing`, or `ProtocolTokenMismatch`.
+The `bad_debt_freeze_threshold` is an absolute value set by the admin, default 1,000 LSC, bounded to ≥ `debt_lot`. This is an interpretation of F4.
+
+`check_solvency` freezes only when `unbacked_debt > bad_debt_freeze_threshold` AND one of:
+- (a) `protocol_token.is_none()` (no protocol token configured); or
+- (b) `freeze_on_bad_debt` is true, no debt auction is live, and `start_debt_auction` would revert with exactly one of: `MintCapConfig`, `MintAuthorityMissing`, or `ProtocolTokenMismatch`.
+
+If a debt auction is live, `check_solvency` reverts with `RecoveryInProgress` and freezes nothing. With a protocol token configured and working, `check_solvency` never freezes, even if debt auctions keep closing untaken.
 
 **Trade-offs**
-With a token configured and working, `check_solvency` never freezes, even if debt auctions keep closing untaken. This matches the RFP and is documented in `THREAT_MODEL.md` as an accepted residual.
+None significant. This matches the RFP and is documented in `THREAT_MODEL.md` as an accepted residual.
 
 **Status**
 Accepted (spec v5)

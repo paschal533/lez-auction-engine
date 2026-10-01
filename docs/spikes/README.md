@@ -17,8 +17,8 @@ Spike code in `spikes/` is throwaway and excluded from the workspace.
 **Question**
 Does the toolchain build and run end to end (guest, sequencer, stablecoin init, Basecamp harness with lez_core 0.4.1)? How many chained calls does `liquidate` really take? Can a second stablecoin build (instance tag constant → different image id) be deployed and initialised next to the first?
 
-**Rationale**
-SPEL's build, sequencer startup, and chained-call depth are unknowns at the spec stage. The second stablecoin instance is required by R4/R5 (the pause test across two collateral types, each with its own engine instance). Each host instance needs a separate binary with a distinguishing compile-time constant.
+**Decided by**
+Running it
 
 ---
 
@@ -27,8 +27,8 @@ SPEL's build, sequencer startup, and chained-call depth are unknowns at the spec
 **Question**
 How does the host authenticate the engine: `caller_program_id`, PDA signer, or both?
 
-**Rationale**
-The hook `liquidate_position` must verify the caller is the engine, not a random program. Three patterns exist; cycles and unforgeability differ.
+**Decided by**
+Unforgeability tests + cycles + upstream fit
 
 ---
 
@@ -37,8 +37,8 @@ The hook `liquidate_position` must verify the caller is the engine, not a random
 **Question**
 Can SPEL create `LiquidationRecord` on first use (`Claim::Pda`) and derive arg-seeded auction PDAs?
 
-**Rationale**
-ADR-004 rests on PDA derivation from `(position, nonce)`. SPEL's `Claim::Pda` must work on first creation.
+**Decided by**
+A prototype
 
 ---
 
@@ -47,8 +47,8 @@ ADR-004 rests on PDA derivation from `(position, nonce)`. SPEL's `Claim::Pda` mu
 **Question**
 Discount curve: piecewise-linear vs exponential vs stairstep?
 
-**Rationale**
-Efficiency, griefability, and predictability differ. Piecewise-linear is favored; S4 measures cycles and accuracy.
+**Decided by**
+Cycles + accuracy
 
 ---
 
@@ -60,8 +60,8 @@ When does a stale period start?
 - (b) at `last_seen_oracle_ts + max_age`;
 - (c) (b) bounded by the oracle's history.
 
-**Rationale**
-ADR-007's frozen-discount property test must pass. The choice affects when discounts stop advancing.
+**Decided by**
+The §5.7 property test
 
 ---
 
@@ -70,8 +70,8 @@ ADR-007's frozen-discount property test must pass. The choice affects when disco
 **Question**
 `Accounting` updated per bid, or only at chain end?
 
-**Rationale**
-Concurrency and R6 (conservation) depend on when `unbacked_debt` and other counters are updated.
+**Decided by**
+Concurrency + R6 proof
 
 ---
 
@@ -80,5 +80,5 @@ Concurrency and R6 (conservation) depend on when `unbacked_debt` and other count
 **Question**
 Mock protocol token mint authority as an engine PDA; cost of mint and burn in chained calls.
 
-**Rationale**
-F4 (debt auction) needs to mint; F5 (surplus auction) needs to burn. Costs are measured in cycles against the 32 Mi budget.
+**Decided by**
+A prototype + cycles

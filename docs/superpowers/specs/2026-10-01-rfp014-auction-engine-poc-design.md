@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v4 for review. It includes the internal spec review and three external reviews of 2026-10-01 (see §19). |
+| **Status** | v5, ready for planning. It includes the internal spec review and four external reviews of 2026-10-01 (see §19). |
 | **Date** | 2026-10-01 |
 | **Author** | paschal533, with Claude |
 | **Scope of this spec** | Sub-project **A**: a 3-week, engine-first PoC. Sub-project **B** (follow-ups) is listed in §2.3 and gets its own spec. |
@@ -282,7 +282,13 @@ liquidate ──► Auctioning ──bid (partial)──┐
 **`liquidate_position(collateral_to_seize, normalized_debt_to_cover)`.** This is the final interface shape, designed for partial liquidation now (ADR-016). The PoC always passes the full position amounts, so M1's partial liquidation is an **engine-only** change with no second upstream PR.
 - The engine authority signs. How it is authenticated is decided in spike S2: `caller_program_id`, an engine PDA signer, or both.
 - The position PDA is re-derived. Debt is greater than 0.
-- **Expected-values check:** `0 < normalized_debt_to_cover ≤ Position.normalized_debt` and `0 < collateral_to_seize ≤ Position.collateral_amount`. A stale quote reverts.
+- **Bounds:** `0 < normalized_debt_to_cover ≤ Position.normalized_debt` and `0 < collateral_to_seize ≤ Position.collateral_amount`. The engine reads the position's live state in the same transaction, so there is no stale-quote case to guard.
+- **Proportionality bound, enforced by the host itself (owner protection):**
+  `collateral_to_seize ≤ min(Position.collateral_amount, ceil(Position.collateral_amount · normalized_debt_to_cover / Position.normalized_debt · (1e4 + MAX_PENALTY_BPS) / 1e4))`, computed in U512. `MAX_PENALTY_BPS = 2500` is a host constant matching the engine's penalty bound.
+  - Full seizure passes unchanged.
+  - A partial seizure can never take more than its share of collateral plus the maximum penalty, so owners' funds don't depend on the correctness of the engine's M1 partial-liquidation code.
+  - Widening `==` to `≤` removed the implicit guarantee that only exact, current values pass; this bound is where that guarantee now lives.
+  - Upstream reviewers get an explicit answer to "what can the authorised caller take?".
 - Vault PDA and definition match. **The vault balance must be ≥ `Position.collateral_amount` (not equal).**
 - The engine, not the host, enforces dust rules for partial seizures (`debt_floor`). The host only checks bounds and health.
 - The custody holding is already initialised with the same definition.
@@ -323,17 +329,24 @@ Both are instant-settling Dutch auctions. Nothing is escrowed and nothing is ref
 **Debt auction (F4)**
 - **Start:** `start_debt_auction(nonce)`, permissionless. Requires:
   - `protocol_token.is_some()`;
-  - `unbacked_debt − buffer_balance ≥ debt_lot`, after `settle_debt`.
-- **Pricing:** the protocol tokens offered for `debt_lot` stablecoin start at `ref_price⁻¹ × debt_lot × (1 − debt_initial_discount)` and **grow** by the schedule up to `max_mint_per_auction`.
+  - `unbacked_debt − buffer_balance ≥ debt_lot`, after `settle_debt`;
+  - `start_amount ≤ max_mint_per_auction`, else revert with **`MintCapConfig`**.
+- **Pricing:** the protocol tokens offered for `debt_lot` stablecoin start at `start_amount = floor(debt_lot / ref_price × (1 − debt_initial_discount))` and **grow** by the schedule up to `max_mint_per_auction`. **Minted amounts are paid out, so they round down** (§5.1). A partial take mints pro rata, rounded down.
 - **`take_debt(amount_coin, min_protocol_out)`:** the taker pays stablecoin, which is **burned** and reduces `unbacked_debt`. In return the engine **mints** mock protocol tokens; its PDA is the mint authority.
 - **End:** after `system_auction_ttl`, `close_system_auction` closes it, and a new one can be started. Nothing was minted for the untaken part, so closing loses nothing.
 
 **`check_solvency()`** (permissionless)
 - After `settle_debt`, freeze only if **`unbacked_debt > bad_debt_freeze_threshold`** **and** one of the following holds:
   - (a) `protocol_token.is_none()`; or
-  - (b) `freeze_on_bad_debt` is true, **no debt auction is live**, **and** `start_debt_auction` would revert for a reason other than `DebtAuctionAlreadyLive`. That means `PriceFeedInvalid` on an optional oracle with no admin fallback, a mint-cap configuration error, or a token misconfiguration.
+  - (b) `freeze_on_bad_debt` is true, **no debt auction is live**, **and** `start_debt_auction` would revert with one of exactly these configuration errors. An invalid optional oracle is not among them, because it falls back to the admin price.
+    - `MintCapConfig`: the start amount at the reference price already exceeds `max_mint_per_auction`;
+    - `MintAuthorityMissing`: the engine PDA is not the protocol token's mint authority;
+    - `ProtocolTokenMismatch`: the configured token definition does not exist or does not decode.
 
-  A live debt auction means recovery is already working, so `check_solvency` reverts with `RecoveryInProgress` and does nothing. It then calls `stablecoin.engine_freeze_new_debt()` and sets `host_frozen_by_engine`.
+  When the condition holds, `check_solvency` calls `stablecoin.engine_freeze_new_debt()` and sets `host_frozen_by_engine`.
+
+  If a debt auction is live, recovery is already working, so `check_solvency` **reverts with `RecoveryInProgress` and freezes nothing.** Tests cover each listed error (freeze) and the live-auction case (no freeze).
+- **With a protocol token configured and working, `check_solvency` never freezes,** even if debt auctions keep closing untaken. This matches the RFP, which asks for a freeze only until a token is configured. It is recorded in `THREAT_MODEL.md` as an accepted residual: governance monitors repeatedly untaken debt auctions.
 - **Why the threshold:** early on the buffer is empty. Without a tolerance, a one-unit rounding shortfall from a dust auction would let anyone freeze the whole stablecoin. That matters because the host's freeze also blocks `withdraw_collateral` and `open_position` (`freeze.rs`), so users could not take out their collateral. Only the host's external freeze authority can unfreeze.
 - The threshold is an **absolute value set by the admin**: default 1,000 LSC, bounded to ≥ `debt_lot`. The host has no debt ceiling and no total-debt counter (`ProtocolParameters`), so a relative default is impossible.
 - **This is an interpretation of F4,** which literally says to freeze when bad debt "exceeds the buffer". It is recorded in `REQUIREMENTS.md` with the reason: one unit of rounding must not freeze the stablecoin.
@@ -361,7 +374,7 @@ Both are instant-settling Dutch auctions. Nothing is escrowed and nothing is ref
 | surplus target / lot / delay / premium / max discount | 1,000 / 500 LSC / 2 h / 500 bps / 2000 bps | — |
 | debt lot / initial discount | 500 LSC / 0 | — |
 | max mint per debt auction | **absolute token amount** (demo 5,000 mock tokens) | ≤ `MAX_MINT_HARD_CAP` constant in code; **never derived from a price** |
-| protocol token ref price | admin-set; optional oracle override bounded to ±20% of it | every change emits a `RefPriceChanged` record in the engine's change log (an account append, or `DEPLOYMENTS.md` for the PoC) |
+| protocol token ref price | admin-set; optional oracle override bounded to ±20% of it | every change is recorded in `DEPLOYMENTS.md` for the PoC. Later: a fixed-size ring buffer or counter-addressed record PDAs, because an ever-growing account would hit the 100 KiB limit |
 
 ### 5.13 Invariants (`auction_core` proptest; asserted on-chain where cheap)
 1. `collateral_seized == keeper_reward + collateral_sold + collateral_left`. Sold is tracked independently of left, and claims never reduce `left`.
@@ -662,3 +675,11 @@ Execution goes through `writing-plans`, then `subagent-driven-development`: impl
   - an `auction_core` two-type pause test;
   - the freeze recovery runbook;
   - text fixes (ADR range, cut-order placement, §5.8 punctuation).
+- **Fourth external review (2026-10-01).** Changes made in v5:
+  - a host-enforced proportionality bound on `collateral_to_seize` (owner protection independent of engine code), and the stale-quote claim removed;
+  - an exact list of `check_solvency` (b) configuration errors (`MintCapConfig`, `MintAuthorityMissing`, `ProtocolTokenMismatch`), with the sentence order fixed;
+  - debt-auction mint rounds down, with an explicit `MintCapConfig` start check;
+  - the ref-price log in `DEPLOYMENTS.md` (a ring buffer later);
+  - the no-freeze-with-token residual recorded in `THREAT_MODEL.md`.
+
+  The reviewer recommended moving to planning: the remaining unknowns are S1 (second host build, real chained-call count) and S2 (engine authentication), which only running code answers.

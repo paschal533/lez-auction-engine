@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v2 for review. It includes the internal spec review and the external review of 2026-10-01 (see §19). |
+| **Status** | Draft v3 for review. It includes the internal spec review and two external reviews of 2026-10-01 (see §19). |
 | **Date** | 2026-10-01 |
 | **Author** | paschal533, with Claude |
 | **Scope of this spec** | Sub-project **A**: a 3-week, engine-first PoC. Sub-project **B** (follow-ups) is listed in §2.3 and gets its own spec. |
@@ -23,7 +23,7 @@
 A **thin** Basecamp demo is added on top. The full approved UI design is kept in `docs/design/ui/` for the separate RFP-014 UI RFP that ecosystem#210 announces.
 
 **Why engine-first (ADR-013).**
-- **Precedent.** Proposals that filed early and followed spec changes won: bleu took RFP-015/016 at about $27.5k per L-tier RFP. Antumbra, with finished PoCs for both, got no award.
+- **Precedent.** Proposals that filed early and followed spec changes won: bleu took RFP-015 (L) and RFP-016 (XL) for $55k combined after negotiation (#118/#119). Other bidders on those RFPs, including at least one with working programs, were not selected. Our research reads that from the public issues; it is not confirmed with Logos, so treat it as one data point.
 - **The UI is likely to move.** ecosystem#210 says the liquidation and auction UI is "a separate RFP".
 - **The gap competitors left open:**
   - Antumbra "does not move tokens yet", has no host hook and no real-proof sequencer CI.
@@ -57,7 +57,7 @@ A **thin** Basecamp demo is added on top. The full approved UI design is kept in
 - **`auction_core`**, a pure Rust crate: math, schedule, collateral, debt and surplus auction state machines, accounting, invariants.
 - **`auction_engine`**, a SPEL program:
   - `init_config`, `set_collateral_config`
-  - `liquidate`, `bid`, `expire`, `observe_feed`, `claim_leftover`, `settle_debt`
+  - `liquidate`, `bid`, `observe_feed`, `claim_leftover`, `settle_debt`
   - `start_surplus_auction`, `take_surplus`, `start_debt_auction`, `take_debt`, `close_system_auction`
   - `check_solvency`
 - **Stablecoin hooks**, appended at the end of **both** the instruction enum and the guest function list: `set_liquidation_engine`, `liquidate_position`, `engine_freeze_new_debt`.
@@ -71,7 +71,6 @@ A **thin** Basecamp demo is added on top. The full approved UI design is kept in
 - Public testnet deployment (S1). It is blocked by v0.3 (§3.1).
 - Full GUI (U4 view, full confirmation dialog), the module catalog and release action (PEND5/6), Figma or equivalent (PEND3; approved mockups exist), the full `PRIVACY.md` (PEND4), and the audit (PEND8).
 - SOFT1 multi-oracle and SOFT3 bot SDK as a product. Kani beyond `mul_div` and the schedule.
-- A sale path for `ProtocolCollateral`. Its holdings are covered by the debt auction meanwhile (§5.8).
 
 ### 2.3 Sub-project B (next spec)
 - The private path (SDK and UI).
@@ -79,8 +78,7 @@ A **thin** Basecamp demo is added on top. The full approved UI design is kept in
 - The full GUI per `docs/design/ui/`.
 - The catalog, `PRIVACY.md`, threat-model completion and audit preparation.
 - Multi-oracle support.
-- A `ProtocolCollateral` sale path.
-- Partial liquidation, if reviewers want it.
+- (Partial liquidation moves to milestone M1; see §5.6 and ADR-012.)
 
 ### 2.4 Out of scope (RFP OOS1–4)
 - flash-loan liquidations;
@@ -195,15 +193,16 @@ collateral_out(coin, t) := floor(coin · P / (RAY − d(t)))
 ### 5.4 Instances and accounts
 **One engine instance (`EngineConfig`) per host stablecoin instance (F7).** The host has one collateral type, so each instance has exactly one `CollateralConfig`. The struct is kept separate so that a multi-collateral host can add more later. **R4/R5 ("only that type pauses") are demonstrated with two host instances using different collateral, each with its own engine instance** (§9). `REQUIREMENTS.md` states this honestly.
 
+**Second host instance needs a second binary.** The host's `compute_protocol_parameters_pda_seed()` and `compute_stablecoin_definition_pda_seed()` take no arguments, and a LEZ program id is the guest's image id. So one stablecoin binary supports exactly one host instance. The second instance is a second build with a distinguishing compile-time constant (e.g. a `HOST_INSTANCE_TAG` feature or env const), which gives a different image id. Spike S1 verifies this. The engine is unaffected, because its seeds already include `config`/`salt`. Offering an instance argument for the host's seeds upstream is noted in the PR discussion.
+
 | Account | Seeds | Holds |
 |---|---|---|
-| `EngineConfig` | `["CONFIG", salt]` | admin; host program id + `ProtocolParameters` id; stablecoin def; `protocol_token: Option<def>`; global cap and `global_reserved`; surplus/debt auction params; `freeze_on_bad_debt` |
-| `CollateralConfig` | `["COLL", config, collateral_def]` | oracle id, `oracle_scale`, max age, `max_conf_bps`, band; penalty; keeper tip/chip/cap; type cap and `type_reserved`; schedule; ttl; min bid; `debt_floor`, `chost`; `admin_paused`; **pause clock** `paused_since_ms: Option`, `paused_total_ms`, `last_seen_oracle_ts` |
+| `EngineConfig` | `["CONFIG", salt]` | admin; host program id + `ProtocolParameters` id; stablecoin def; `protocol_token: Option<def>`; **`protocol_token_ref_price`** (admin-set, coin per protocol token, RAY) and an optional `protocol_token_oracle_id`; global cap and `global_reserved`; surplus/debt auction params; `freeze_on_bad_debt`, **`bad_debt_freeze_threshold`** |
+| `CollateralConfig` | `["COLL", config, collateral_def]` | oracle id, `oracle_scale`, max age, `max_conf_bps`, band; penalty; keeper tip/chip/cap; type cap and `type_reserved`; schedule; min bid; `debt_floor`, `chost`; `admin_paused`; **pause clock** `paused_since_ms: Option`, `paused_total_ms`, `last_seen_oracle_ts` |
 | `Accounting` | `["ACCT", config]` | `unbacked_debt`, `total_shortfall_booked`, `total_penalty_collected`, `total_debt_burned`, `total_debt_settled`, `surplus_nonce`, `debt_nonce`, `host_frozen_by_engine` |
 | `SurplusBuffer` holding | `["BUFFER", config]` (stablecoin) | penalty coins |
-| `ProtocolCollateral` holding | `["PCOLL", config, collateral_def]` | unsold collateral from final expiries |
 | `LiquidationRecord` | `["LIQREC", config, position]` | `count: u64` |
-| `Auction` | `["AUCTION", config, position, nonce]` | status; position; owner; keeper; `collateral_seized/sold/left`, `keeper_reward`, `leftover_claimable/claimed`; `debt_principal`, `amount_to_raise`, `reserved_amount`, `debt_raised`, `penalty_raised`; `start_ms`, `ttl_ms`; schedule snapshot; `type_paused_total_at_start` |
+| `Auction` | `["AUCTION", config, position, nonce]` | status; position; owner; keeper; `collateral_seized/sold/left`, `keeper_reward`, `leftover_claimable/claimed`; `debt_principal`, `amount_to_raise`, `reserved_amount`, `debt_raised`, `penalty_raised`; `start_ms`; schedule snapshot; `type_paused_total_at_start` |
 | `AuctionVault` holding | `["VAULT", auction]` (collateral) | lot |
 | `SurplusAuction` / `DebtAuction` | `["SURP"/"DEBT", config, nonce]` | §5.11 |
 
@@ -221,12 +220,13 @@ collateral_out(coin, t) := floor(coin · P / (RAY − d(t)))
 ```
 liquidate ──► Auctioning ──bid (partial)──┐
                  │  ▲─────────────────────┘
-                 ├─ raised ≥ amount_to_raise, or collateral_left = 0 ──► Settled (terminal)
-                 └─ t_eff ≥ ttl, permissionless expire ──────────────► Expired (terminal)
+                 └─ raised ≥ amount_to_raise, or collateral_left = 0 ──► Settled (terminal)
+   (no expiry: after the schedule's last point the discount holds at its maximum until Settled)
 ```
 
-- **No restarts (ADR-012).** The price is re-read at every bid, so a restart would only reset the discount from its maximum back to the start, on a lot nobody bought at the maximum. Maker's `redo` exists because Maker fixes the auction's starting price, which we don't.
-- Both terminal states end the auction and apply the **chain-end effects** (§5.8) exactly once.
+- **No restarts and no expiry (ADR-012, GEB behaviour).** The price is re-read at every bid, so a restart would only reset the discount from its maximum back to the start, on a lot nobody bought at the maximum. Maker's `redo` exists because Maker fixes the auction's starting price, which we don't. Expiry is also dropped. Booking a shortfall while unsold collateral still exists would count recoverable debt as bad debt, and the F4 debt auction would then mint against it: dilution with no matching loss. An unsold auction therefore stays `Auctioning` at the maximum discount until it settles.
+- **Cost:** an auction nobody buys keeps its cap reservation. This is documented in `THREAT_MODEL.md` and visible in the GUI/CLI ("held at max discount since …").
+- Settled is the only terminal state. It applies the **chain-end effects** (§5.8) exactly once.
 - Every handler asserts the status first. Terminal accounts are immutable except for `leftover_claimed`.
 
 ### 5.6 Collateral instructions
@@ -234,18 +234,17 @@ liquidate ──► Auctioning ──bid (partial)──┐
 | Instruction | Signer | Effect (compute from pre-state; checks before effects; chained calls last) |
 |---|---|---|
 | `init_config` / `set_collateral_config` | admin | Bounds-checked. `admin_paused` opens or closes the pause clock (§5.7). Schedule changes affect only new auctions. **No admin path moves auction collateral or buffer funds.** |
-| `liquidate(position, nonce)` | anyone | 1. Pause observation; the feed must be valid. 2. Read the position's collateral `pc` and nominal debt `D` (rounded up), and the **host vault's actual balance `c ≥ pc`**. 3. `amount_to_raise = ceil(D·(1e4+penalty)/1e4)`. **Cap rule:** allowed if `amount_to_raise ≤ cap − reserved` for both type and global, **or** if the type's and global reservations are both 0 (an oversized position can always be liquidated alone). Otherwise revert `CapacityExhausted`. 4. Record nonce check and increment. 5. Keeper reward (§5.9). 6. Write the `Auction` (lot `c − reward`) and reserve. 7. Chained calls: initialise the `AuctionVault` → `stablecoin.liquidate_position(pc, normalized_debt)`, which **sweeps the whole vault balance `c`** into `AuctionVault` → `Token::Transfer(reward)` to the keeper. |
+| `liquidate(position, nonce)` | anyone | 1. Pause observation; the feed must be valid. 2. Read the position's collateral `pc` and nominal debt `D` (rounded up), and the **host vault's actual balance `c ≥ pc`**. 3. `amount_to_raise = ceil(D·(1e4+penalty)/1e4)`. **Cap rule:** allowed if `amount_to_raise ≤ cap − reserved` for both type and global, **or** if the type's and global reservations are both 0 (an oversized position can always be liquidated alone). Otherwise revert `CapacityExhausted`. **Known limitation, both directions:** while an oversized auction is live, its reservation exceeds the cap, so every other liquidation in the instance waits until it settles. Conversely, any live small auction makes a whale wait. Both are documented in `THREAT_MODEL.md`. The real fix is **partial liquidation (Maker-style, extra hook arguments), committed in milestone M1.** 4. Record nonce check and increment. 5. Keeper reward (§5.9). 6. Write the `Auction` (lot `c − reward`) and reserve. 7. Chained calls: initialise the `AuctionVault` → `stablecoin.liquidate_position(pc, normalized_debt)`, which **sweeps the whole vault balance `c`** into `AuctionVault` → `Token::Transfer(reward)` to the keeper. |
 | `bid(auction, coin_in_max, min_collateral_out)` | bidder | Pause observation; the feed must be valid; status must be `Auctioning`. Compute `d(t_eff)`, `P`, the fill and the charge. Reject if below `min_collateral_out`; if the charge is below `min_bid` unless it finishes the auction; or if it leaves `0 < remaining < chost`. **Debt first:** `Burn` the debt part from the bidder → `Transfer` the penalty part to `SurplusBuffer` → `Transfer` the collateral to the bidder. If the auction ends, chain-end effects apply in the same transaction. |
-| `expire(auction)` | anyone | Pause observation. Requires `t_eff ≥ ttl`, which cannot happen while paused. Sets `Expired` and applies chain-end effects. |
 | `observe_feed()` | anyone | Pause observation only (§5.7). |
 | `claim_leftover(auction)` | position owner | Pays `leftover_claimable − leftover_claimed` (pull model). |
 | `settle_debt(amount)` | anyone | Burns `min(amount, buffer_balance, unbacked_debt)` from the buffer. **Uses the actual buffer balance, which may exceed the book value because of donations.** |
 
 ### 5.7 Pause and frozen discount (ADR-007)
-- **Paused** means `admin_paused` or `!valid(M)`. While paused, `liquidate`, `bid`, `expire` and collateral-dependent system operations revert for this instance only. Other instances and all non-liquidation host operations continue.
-- **The pause clock lives in `CollateralConfig`** (it is per type, and there is one type per instance). `t_eff = (now − start) − (paused_total − auction.type_paused_total_at_start) − (paused_since ? now − max(paused_since, start) : 0)`, floored at 0. `ttl` uses `t_eff` too.
+- **Paused** means `admin_paused` or `!valid(M)`. While paused, `liquidate`, `bid` and collateral-dependent system operations revert for this instance only. Other instances and all non-liquidation host operations continue.
+- **The pause clock lives in `CollateralConfig`** (it is per type, and there is one type per instance). `t_eff = (now − start) − (paused_total − auction.type_paused_total_at_start) − (paused_since ? now − max(paused_since, start) : 0)`, floored at 0.
 - **Admin pause** is exact: the admin transaction carries the clock.
-- **Observation:** `liquidate`, `bid`, `expire` and `observe_feed` open the clock when the feed is invalid. They close it when the feed is valid and there is no admin pause.
+- **Observation:** `liquidate`, `bid` and `observe_feed` open the clock when the feed is invalid. They close it when the feed is valid and there is no admin pause.
 - **When a stale period starts is decided in spike S5:**
   - (a) at observation time;
   - (b) at `last_seen_oracle_ts + max_age`;
@@ -254,13 +253,12 @@ liquidate ──► Auctioning ──bid (partial)──┐
   Acceptance: a property test shows that an adversary controlling oracle-update **or** observation timing gets no more discount than the schedule gives over unpaused time, within one block. If only (a) passes, the app and keepers call `observe_feed` on every refresh, and the residual risk is documented.
 
 ### 5.8 Accounting and chain end (R6)
-**Chain-end effects** (Settled or Expired, applied once):
+**Chain-end effects** (on Settled, applied once):
 1. `shortfall = max(0, debt_principal − debt_raised)`. Then `unbacked_debt += shortfall` and `total_shortfall_booked += shortfall`.
 2. Release `reserved_amount`.
 3. Collateral:
    - target reached: `leftover_claimable = collateral_left`, owed to the owner;
    - lot exhausted: nothing remains;
-   - Expired: the remaining lot is transferred to `ProtocolCollateral`. It **does not go to the defaulted owner.** It stays protocol-owned. Its unbacked debt is covered by F4 debt auctions, and a direct sale path is in sub-project B.
 
 **Other accounting:**
 - The buffer receives only penalty coins. `settle_debt` nets the buffer against `unbacked_debt`.
@@ -303,7 +301,7 @@ liquidate ──► Auctioning ──bid (partial)──┐
 ### 5.11 F4 debt auction and F5 surplus auction (instant Dutch, mock token)
 Both are instant-settling Dutch auctions. Nothing is escrowed and nothing is refunded later, so they stay compatible with the single-use-account privacy rule. Each is parameterised by `EngineConfig.protocol_token: Option<TokenDefinitionId>`, as F4/F5 require. **At most one surplus and one debt auction are live at a time**, addressed by `Accounting.surplus_nonce` / `debt_nonce`.
 
-**Reference price for the protocol token.** `EngineConfig.protocol_token_oracle_id` points to an `OraclePriceAccount` quoting stablecoin per protocol token. It goes through the same validity checks. A stale feed pauses system auctions only.
+**Reference price for the protocol token.** The RFP requires only "a configurable token address", and no oracle for a protocol token is likely to exist. So `ref_price` is **`EngineConfig.protocol_token_ref_price`, an admin parameter** (bounded, with every change logged as an ADR in deployment notes). **Optionally**, if `protocol_token_oracle_id` is set, a valid oracle overrides it. An invalid optional oracle falls back to the admin price; it does not pause, because the start price only seeds a Dutch schedule that then decays or grows. Without this, F4/F5 could never start for a real protocol token.
 
 **Surplus auction (F5)**
 - **Start:** `start_surplus_auction(nonce)`, permissionless. Requires:
@@ -315,7 +313,7 @@ Both are instant-settling Dutch auctions. Nothing is escrowed and nothing is ref
   It moves `surplus_lot` stablecoin from the buffer into the auction's holding.
 - **Pricing:** the protocol tokens required per lot start at `ref_price × (1 + surplus_premium)` and decay by the schedule to a floor of `ref_price × (1 − surplus_max_discount)`.
 - **`take_surplus(amount_coin, max_protocol_in)`:** the taker pays protocol tokens, **burned in the same transaction**, and receives stablecoin. Partial takes follow the same dust rule.
-- **End:** when the lot is empty → Settled; at ttl → `close_system_auction` returns the remainder to the buffer.
+- **End:** when the lot is empty → Settled. After `system_auction_ttl` (the schedule has reached its floor), `close_system_auction` returns the remainder to the buffer. The surplus is still owned by the protocol, so closing loses nothing.
 - Without a protocol token, surplus just accumulates in the buffer.
 
 **Debt auction (F4)**
@@ -324,10 +322,13 @@ Both are instant-settling Dutch auctions. Nothing is escrowed and nothing is ref
   - `unbacked_debt − buffer_balance ≥ debt_lot`, after `settle_debt`.
 - **Pricing:** the protocol tokens offered for `debt_lot` stablecoin start at `ref_price⁻¹ × debt_lot × (1 − debt_initial_discount)` and **grow** by the schedule up to `max_mint_per_auction`.
 - **`take_debt(amount_coin, min_protocol_out)`:** the taker pays stablecoin, which is **burned** and reduces `unbacked_debt`. In return the engine **mints** mock protocol tokens; its PDA is the mint authority.
-- **End:** at ttl → `close_system_auction` closes it, and a new one can be started.
+- **End:** after `system_auction_ttl`, `close_system_auction` closes it, and a new one can be started. Nothing was minted for the untaken part, so closing loses nothing.
 
 **`check_solvency()`** (permissionless)
-- After `settle_debt`, if `unbacked_debt > 0` **and** (`protocol_token.is_none()` **or** `freeze_on_bad_debt` with the debt auction unable to start), it calls `stablecoin.engine_freeze_new_debt()` and sets `host_frozen_by_engine`.
+- After `settle_debt`, freeze only if **`unbacked_debt > bad_debt_freeze_threshold`** **and** (`protocol_token.is_none()` **or** `freeze_on_bad_debt` with the debt auction unable to start). It then calls `stablecoin.engine_freeze_new_debt()` and sets `host_frozen_by_engine`.
+- **Why the threshold:** early on the buffer is empty. Without a tolerance, a one-unit rounding shortfall from a dust auction would let anyone freeze the whole stablecoin. That matters because the host's freeze also blocks `withdraw_collateral` and `open_position` (`freeze.rs`), so users could not take out their collateral. Only the host's external freeze authority can unfreeze.
+- The default threshold is `max(debt_lot, 1% of host debt ceiling)`, admin-set and bounded.
+- The upstream PR states plainly that the freeze is broader than the RFP's "pause new debt generation", and asks whether upstream wants a narrower flag.
 - This implements "until a protocol token is configured, the surplus buffer absorbs shortfalls up to its capacity; if bad debt exceeds the buffer, the system pauses new debt generation".
 
 **System invariants**
@@ -341,11 +342,13 @@ Both are instant-settling Dutch auctions. Nothing is escrowed and nothing is ref
 |---|---|---|
 | penalty | 1000 bps | 0–2500 |
 | schedule | 2% → 10% / 45 min | ≤ 8 pts, max ≤ 3000 bps |
-| ttl | 4 h effective | 10 min – 7 d |
+| system auction ttl (surplus/debt only) | 4 h | 10 min – 7 d |
+| bad-debt freeze threshold | max(debt lot, 1% of host debt ceiling) | ≥ debt lot |
+| protocol token ref price | demo value for the mock token | > 0, admin-set |
 | min bid / debt floor / chost | 25 / 100 / 110 LSC | chost ≥ min bid |
 | keeper tip / chip / cap | 5 LSC / 10 bps / 50 LSC | ≤ penalty |
 | max oracle age / max conf / band | 60 min / 100 bps / 9000–11000 | ≤ 24 h / ≤ 1000 / [5000, 20000] |
-| type cap / global cap | 60,000 / 250,000 LSC | type ≤ global |
+| type cap / global cap | 60,000 / 250,000 LSC | type ≤ global. **Redundant today:** the host has one collateral type per instance, so the two caps act as one. Both are kept for future multi-collateral hosts. |
 | surplus target / lot / delay / premium / max discount | 1,000 / 500 LSC / 2 h / 500 bps / 2000 bps | — |
 | debt lot / initial discount / max mint per auction | 500 LSC / 0 / 10× lot at ref price | hard cap in code |
 
@@ -364,7 +367,7 @@ Both are instant-settling Dutch auctions. Nothing is escrowed and nothing is ref
 12. Liveness (fuzz): an unsafe position with a valid feed is always liquidatable, either within the caps or alone.
 13. Split-bid neutrality.
 14. Frozen clock: `t_eff` never advances while paused, whether by admin or by the feed.
-15. Collateral destinations are only: a bidder, the keeper, the owner (leftover after the target is reached), or `ProtocolCollateral`.
+15. Collateral destinations are only: a bidder, the keeper, or the owner (leftover after the target is reached).
 16. Keeper reward ≤ min(penalty value, `c`).
 17. F4/F5 system invariants (§5.11).
 
@@ -407,7 +410,7 @@ This switches to `poll_transaction_status` after the v0.3 port.
 - Built on `auction_sdk` encoders, not spel-cli, which mis-encodes stablecoin instructions (§3.2).
 - Commands:
   - `quote-liquidation`, `liquidate`;
-  - `quote-bid`, `bid`, `expire`;
+  - `quote-bid`, `bid`;
   - `list-auctions`, `list-at-risk`, `rescan`;
   - `settle-debt`, `check-solvency`;
   - `start-surplus`, `take-surplus`;
@@ -439,7 +442,7 @@ This switches to `poll_transaction_status` after the v0.3 port.
 |---|---|---|
 | `auction_core` | math, schedule, collateral, surplus and debt state machines, accounting; invariants 1–17 | TDD; `proptest`; differential model (Python big-int); Kani for `mul_div` and `d(t)` |
 | Stablecoin hooks | non-engine caller, zero binding, healthy position, mismatched amounts, stale oracle all rejected; **donation into the vault still liquidates and sweeps**; `engine_freeze_new_debt` sets `is_frozen` with exactly the host's existing frozen semantics, and only the freeze authority can unfreeze; enum/IDL order test; **upstream suite unchanged** | SPEL tests + lez-programs suite |
-| `auction_engine` | full path on the real stablecoin; partial bids; lot binds; dust; min bid; expire → `ProtocolCollateral`; lot exhausted with shortfall; re-liquidation; caps incl. oversized-alone; reward ≤ c on an underwater position; admin and feed pause with frozen discount; low-confidence and out-of-range pause; **R4/R5 with two host+engine instances on different collateral**; R3 concurrent auctions; `settle_debt`; **surplus auction with mock token (burn)**; **debt auction (mint, cap)**; **`check_solvency` → host freezes new debt when no token is set**; R6 conservation | `integration_tests`, standalone v0.2.4 sequencer, dev mode |
+| `auction_engine` | full path on the real stablecoin; partial bids; lot binds; dust; min bid; lot exhausted with shortfall; unsold auction holds at max discount (no expiry) and keeps its reservation; re-liquidation; caps incl. oversized-alone in both directions; reward ≤ c on an underwater position; admin and feed pause with frozen discount; low-confidence and out-of-range pause; **R4/R5 with two host+engine instances on different collateral**; R3 concurrent auctions; `settle_debt`; **surplus auction with mock token (burn)**; **debt auction (mint, cap)**; **`check_solvency` freezes the host only above `bad_debt_freeze_threshold` when no token is set (a 1-unit shortfall does not freeze)**; **F4/F5 start from the admin `protocol_token_ref_price` with no oracle**; R6 conservation | `integration_tests`, standalone v0.2.4 sequencer, dev mode |
 | Real proofs | one full end-to-end path per push to `main`; full suite nightly and on tags | `RISC0_DEV_MODE=0` |
 | SDK / FFI / CLI | quote equals the on-chain result; encoder index equals program enum and IDL; JSON fixtures; panic safety; header drift; CLI golden tests | Rust tests |
 | C++ module | every method; error mapping; `awaitTx` | `LOGOS_CMOCK` + `mockModule("lez_core")` |
@@ -472,7 +475,8 @@ TDD throughout; ≥ 80% coverage on the Rust crates.
 - no dust;
 - rounding directions;
 - frozen-discount property;
-- no admin path to auction, buffer or `ProtocolCollateral` funds.
+- no admin path to auction or buffer funds;
+- every booked number that triggers an irreversible action (mint, freeze) is net of assets the protocol still holds, or above a tolerance threshold.
 
 **Process:**
 - a security-reviewer subagent on every on-chain change;
@@ -496,7 +500,7 @@ TDD throughout; ≥ 80% coverage on the Rust crates.
 
 | Spike | Question | Decided by |
 |---|---|---|
-| S1 | Does the toolchain build and run end to end (guest, sequencer, stablecoin init, Basecamp harness with lez_core 0.4.1)? How many chained calls does `liquidate` really take? | Running it |
+| S1 | Does the toolchain build and run end to end (guest, sequencer, stablecoin init, Basecamp harness with lez_core 0.4.1)? How many chained calls does `liquidate` really take? **Can a second stablecoin build (instance tag constant → different image id) be deployed and initialised next to the first?** | Running it |
 | S2 | How does the host authenticate the engine: `caller_program_id`, PDA signer, or both? | Unforgeability tests + cycles + upstream fit |
 | S3 | Can SPEL create `LiquidationRecord` on first use (`Claim::Pda`) and derive arg-seeded auction PDAs? | A prototype |
 | S4 | Discount curve: piecewise-linear vs exponential vs stairstep | Cycles + accuracy |
@@ -507,6 +511,11 @@ TDD throughout; ≥ 80% coverage on the Rust crates.
 ## 14. Schedule (≈ 3 weeks, solo)
 - **Week 1:** spikes S1–S7; `auction_core` (collateral, surplus and debt logic plus property tests); stablecoin hooks with the upstream suite green; design log; outreach note drafted.
 - **Week 2:** `auction_engine` with all instructions and integration tests (including F4/F5 and two-instance R4); SDK encoders and CLI; CI including the per-push real-proof job and drift checks.
+
+**Cut order if the schedule slips (decided now, ADR-015).** Cut from the top; never cut the engine, hooks, F4/F5, CLI or real-proof CI.
+1. **The GUI.** The CLI demo carries U2–U5, and the GUI becomes milestone M5.
+2. **The two-instance R4/R5 test.** It becomes a documented descope with the S1 finding: the single-instance pause test stays, and the two-instance test moves to M2.
+3. **Kani.** Proptest and the differential model remain; Kani moves to M6.
 - **Week 3:** benchmarks; security and red-team pass; thin module and app (about 2 days) with the Basecamp end-to-end test; `SUBMISSION.md`, demo, draft proposal; upstream PR and the two upstream issues.
 
 Execution goes through `writing-plans`, then `subagent-driven-development`: implementer (TDD) → spec reviewer → code-quality reviewer (+ security reviewer for on-chain code) → verification.
@@ -518,9 +527,9 @@ Execution goes through `writing-plans`, then `subagent-driven-development`: impl
 | Milestone | Duration | Payout |
 |---|---|---|
 | M0 Spec, spikes, upstream hook PR + issues | 1 wk | $3,000 |
-| M1 Collateral auctions with real token movement on the stablecoin (PoC hardened) | 2 wk | $8,000 |
+| M1 Collateral auctions hardened, **partial liquidation (Maker-style, extra hook arguments)** | 2 wk | $8,000 |
 | M2 Prices: live TWAP once scales are reconciled, multi-oracle (SOFT1), pause hardening | 1.5 wk | $5,000 |
-| M3 F4/F5 hardening, `ProtocolCollateral` sale path, solvency/freeze (PoC hardened) | 1 wk | $4,000 |
+| M3 F4/F5 hardening, solvency/freeze thresholds, protocol-token oracle option (PoC hardened) | 1 wk | $4,000 |
 | M4 Private-path SDK (PRIV1–3, PA1–4), bot SDK (SOFT3) | 2 wk | $7,000 |
 | M5 Full Basecamp GUI per approved designs, catalog (**separable**) | 1.5 wk | $5,000 |
 | M6 v0.3 port + testnet (S1), full real-proof suite, `CYCLES.md`, `PRIVACY.md`, Kani (SOFT2) | 2 wk | $5,500 |
@@ -547,7 +556,7 @@ Execution goes through `writing-plans`, then `subagent-driven-development`: impl
 | R1 | PoC | no callbacks; documented, since there is no platform guard |
 | R2 | PoC (validity incl. confidence, band, pause) · M2 live TWAP | §5.2 honesty note |
 | R3 | PoC | per-auction PDAs, concurrency test |
-| R4/R5 | PoC (two host+engine instances; one type per host stated honestly) | §5.4 |
+| R4/R5 | PoC (two host+engine instances via a second host build; one type per host stated honestly) · M2 if cut | §5.4 |
 | R6 | PoC | §5.13 |
 | P1/P3 | PoC | single-transaction instructions, `CYCLES.md` |
 | P2 | PoC | load test |
@@ -567,7 +576,8 @@ Execution goes through `writing-plans`, then `subagent-driven-development`: impl
 | A finished PoC doesn't win alone | Engage early (§1.6); price below the open bids; scope discipline |
 | v0.3 port | `auction_core` isolation, SDK encoder seam, port plan |
 | Oracle scale, weak freshness, zero confidence | Validity checks + band + `[R/2, 2R]`; honest R2 note; TWAP live in M2 |
-| F4/F5 add week-2 load | Instant-Dutch design reuses the schedule and dust code; GUI shrunk to about 2 days |
+| F4/F5 add week-2 load | Instant-Dutch design reuses the schedule and dust code; GUI shrunk to about 2 days; cut order fixed (ADR-015) |
+| Unsold auction keeps its cap reservation (no expiry) | Max discount makes this rare; visible in UI/CLI; partial liquidation (M1) reduces the impact |
 | Pause-onset precision | S5 property test; documented residual |
 | Solo throughput, WSL memory | Strict scope, subagent-driven execution; `.wslconfig` + swap |
 | lez_core skew vs the catalog wallet | Clean Basecamp profile; fixed by the v0.3 port |
@@ -579,14 +589,15 @@ Execution goes through `writing-plans`, then `subagent-driven-development`: impl
 - **ADR-004** `LiquidationRecord` nonce addressing.
 - **ADR-005** Band-clamped market price, collateral per coin. The feed must be valid (age, confidence, band, `[R/2, 2R]`). No fallback.
 - **ADR-006** Piecewise-linear schedule, snapshotted per auction.
-- **ADR-007** Type-level pause clock; frozen discount and ttl.
+- **ADR-007** Type-level pause clock; frozen discount.
 - **ADR-008** No on-chain auction list; block-scan discovery.
 - **ADR-009** Nonce-based transaction confirmation.
 - **ADR-010** Debt-first payment; penalty to the buffer; engine-only accounting.
 - **ADR-011** UI on Basecamp's colour grid and the AppManagerView layout.
-- **ADR-012** Full seizure with the oversized-alone cap rule; vault sweep (≥, not =); no restarts; expiry sends the lot to `ProtocolCollateral`; shortfall at every end.
+- **ADR-012** Full seizure with the oversized-alone cap rule (limitation documented; partial liquidation in M1); vault sweep (≥, not =); no restarts and **no expiry** (GEB: hold at max discount until settled); shortfall booked only when the lot is exhausted.
 - **ADR-013** Engine-first PoC with a thin GUI; F4/F5 in the PoC.
 - **ADR-014** Pricing at about $40k plus a separate audit line; a variant without the GUI.
+- **ADR-015** Schedule cut order: GUI, then the two-instance R4/R5 test, then Kani. The engine, hooks, F4/F5, CLI and real-proof CI are never cut.
 
 ## 18. References
 - RFP-014 and its appendix.
@@ -620,3 +631,12 @@ Execution goes through `writing-plans`, then `subagent-driven-development`: impl
   - `poll_transaction_status` only after the v0.3 port;
   - health computed with four accounts using the U512 projection;
   - threat-model platform facts (no reentrancy guard, inherited PDA authorisation, sequential sequencer).
+- **Second external review (2026-10-01).** Claims re-checked against the code: `freeze.rs` blocks `open_position`/`withdraw_collateral`/`generate_debt`; both host PDA seed functions take no arguments; the program id is `compute_image_id()`. Changes made in v3:
+  - no expiry (GEB hold at max discount), which removes `expire`, `ProtocolCollateral` and minting against recoverable debt;
+  - `bad_debt_freeze_threshold` on `check_solvency`, with the broad freeze scope stated for upstream;
+  - the second host instance needs a second build (spike S1);
+  - the oversized-rule limitation documented in both directions, with partial liquidation moved to M1;
+  - the protocol-token start price is an admin parameter, with the oracle optional;
+  - the cut order is fixed (ADR-015);
+  - the bleu precedent is corrected (one L + one XL, $55k combined) and the competitor claim softened;
+  - the cap redundancy is noted.

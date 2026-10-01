@@ -209,10 +209,11 @@ mod tests {
         let mut p = params();
         p.band_lo_bps = 11000;
         p.band_hi_bps = 9000;
-        let result = bid_price(R, R, &p);
-        // With inverted band, m_ray.max(lo).min(hi) gives min(R, hi) since R > lo
         let hi = mul_div_floor(R, 9000, BPS).unwrap_or(u128::MAX);
-        assert_eq!(result, hi);
+        // m_ray.max(lo).min(hi) always returns hi when lo > hi (safe degradation)
+        assert_eq!(bid_price(R, R, &p), hi);
+        // Even with m below lo, the inverted band still degrades to hi
+        assert_eq!(bid_price(R / 100, R, &p), hi);
     }
 
     #[test]
@@ -245,14 +246,14 @@ mod tests {
         // Test Q64x64 scale through validate_feed
         let mut p = params();
         p.scale = OracleScale::Q64x64;
-        // R_q64 = mul_div_floor(R, 1u128 << 64, RAY); round-trip error is RAY / 2^64 ≈ 5.4e7
+        // q = floor(R·2^64/RAY) = R·2^64/RAY − f; back = floor(q·RAY/2^64) ≥ R − f·RAY/2^64 − 1 > R − RAY/2^64 − 1, and back ≤ R
         let r_q64 = mul_div_floor(R, 1u128 << 64, RAY).unwrap();
-        // When validated, to_ray(r_q64, Q64x64) should return approximately R
         let result = validate_feed(&reading(r_q64, 0, 0), &p, R, 0);
         assert!(result.is_ok());
         let m = result.unwrap();
-        // Allow rounding error from floor operations: ~RAY/2^64 ≈ 54_210_108_624 (conservative bound)
-        assert!(m.abs_diff(R) <= 100_000_000_000);
+        // Round-trip error: R − m ≤ ceil(RAY / 2^64) and m ≤ R
+        assert!(R - m <= RAY.div_ceil(1u128 << 64));
+        assert!(m <= R);
     }
 
     #[test]

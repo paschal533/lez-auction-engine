@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v3 for review. It includes the internal spec review and two external reviews of 2026-10-01 (see §19). |
+| **Status** | Draft v4 for review. It includes the internal spec review and three external reviews of 2026-10-01 (see §19). |
 | **Date** | 2026-10-01 |
 | **Author** | paschal533, with Claude |
 | **Scope of this spec** | Sub-project **A**: a 3-week, engine-first PoC. Sub-project **B** (follow-ups) is listed in §2.3 and gets its own spec. |
@@ -257,8 +257,8 @@ liquidate ──► Auctioning ──bid (partial)──┐
 1. `shortfall = max(0, debt_principal − debt_raised)`. Then `unbacked_debt += shortfall` and `total_shortfall_booked += shortfall`.
 2. Release `reserved_amount`.
 3. Collateral:
-   - target reached: `leftover_claimable = collateral_left`, owed to the owner;
-   - lot exhausted: nothing remains;
+   - target reached: `leftover_claimable = collateral_left`, owed to the owner.
+   - lot exhausted: nothing remains.
 
 **Other accounting:**
 - The buffer receives only penalty coins. `settle_debt` nets the buffer against `unbacked_debt`.
@@ -279,14 +279,18 @@ liquidate ──► Auctioning ──bid (partial)──┐
 **`set_liquidation_engine(engine_authority_id)`**
 - The admin signs. The all-zero id is rejected.
 
-**`liquidate_position(expected_collateral_amount, expected_normalized_debt_amount)`**
+**`liquidate_position(collateral_to_seize, normalized_debt_to_cover)`.** This is the final interface shape, designed for partial liquidation now (ADR-016). The PoC always passes the full position amounts, so M1's partial liquidation is an **engine-only** change with no second upstream PR.
 - The engine authority signs. How it is authenticated is decided in spike S2: `caller_program_id`, an engine PDA signer, or both.
-- The position PDA is re-derived. Debt is greater than 0, `expected_* == Position.*`.
+- The position PDA is re-derived. Debt is greater than 0.
+- **Expected-values check:** `0 < normalized_debt_to_cover ≤ Position.normalized_debt` and `0 < collateral_to_seize ≤ Position.collateral_amount`. A stale quote reverts.
 - Vault PDA and definition match. **The vault balance must be ≥ `Position.collateral_amount` (not equal).**
+- The engine, not the host, enforces dust rules for partial seizures (`debt_floor`). The host only checks bounds and health.
 - The custody holding is already initialised with the same definition.
 - The oracle is fresh.
 - **Health is evaluated with four read-only accounts** (`stability_fee_accumulator`, `redemption_price_state`, `protocol_parameters`, `CLOCK_01`). It reuses the U512 projection from `withdraw_collateral.rs` (lines 179–194) as a boolean, and requires the position to be **not** collateralised at `minimum_collateralization_ratio`.
-- Effects: zero the position, then **transfer the entire vault balance** (sweeping donations) to custody.
+- Effects:
+  - **Full seizure** (both arguments equal the position's values): zero the position, then **transfer the entire vault balance** (sweeping donations) to custody.
+  - **Partial seizure** (M1): subtract both amounts from the position and transfer exactly `collateral_to_seize`. Donations then stay in the vault, which the host's `Deposit` already absorbs.
 - Allowed while the host is frozen (it reduces risk). This needs maintainer confirmation.
 - Upstream discussion points: there is no separate liquidation ratio (it uses min_CR); liquidation while frozen.
 
@@ -301,7 +305,7 @@ liquidate ──► Auctioning ──bid (partial)──┐
 ### 5.11 F4 debt auction and F5 surplus auction (instant Dutch, mock token)
 Both are instant-settling Dutch auctions. Nothing is escrowed and nothing is refunded later, so they stay compatible with the single-use-account privacy rule. Each is parameterised by `EngineConfig.protocol_token: Option<TokenDefinitionId>`, as F4/F5 require. **At most one surplus and one debt auction are live at a time**, addressed by `Accounting.surplus_nonce` / `debt_nonce`.
 
-**Reference price for the protocol token.** The RFP requires only "a configurable token address", and no oracle for a protocol token is likely to exist. So `ref_price` is **`EngineConfig.protocol_token_ref_price`, an admin parameter** (bounded, with every change logged as an ADR in deployment notes). **Optionally**, if `protocol_token_oracle_id` is set, a valid oracle overrides it. An invalid optional oracle falls back to the admin price; it does not pause, because the start price only seeds a Dutch schedule that then decays or grows. Without this, F4/F5 could never start for a real protocol token.
+**Reference price for the protocol token.** The RFP requires only "a configurable token address", and no oracle for a protocol token is likely to exist. So `ref_price` is **`EngineConfig.protocol_token_ref_price`, an admin parameter** (bounded, with every change logged as an ADR in deployment notes). **Optionally**, if `protocol_token_oracle_id` is set, a valid oracle overrides it, **clamped to ±20% of the admin price**, so a manipulated or wrong oracle cannot move it further. An invalid optional oracle falls back to the admin price; it does not pause, because the start price only seeds a Dutch schedule that then decays or grows. **Direction of the risk:** a too-low protocol-token price makes the debt auction offer more tokens and the surplus auction ask fewer, so both lose value. Hence the clamp, the absolute mint cap, and the logged price changes. Without this, F4/F5 could never start for a real protocol token.
 
 **Surplus auction (F5)**
 - **Start:** `start_surplus_auction(nonce)`, permissionless. Requires:
@@ -311,7 +315,7 @@ Both are instant-settling Dutch auctions. Nothing is escrowed and nothing is ref
   - `now ≥ last_surplus_end + surplus_delay`.
 
   It moves `surplus_lot` stablecoin from the buffer into the auction's holding.
-- **Pricing:** the protocol tokens required per lot start at `ref_price × (1 + surplus_premium)` and decay by the schedule to a floor of `ref_price × (1 − surplus_max_discount)`.
+- **Pricing** (`ref_price` = stablecoin per protocol token, RAY): the protocol tokens required for the lot start at `ceil(surplus_lot / ref_price × (1 + surplus_premium))` and decay by the schedule to a floor of `ceil(surplus_lot / ref_price × (1 − surplus_max_discount))`. Amounts required from the taker round up. A partial take pays pro rata, rounded up.
 - **`take_surplus(amount_coin, max_protocol_in)`:** the taker pays protocol tokens, **burned in the same transaction**, and receives stablecoin. Partial takes follow the same dust rule.
 - **End:** when the lot is empty → Settled. After `system_auction_ttl` (the schedule has reached its floor), `close_system_auction` returns the remainder to the buffer. The surplus is still owned by the protocol, so closing loses nothing.
 - Without a protocol token, surplus just accumulates in the buffer.
@@ -325,9 +329,15 @@ Both are instant-settling Dutch auctions. Nothing is escrowed and nothing is ref
 - **End:** after `system_auction_ttl`, `close_system_auction` closes it, and a new one can be started. Nothing was minted for the untaken part, so closing loses nothing.
 
 **`check_solvency()`** (permissionless)
-- After `settle_debt`, freeze only if **`unbacked_debt > bad_debt_freeze_threshold`** **and** (`protocol_token.is_none()` **or** `freeze_on_bad_debt` with the debt auction unable to start). It then calls `stablecoin.engine_freeze_new_debt()` and sets `host_frozen_by_engine`.
+- After `settle_debt`, freeze only if **`unbacked_debt > bad_debt_freeze_threshold`** **and** one of the following holds:
+  - (a) `protocol_token.is_none()`; or
+  - (b) `freeze_on_bad_debt` is true, **no debt auction is live**, **and** `start_debt_auction` would revert for a reason other than `DebtAuctionAlreadyLive`. That means `PriceFeedInvalid` on an optional oracle with no admin fallback, a mint-cap configuration error, or a token misconfiguration.
+
+  A live debt auction means recovery is already working, so `check_solvency` reverts with `RecoveryInProgress` and does nothing. It then calls `stablecoin.engine_freeze_new_debt()` and sets `host_frozen_by_engine`.
 - **Why the threshold:** early on the buffer is empty. Without a tolerance, a one-unit rounding shortfall from a dust auction would let anyone freeze the whole stablecoin. That matters because the host's freeze also blocks `withdraw_collateral` and `open_position` (`freeze.rs`), so users could not take out their collateral. Only the host's external freeze authority can unfreeze.
-- The default threshold is `max(debt_lot, 1% of host debt ceiling)`, admin-set and bounded.
+- The threshold is an **absolute value set by the admin**: default 1,000 LSC, bounded to ≥ `debt_lot`. The host has no debt ceiling and no total-debt counter (`ProtocolParameters`), so a relative default is impossible.
+- **This is an interpretation of F4,** which literally says to freeze when bad debt "exceeds the buffer". It is recorded in `REQUIREMENTS.md` with the reason: one unit of rounding must not freeze the stablecoin.
+- **Path back:** the engine can only freeze. Unfreezing is the host freeze authority's existing `unfreeze`. The ops runbook in `THREAT_MODEL.md` ("Engine freeze recovery") says when: after `unbacked_debt ≤ threshold` (buffer growth, settlement, or a later debt auction once a token is configured), or by governance decision.
 - The upstream PR states plainly that the freeze is broader than the RFP's "pause new debt generation", and asks whether upstream wants a narrower flag.
 - This implements "until a protocol token is configured, the surplus buffer absorbs shortfalls up to its capacity; if bad debt exceeds the buffer, the system pauses new debt generation".
 
@@ -343,14 +353,15 @@ Both are instant-settling Dutch auctions. Nothing is escrowed and nothing is ref
 | penalty | 1000 bps | 0–2500 |
 | schedule | 2% → 10% / 45 min | ≤ 8 pts, max ≤ 3000 bps |
 | system auction ttl (surplus/debt only) | 4 h | 10 min – 7 d |
-| bad-debt freeze threshold | max(debt lot, 1% of host debt ceiling) | ≥ debt lot |
-| protocol token ref price | demo value for the mock token | > 0, admin-set |
+| bad-debt freeze threshold | 1,000 LSC (absolute, admin-set) | ≥ debt lot |
 | min bid / debt floor / chost | 25 / 100 / 110 LSC | chost ≥ min bid |
 | keeper tip / chip / cap | 5 LSC / 10 bps / 50 LSC | ≤ penalty |
 | max oracle age / max conf / band | 60 min / 100 bps / 9000–11000 | ≤ 24 h / ≤ 1000 / [5000, 20000] |
 | type cap / global cap | 60,000 / 250,000 LSC | type ≤ global. **Redundant today:** the host has one collateral type per instance, so the two caps act as one. Both are kept for future multi-collateral hosts. |
 | surplus target / lot / delay / premium / max discount | 1,000 / 500 LSC / 2 h / 500 bps / 2000 bps | — |
-| debt lot / initial discount / max mint per auction | 500 LSC / 0 / 10× lot at ref price | hard cap in code |
+| debt lot / initial discount | 500 LSC / 0 | — |
+| max mint per debt auction | **absolute token amount** (demo 5,000 mock tokens) | ≤ `MAX_MINT_HARD_CAP` constant in code; **never derived from a price** |
+| protocol token ref price | admin-set; optional oracle override bounded to ±20% of it | every change emits a `RefPriceChanged` record in the engine's change log (an account append, or `DEPLOYMENTS.md` for the PoC) |
 
 ### 5.13 Invariants (`auction_core` proptest; asserted on-chain where cheap)
 1. `collateral_seized == keeper_reward + collateral_sold + collateral_left`. Sold is tracked independently of left, and claims never reduce `left`.
@@ -440,9 +451,9 @@ This switches to `poll_transaction_status` after the v0.3 port.
 
 | Layer | Scope | Tooling |
 |---|---|---|
-| `auction_core` | math, schedule, collateral, surplus and debt state machines, accounting; invariants 1–17 | TDD; `proptest`; differential model (Python big-int); Kani for `mul_div` and `d(t)` |
+| `auction_core` | math, schedule, collateral, surplus and debt state machines, accounting; invariants 1–17; **per-type pause with two `CollateralConfig`s (one feed paused, one not)**, so the engine's own per-type path is tested even though each host has one type | TDD; `proptest`; differential model (Python big-int); Kani for `mul_div` and `d(t)` |
 | Stablecoin hooks | non-engine caller, zero binding, healthy position, mismatched amounts, stale oracle all rejected; **donation into the vault still liquidates and sweeps**; `engine_freeze_new_debt` sets `is_frozen` with exactly the host's existing frozen semantics, and only the freeze authority can unfreeze; enum/IDL order test; **upstream suite unchanged** | SPEL tests + lez-programs suite |
-| `auction_engine` | full path on the real stablecoin; partial bids; lot binds; dust; min bid; lot exhausted with shortfall; unsold auction holds at max discount (no expiry) and keeps its reservation; re-liquidation; caps incl. oversized-alone in both directions; reward ≤ c on an underwater position; admin and feed pause with frozen discount; low-confidence and out-of-range pause; **R4/R5 with two host+engine instances on different collateral**; R3 concurrent auctions; `settle_debt`; **surplus auction with mock token (burn)**; **debt auction (mint, cap)**; **`check_solvency` freezes the host only above `bad_debt_freeze_threshold` when no token is set (a 1-unit shortfall does not freeze)**; **F4/F5 start from the admin `protocol_token_ref_price` with no oracle**; R6 conservation | `integration_tests`, standalone v0.2.4 sequencer, dev mode |
+| `auction_engine` | full path on the real stablecoin; partial bids; lot binds; dust; min bid; lot exhausted with shortfall; unsold auction holds at max discount (no expiry) and keeps its reservation; re-liquidation; caps incl. oversized-alone in both directions; reward ≤ c on an underwater position; admin and feed pause with frozen discount; low-confidence and out-of-range pause; **R4/R5 with two host+engine instances on different collateral**; R3 concurrent auctions; `settle_debt`; **surplus auction with mock token (burn)**; **debt auction (mint, cap)**; **`check_solvency` freezes the host only above `bad_debt_freeze_threshold` when no token is set (a 1-unit shortfall does not freeze)**; **`check_solvency` with a live debt auction reverts with `RecoveryInProgress` and does not freeze**; debt-auction mint never exceeds the absolute cap even with a low ref price; oracle override clamped to ±20%; **F4/F5 start from the admin `protocol_token_ref_price` with no oracle**; R6 conservation | `integration_tests`, standalone v0.2.4 sequencer, dev mode |
 | Real proofs | one full end-to-end path per push to `main`; full suite nightly and on tags | `RISC0_DEV_MODE=0` |
 | SDK / FFI / CLI | quote equals the on-chain result; encoder index equals program enum and IDL; JSON fixtures; panic safety; header drift; CLI golden tests | Rust tests |
 | C++ module | every method; error mapping; `awaitTx` | `LOGOS_CMOCK` + `mockModule("lez_core")` |
@@ -491,7 +502,7 @@ TDD throughout; ≥ 80% coverage on the Rust crates.
 - Interop: the vendored stablecoin suite; the real `lez_core` 0.4.1 in end-to-end tests; IDL and encoder drift checks.
 
 ## 12. Documentation (kept current at every task)
-- `docs/design-log.md` holds ADR-001…013 and every spike outcome.
+- `docs/design-log.md` holds ADR-001…017 and every spike outcome.
 - `docs/architecture/*.md` explain how each layer works.
 - Also maintained: `README.md` (S5), `REQUIREMENTS.md`, `SUBMISSION.md`, `DEMO.md`, `CYCLES.md`, `THREAT_MODEL.md`, `docs/v03-port-plan.md`, `docs/PRIVACY.md` (stub) and `cli/README.md`.
 - `docs/outreach/` holds drafts of public messages, which the user posts.
@@ -511,12 +522,12 @@ TDD throughout; ≥ 80% coverage on the Rust crates.
 ## 14. Schedule (≈ 3 weeks, solo)
 - **Week 1:** spikes S1–S7; `auction_core` (collateral, surplus and debt logic plus property tests); stablecoin hooks with the upstream suite green; design log; outreach note drafted.
 - **Week 2:** `auction_engine` with all instructions and integration tests (including F4/F5 and two-instance R4); SDK encoders and CLI; CI including the per-push real-proof job and drift checks.
+- **Week 3:** benchmarks; security and red-team pass; thin module and app (about 2 days) with the Basecamp end-to-end test; `SUBMISSION.md`, demo, draft proposal; upstream PR and the two upstream issues.
 
 **Cut order if the schedule slips (decided now, ADR-015).** Cut from the top; never cut the engine, hooks, F4/F5, CLI or real-proof CI.
 1. **The GUI.** The CLI demo carries U2–U5, and the GUI becomes milestone M5.
-2. **The two-instance R4/R5 test.** It becomes a documented descope with the S1 finding: the single-instance pause test stays, and the two-instance test moves to M2.
+2. **The two-instance R4/R5 test.** It becomes a documented descope with the S1 finding: the single-instance pause test and the `auction_core` per-type test stay, and the two-instance test moves to M2.
 3. **Kani.** Proptest and the differential model remain; Kani moves to M6.
-- **Week 3:** benchmarks; security and red-team pass; thin module and app (about 2 days) with the Basecamp end-to-end test; `SUBMISSION.md`, demo, draft proposal; upstream PR and the two upstream issues.
 
 Execution goes through `writing-plans`, then `subagent-driven-development`: implementer (TDD) → spec reviewer → code-quality reviewer (+ security reviewer for on-chain code) → verification.
 
@@ -598,6 +609,8 @@ Execution goes through `writing-plans`, then `subagent-driven-development`: impl
 - **ADR-013** Engine-first PoC with a thin GUI; F4/F5 in the PoC.
 - **ADR-014** Pricing at about $40k plus a separate audit line; a variant without the GUI.
 - **ADR-015** Schedule cut order: GUI, then the two-instance R4/R5 test, then Kani. The engine, hooks, F4/F5, CLI and real-proof CI are never cut.
+- **ADR-016** `liquidate_position(collateral_to_seize, normalized_debt_to_cover)` gets its final, partial-capable shape now. The PoC passes full amounts, so M1 is engine-only. The vault sweep applies only on full seizure.
+- **ADR-017** F4/F5 safety: an absolute mint cap (never price-derived), the oracle override clamped to ±20% of the admin price, logged price changes. `check_solvency` never freezes during a live debt auction; the freeze threshold is absolute and admin-set (an interpretation of F4).
 
 ## 18. References
 - RFP-014 and its appendix.
@@ -640,3 +653,12 @@ Execution goes through `writing-plans`, then `subagent-driven-development`: impl
   - the cut order is fixed (ADR-015);
   - the bleu precedent is corrected (one L + one XL, $55k combined) and the competitor claim softened;
   - the cap redundancy is noted.
+- **Third external review (2026-10-01).** Claim re-checked: `ProtocolParameters` has no debt ceiling. Changes made in v4:
+  - an absolute freeze threshold, recorded as an interpretation of F4;
+  - `check_solvency` precisely defined, so it never freezes during a live debt auction (with a test);
+  - an absolute mint cap, the ±20% oracle clamp, and logged ref-price changes;
+  - the surplus pricing units corrected (`lot / ref_price`);
+  - the final partial-capable hook shape (ADR-016);
+  - an `auction_core` two-type pause test;
+  - the freeze recovery runbook;
+  - text fixes (ADR range, cut-order placement, §5.8 punctuation).

@@ -159,7 +159,7 @@ Acceptance: a property test shows that adversaries controlling oracle-update or 
 Onset precision is a residual risk documented in `THREAT_MODEL.md`.
 
 **Status**
-Pending spike S5
+Accepted (S5): `DerivedFromOracle`, option (b). Assumes every t_eff evaluation is preceded by a pause observation at the same instant; see docs/spikes/S5.md
 
 ---
 

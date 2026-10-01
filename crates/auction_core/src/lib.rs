@@ -6,6 +6,7 @@
 
 pub mod error;
 pub mod math;
+pub mod pause;
 pub mod price;
 pub mod schedule;
 pub mod units;

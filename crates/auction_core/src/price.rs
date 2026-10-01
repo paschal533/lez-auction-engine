@@ -84,11 +84,12 @@ pub fn validate_feed(
     Ok(m)
 }
 
-/// P = clamp(M, R·lo, R·hi). The bounds are rounded toward R.
+/// P = clamp(M, R·lo, R·hi). The bounds are rounded down (floor).
+/// Callers must pass validated params (FeedParams::validate); the unwrap_or branches are unreachable for validated params.
 pub fn bid_price(m_ray: u128, redemption_ray: u128, p: &FeedParams) -> u128 {
     let lo = mul_div_floor(redemption_ray, p.band_lo_bps as u128, BPS).unwrap_or(0);
     let hi = mul_div_floor(redemption_ray, p.band_hi_bps as u128, BPS).unwrap_or(u128::MAX);
-    m_ray.clamp(lo, hi)
+    m_ray.max(lo).min(hi)
 }
 
 /// Admin price, optionally overridden by a valid oracle clamped to ±20% of it (spec §5.11, ADR-017).
@@ -200,5 +201,71 @@ mod tests {
         let mut p = params();
         p.max_conf_bps = 1001;
         assert_eq!(p.validate(), Err(ConfigError::ConfidenceAboveMax));
+    }
+
+    #[test]
+    fn inverted_band_does_not_panic() {
+        // Inverted band (lo > hi) should degrade to hi instead of panicking.
+        let mut p = params();
+        p.band_lo_bps = 11000;
+        p.band_hi_bps = 9000;
+        let result = bid_price(R, R, &p);
+        // With inverted band, m_ray.max(lo).min(hi) gives min(R, hi) since R > lo
+        let hi = mul_div_floor(R, 9000, BPS).unwrap_or(u128::MAX);
+        assert_eq!(result, hi);
+    }
+
+    #[test]
+    fn age_exactly_at_max_is_valid() {
+        let p = params();
+        // age = 3_600_000 - 0 = 3_600_000 = max_age_ms, so valid
+        assert_eq!(validate_feed(&reading(R, 0, 0), &p, R, 3_600_000), Ok(R));
+    }
+
+    #[test]
+    fn confidence_exactly_at_limit_is_valid() {
+        let p = params();
+        // conf = R / 100, max_conf_bps = 100
+        // conf_limit = mul_div_floor(R, 100, 10000) = R / 100
+        let conf = R / 100;
+        assert_eq!(validate_feed(&reading(R, conf, 0), &p, R, 0), Ok(R));
+    }
+
+    #[test]
+    fn exact_boundaries_inclusive() {
+        let p = params();
+        // Exactly R/2 (inclusive lower bound)
+        assert_eq!(validate_feed(&reading(R / 2, 0, 0), &p, R, 0), Ok(R / 2));
+        // Exactly 2*R (inclusive upper bound)
+        assert_eq!(validate_feed(&reading(2 * R, 0, 0), &p, R, 0), Ok(2 * R));
+    }
+
+    #[test]
+    fn q64x64_feed_validates() {
+        // Test Q64x64 scale through validate_feed
+        let mut p = params();
+        p.scale = OracleScale::Q64x64;
+        // R_q64 = mul_div_floor(R, 1u128 << 64, RAY); round-trip error is RAY / 2^64 ≈ 5.4e7
+        let r_q64 = mul_div_floor(R, 1u128 << 64, RAY).unwrap();
+        // When validated, to_ray(r_q64, Q64x64) should return approximately R
+        let result = validate_feed(&reading(r_q64, 0, 0), &p, R, 0);
+        assert!(result.is_ok());
+        let m = result.unwrap();
+        // Allow rounding error from floor operations: ~RAY/2^64 ≈ 54_210_108_624 (conservative bound)
+        assert!(m.abs_diff(R) <= 100_000_000_000);
+    }
+
+    #[test]
+    fn effective_ref_price_at_exact_bounds() {
+        let a = 1_000 * RAY;
+        // Compute the bounds: lo = a * 8000 / 10000, hi = a * 12000 / 10000
+        let lo = mul_div_floor(a, 8000, BPS).unwrap();
+        let hi = mul_div_floor(a, 12000, BPS).unwrap();
+        // lo should be 800 * RAY, hi should be 1200 * RAY
+        assert_eq!(lo, 800 * RAY);
+        assert_eq!(hi, 1_200 * RAY);
+        // Exactly at the boundaries
+        assert_eq!(effective_ref_price(a, Some(Ok(1_200 * RAY))), 1_200 * RAY);
+        assert_eq!(effective_ref_price(a, Some(Ok(800 * RAY))), 800 * RAY);
     }
 }

@@ -4,8 +4,5 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::arithmetic_side_effects)]
 
-#[cfg(test)]
-mod smoke {
-    #[test]
-    fn crate_builds() {}
-}
+pub mod math;
+pub mod units;

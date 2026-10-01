@@ -7,7 +7,7 @@ The `auction_core::math` module provides safe, explicit arithmetic for the RFP-0
 This module exists because:
 1. **No u256 dependency**: Adding a u256 crate introduces significant code size overhead and is incompatible with zkVM cost targets (recursion, proving, verification time).
 2. **Explicit rounding**: Floor and ceiling rounding are explicit in the API, preventing silent truncation bugs when proportions and interest rates are computed.
-3. **Safety**: The functions trap on division by zero and overflow rather than silently wrapping.
+3. **Safety**: The functions return errors on division by zero and overflow rather than silently wrapping.
 
 ## Architecture
 
@@ -43,14 +43,16 @@ q, r = divmod(N, d)
 ```
 
 The algorithm processes each of the 128 bits of the lower limb from most to least significant. At each step:
-1. We shift the remainder left by 1 bit.
-2. We bring down the next bit from `lo`.
-3. We test if the updated remainder is ≥ `d`.
+1. We capture the carry bit (top bit of the current remainder).
+2. We shift the remainder left by 1 bit and bring down the next bit from `lo`.
+3. We test if the carry bit was set or the updated remainder is ≥ `d`.
 4. If so, we subtract `d` and set the corresponding bit of `q`.
 
-**Invariant**: `rem < d` is maintained at the start of each iteration. This ensures the final quotient fits in u128 (checked via `hi >= d` guard).
+**Invariant**: `rem < d` is maintained at the start of each iteration.
 
-**Wrapping arithmetic**: The `rem.wrapping_sub(d)` is safe because we have already tested `rem >= d`, so the true result is non-negative and fits in u128.
+**Quotient bounds**: The `hi >= d` guard ensures the final quotient fits in u128 by checking that the initial remainder (which is `hi`) is less than the divisor.
+
+**Wrapping arithmetic safety**: Before the subtraction, the true 129-bit value is `carry·2^128 + rem`, which is `< 2d` (because `rem < d` before the shift, and `carry ∈ {0, 1}`). If `carry == 1` or `rem >= d`, then `carry·2^128 + rem >= d`, so subtracting `d` yields a value `< d` that fits in u128. The `wrapping_sub` computes this result modulo 2^128, which is exact since the true value already fits in u128.
 
 ## Public API
 
@@ -99,6 +101,8 @@ Computes `ceil(x * y / d)`.
 
 ## Rounding Semantics
 
+**General rule**: Amounts paid out round down (floor); amounts owed or charged round up (ceil).
+
 ### Floor
 
 When exact division is impossible, we round down:
@@ -139,7 +143,9 @@ The quotient would exceed u128::MAX. We return `MathError::Overflow` rather than
 
 If `q == u128::MAX` and we need to add 1 for ceiling, `checked_add` returns `None`. We convert this to `Err(MathError::Overflow)`.
 
-**Example**: `mul_div_ceil(u128::MAX, 1, 1)` returns `Ok(u128::MAX)` because `floor(u128::MAX * 1 / 1) = u128::MAX` with no remainder, so no rounding up is needed.
+**Example of no overflow**: `mul_div_ceil(u128::MAX, 2, 2)` returns `Ok(u128::MAX)` because `(u128::MAX * 2) / 2 = u128::MAX` with no remainder, so no rounding up is needed.
+
+**Ceiling overflow with remainder**: If the quotient is `u128::MAX` and the remainder is non-zero, ceiling must add 1 to the quotient, causing overflow. Such cases return `Err(MathError::Overflow)`. These edge cases are verified by the proptest suite, which ensures correctness across the full u128 input space.
 
 ## Test Coverage
 
@@ -149,9 +155,6 @@ The test suite includes:
 3. **Error cases**: Division by zero, overflow on both floor and ceil.
 4. **Proptest reference**: 256 random property tests comparing against a `ruint::U256` reference implementation to ensure correctness across the full input space.
 
-## No `#[forbid(unsafe_code)]` Violations
+## Safety
 
-All functions use only safe Rust:
-- No `unsafe` blocks.
-- Restoring division uses `wrapping_sub` only after proving the subtraction is safe (by guard condition).
-- No raw pointers, assembly, or memory unsafety.
+All functions are implemented in safe Rust with `#[forbid(unsafe_code)]` and `#![deny(clippy::arithmetic_side_effects)]`.

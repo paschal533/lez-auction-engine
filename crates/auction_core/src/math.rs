@@ -97,6 +97,40 @@ mod tests {
         assert_eq!(mul_div_ceil(u128::MAX, 2, 2), Ok(u128::MAX));
     }
 
+    #[test]
+    fn overflow_with_small_divisor() {
+        // Small divisor with very large operands overflows the quotient
+        assert_eq!(
+            mul_div_floor(u128::MAX, u128::MAX, 3),
+            Err(MathError::Overflow)
+        );
+    }
+
+    #[test]
+    fn large_divisor() {
+        let large_d = 1u128 << 127;
+        // (2^127) * 4 / 2^127 = 4
+        assert_eq!(mul_div_floor(large_d, 4, large_d), Ok(4));
+        // u128::MAX * 2^127 / 2^127 = u128::MAX
+        assert_eq!(mul_div_floor(u128::MAX, large_d, large_d), Ok(u128::MAX));
+    }
+
+    #[test]
+    fn divisor_is_max() {
+        // u128::MAX * u128::MAX / u128::MAX = u128::MAX (exact)
+        assert_eq!(
+            mul_div_floor(u128::MAX, u128::MAX, u128::MAX),
+            Ok(u128::MAX)
+        );
+    }
+
+    #[test]
+    fn exact_multiples() {
+        // Exact division: no remainder, floor = ceil
+        assert_eq!(mul_div_floor(6, 10, 4), Ok(15));
+        assert_eq!(mul_div_ceil(6, 10, 4), Ok(15));
+    }
+
     fn reference(x: u128, y: u128, d: u128) -> Option<(u128, u128)> {
         let p = U256::from(x) * U256::from(y);
         let (q, r) = p.div_rem(U256::from(d));

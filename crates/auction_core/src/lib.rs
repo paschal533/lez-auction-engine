@@ -5,6 +5,7 @@
 #![deny(clippy::arithmetic_side_effects)]
 
 pub mod error;
+pub mod liquidation;
 pub mod math;
 pub mod pause;
 pub mod price;

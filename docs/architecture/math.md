@@ -143,6 +143,7 @@ Prices are RAY collateral per 1 stablecoin: a lower price pays out less collater
 | price | oracle clamp upper | admin_ray | BPS + REF_ORACLE_CLAMP_BPS | BPS | floor | Protocol-token reference price clamp; direction set by its consumer (Task 10 debt/surplus auctions); error ≤ 1 RAY unit (1e-27 relative), immaterial |
 | auction | bid collateral out (`full_out`) | coin | price_ray | RAY - discount_ray | floor | Collateral paid out to the bidder rounds down; favours the protocol |
 | auction | bid charge when the lot binds (`charged`) | collateral_left | RAY - discount_ray | price_ray | ceil | Coin owed by the bidder for the remaining lot rounds up (then capped at the bid's coin); favours the protocol |
+| auction | final-fill exception (`collateral_out`) | n/a | n/a | n/a | up (exception) | Only place a payout rounds UP: when the target-reaching fill (`coin == remaining`) floors to 0 collateral and the lot is non-empty, pay out exactly 1 base unit instead of 0 so the auction stays biddable. Bounded by 1 collateral base unit per auction; trades at most 1 unit of rounding for liveness |
 
 ## Overflow Handling
 

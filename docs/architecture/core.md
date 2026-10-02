@@ -53,7 +53,7 @@ Prices are RAY, collateral per 1 stablecoin. Collateral paid out = coin x P / (R
 
 ## Lot-Binds Charge
 
-When the bid would take at least all remaining collateral, the bidder receives exactly `collateral_left` and is charged only for it: `charged = min(ceil(collateral_left x denom / price_ray), coin)`. The ceil rounds the coin owed up (favours the protocol), and the `min` guarantees the bidder is never charged more than the capped `coin`. The bidder is not billed for collateral that does not exist.
+When the bid would take at least all remaining collateral, the bidder receives exactly `collateral_left` and is charged only for it: `charged = min(ceil(collateral_left x denom / price_ray), coin)`. The ceil rounds the coin owed up (favours the protocol). The `.min(coin)` is provably a no-op (`full_out >= L` with integer `coin` implies `coin >= ceil(L x denom / P)`); it is kept only as a defensive bound, not a real cap. The bidder is not billed for collateral that does not exist.
 
 ## Dust Rules
 
@@ -73,6 +73,13 @@ When a bid ends the auction, `apply_bid` sets `status = Settled` and returns `Ch
 ## Leftover Rule
 
 `leftover_claimable = collateral_left` only if the target was reached (`raised() == amount_to_raise`); otherwise 0. If the lot ran out before the target was met, nothing is left over by definition, and the shortfall is booked instead. After settlement, `claim_leftover` returns `Err(NothingToClaim)` unless the auction is `Settled` and `leftover_claimable - leftover_claimed > 0`; on success it returns the new auction with `leftover_claimed = leftover_claimable` and the amount paid. A second claim therefore fails with `NothingToClaim`.
+
+## Liveness
+
+ADR-012 has no expiry, so an auction that cannot settle would hold its cap reservation forever and permanently disable the oversized-alone rule. Two situations could cause this; both are handled.
+
+- (a) Empty lot (`collateral_left == 0`, e.g. the keeper reward clamps to the whole seizure, or the vault balance is 0). Every bid takes the lot-binds branch with `charged = 0` and fails with `ZeroFill`. `settle_empty` is a permissionless transition, valid only while `Auctioning` with `collateral_left == 0` (otherwise `NotAuctioning`). It sets `Settled` and returns `ChainEnd { shortfall: debt_principal - debt_raised (saturating), release: reserved_amount, leftover: 0 }`, the same chain-end semantics as `apply_bid`'s settlement.
+- (b) Remaining target worth less than 1 collateral unit (low price, or a partial bid leaving a remainder below one unit, since `chost` may be worth < 1 unit). Every bid floors `full_out` to 0 and the lot cannot bind. `quote_bid` therefore has a final-fill exception: in the non-binding branch, if `coin == remaining`, `full_out == 0` and `collateral_left > 0`, it pays out `collateral_out = 1` for `charged = coin`. This is the only place a payout rounds up; it applies only to the target-reaching fill and is bounded by 1 collateral base unit per auction. A bid with `coin < remaining` that floors to 0 is still `ZeroFill`.
 
 ## Rounding
 

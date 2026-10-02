@@ -80,6 +80,7 @@ impl Auction {
         }
     }
     pub fn raised(&self) -> u128 {
+        // Guard: both counters only grow by amounts capped at the target, so the sum stays <= amount_to_raise.
         self.debt_raised + self.penalty_raised
     }
     pub fn remaining_target(&self) -> u128 {
@@ -104,9 +105,16 @@ pub fn quote_bid(
     let denom = RAY - d; // d ≤ 30% of RAY
     let full_out = mul_div_floor(coin, price_ray, denom)?;
     let (collateral_out, charged) = if full_out >= a.collateral_left {
-        // The lot binds: pay only for what is left, rounded up (owed), never above `coin`.
+        // The lot binds: pay only for what is left, rounded up (owed). The `.min(coin)` is provably a
+        // no-op (full_out >= L with integer coin implies coin >= ceil(L * denom / P)); it is kept only as
+        // a defensive bound, not a real cap.
         let c = mul_div_ceil(a.collateral_left, denom, price_ray)?.min(coin);
         (a.collateral_left, c)
+    } else if full_out == 0 && coin == remaining && a.collateral_left > 0 {
+        // Liveness exception (the only place a payout rounds UP): the target-reaching fill is worth
+        // < 1 collateral unit, so flooring would make the auction unbiddable forever. Pay out exactly
+        // 1 base unit for the full remaining target; bounded by 1 unit per auction.
+        (1, coin)
     } else {
         (full_out, coin)
     };
@@ -137,11 +145,19 @@ pub fn quote_bid(
     })
 }
 
+/// Applies a fill to the auction.
+///
+/// Precondition: `f` must come from `quote_bid` on this exact state; the fill is trusted.
 pub fn apply_bid(a: &Auction, f: &BidFill) -> (Auction, Option<ChainEnd>) {
+    debug_assert!(
+        a.status == Status::Auctioning
+            && f.collateral_out <= a.collateral_left
+            && f.charged <= a.remaining_target()
+    );
     let mut n = *a;
-    n.collateral_left -= f.collateral_out;
-    n.collateral_sold += f.collateral_out;
-    n.debt_raised += f.debt_part;
+    n.collateral_left -= f.collateral_out; // guard: collateral_out <= collateral_left (quote_bid)
+    n.collateral_sold += f.collateral_out; // sold + left == lot, cannot overflow
+    n.debt_raised += f.debt_part; // guard: debt_part + penalty_part = charged <= remaining target
     n.penalty_raised += f.penalty_part;
     if !f.ends_auction {
         return (n, None);
@@ -155,6 +171,23 @@ pub fn apply_bid(a: &Auction, f: &BidFill) -> (Auction, Option<ChainEnd>) {
         leftover: n.leftover_claimable,
     };
     (n, Some(end))
+}
+
+/// Settles an auction whose lot is empty (e.g. the keeper reward consumed the whole seizure).
+/// Permissionless. No bid can ever succeed on `collateral_left == 0`, so without this the auction
+/// would hold its reservation forever (ADR-012 has no expiry).
+pub fn settle_empty(a: &Auction) -> Result<(Auction, ChainEnd), AuctionError> {
+    if a.status != Status::Auctioning || a.collateral_left != 0 {
+        return Err(AuctionError::NotAuctioning);
+    }
+    let mut n = *a;
+    n.status = Status::Settled;
+    let end = ChainEnd {
+        shortfall: n.debt_principal.saturating_sub(n.debt_raised),
+        release: n.reserved_amount,
+        leftover: 0,
+    };
+    Ok((n, end))
 }
 
 pub fn claim_leftover(a: &Auction) -> Result<(Auction, u128), AuctionError> {
@@ -373,6 +406,143 @@ mod tests {
                 110
             ),
             Err(AuctionError::NotAuctioning)
+        );
+    }
+
+    fn bid_req(coin: u128) -> BidRequest {
+        BidRequest {
+            coin_in_max: coin,
+            min_collateral_out: 0,
+        }
+    }
+
+    #[test]
+    fn lot_zero_settles_via_settle_empty() {
+        // lot 0: every bid takes the lot-binds branch with charged = ceil(0) = 0 -> ZeroFill.
+        let a = Auction::open(&quote(0, 900, 990), 0, flat(0), 0);
+        assert_eq!(
+            quote_bid(&a, &bid_req(100), RAY, 0, 25, 110),
+            Err(AuctionError::ZeroFill)
+        );
+        // settle_empty: shortfall = 900 - 0 = 900, release = reserve = 990, leftover = 0.
+        let (s, end) = settle_empty(&a).unwrap();
+        assert_eq!(s.status, Status::Settled);
+        assert_eq!(s.leftover_claimable, 0);
+        assert_eq!(
+            end,
+            ChainEnd {
+                shortfall: 900,
+                release: 990,
+                leftover: 0
+            }
+        );
+        assert_eq!(settle_empty(&s), Err(AuctionError::NotAuctioning));
+        let live = Auction::open(&quote(5, 900, 990), 0, flat(0), 0);
+        assert_eq!(settle_empty(&live), Err(AuctionError::NotAuctioning));
+    }
+
+    #[test]
+    fn sub_unit_remainder_final_fill_takes_one_unit() {
+        // P = 752e-6 RAY: 990 coin * 752e-6 = 0.744 -> floor 0. coin == remaining (990) and
+        // lot 1000 > 0 -> final-fill exception: out 1, charged 990, ends (remaining_after 0).
+        let p = 752 * RAY / 1_000_000;
+        let a = Auction::open(&quote(1_000, 900, 990), 0, flat(0), 0);
+        let f = quote_bid(&a, &bid_req(990), p, 0, 25, 110).unwrap();
+        assert_eq!(
+            (f.collateral_out, f.charged, f.ends_auction),
+            (1, 990, true)
+        );
+        // debt_part 900, penalty 90; collateral_left 999; target reached -> leftover 999.
+        let (_, end) = apply_bid(&a, &f);
+        assert_eq!(
+            end.unwrap(),
+            ChainEnd {
+                shortfall: 0,
+                release: 990,
+                leftover: 999
+            }
+        );
+        // coin 500 < remaining 990: 500 * 752e-6 = 0.376 -> floor 0, no exception.
+        assert_eq!(
+            quote_bid(&a, &bid_req(500), p, 0, 25, 110),
+            Err(AuctionError::ZeroFill)
+        );
+    }
+
+    #[test]
+    fn lot_binds_charge_rounds_up() {
+        // P = 3 collateral/coin, d = 0. coin 400 -> full_out 1200 >= lot 50 -> lot binds.
+        // charged = ceil(50 / 3) = ceil(16.67) = 17 (floor would be 16).
+        let a = Auction::open(&quote(50, 900, 990), 0, flat(0), 0);
+        let f = quote_bid(&a, &bid_req(400), 3 * RAY, 0, 25, 110).unwrap();
+        assert_eq!(
+            (f.collateral_out, f.charged, f.ends_auction),
+            (50, 17, true)
+        );
+    }
+
+    #[test]
+    fn zero_price_is_math_error() {
+        // price 0: full_out = 0 for any coin. Partial coin (< remaining) -> ZeroFill, no panic.
+        let a = Auction::open(&quote(1_000, 900, 990), 0, flat(0), 0);
+        assert_eq!(
+            quote_bid(&a, &bid_req(100), 0, 0, 25, 110),
+            Err(AuctionError::ZeroFill)
+        );
+        // lot 0 with price 0: full_out 0 >= 0 -> mul_div_ceil(0, denom, 0) divides by zero -> Math.
+        let z = Auction::open(&quote(0, 900, 990), 0, flat(0), 0);
+        assert_eq!(
+            quote_bid(&z, &bid_req(100), 0, 0, 25, 110),
+            Err(AuctionError::Math)
+        );
+    }
+
+    #[test]
+    fn debt_recovered_penalty_short() {
+        // lot 950, debt 900, target 990, P = 1, d = 0, min_bid 25, chost 50.
+        // Bid 1: coin 900 -> out 900, charged 900, remaining_after 90 >= 50: not ending.
+        //   debt_raised 900, collateral_left 50.
+        let a = Auction::open(&quote(950, 900, 990), 0, flat(0), 0);
+        let f1 = quote_bid(&a, &bid_req(900), RAY, 0, 25, 50).unwrap();
+        assert!(!f1.ends_auction);
+        let (a2, _) = apply_bid(&a, &f1);
+        // Bid 2: coin 90 -> full_out 90 >= 50 -> lot binds: out 50, charged 50.
+        //   debt_left 0 -> penalty_part 50; raised 950 != 990 -> leftover 0, shortfall 900-900 = 0.
+        let f2 = quote_bid(&a2, &bid_req(90), RAY, 0, 25, 50).unwrap();
+        assert_eq!((f2.charged, f2.debt_part, f2.penalty_part), (50, 0, 50));
+        let (a3, end) = apply_bid(&a2, &f2);
+        assert_eq!(a3.status, Status::Settled);
+        assert_eq!(
+            end.unwrap(),
+            ChainEnd {
+                shortfall: 0,
+                release: 990,
+                leftover: 0
+            }
+        );
+    }
+
+    #[test]
+    fn target_and_lot_end_together_with_discount() {
+        // P = 2 collateral/coin, d = 10% (denom 0.9 RAY), lot 2199, target 990, debt 900.
+        // coin 990: full_out = floor(990 * 2 / 0.9) = 2200 >= 2199 -> lot binds.
+        // charged = ceil(2199 * 0.9 / 2) = ceil(989.55) = 990 <= coin: target and lot end together.
+        let a = Auction::open(&quote(2_199, 900, 990), 0, flat(1000), 0);
+        let f = quote_bid(&a, &bid_req(990), 2 * RAY, 0, 25, 110).unwrap();
+        assert_eq!(
+            (f.collateral_out, f.charged, f.ends_auction),
+            (2_199, 990, true)
+        );
+        assert!(f.charged <= 990);
+        let (s, end) = apply_bid(&a, &f);
+        assert_eq!(s.status, Status::Settled);
+        assert_eq!(
+            end.unwrap(),
+            ChainEnd {
+                shortfall: 0,
+                release: 990,
+                leftover: 0
+            }
         );
     }
 }

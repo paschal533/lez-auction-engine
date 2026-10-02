@@ -125,6 +125,8 @@ Use this when charging borrowers or collecting fees (always ensure full collecti
 
 ### Call Sites
 
+Prices are RAY collateral per 1 stablecoin: a lower price pays out less collateral, so flooring a price (or a price bound) favours the protocol.
+
 | Module | Operation | x | y | d | Mode | Rationale |
 |--------|-----------|---|---|---|------|-----------|
 | liquidation | chost (debt floor multiplier) | debt_floor | BPS + penalty_bps | BPS | ceil | Debt owed by vault (charged to borrower) rounds up |
@@ -133,12 +135,12 @@ Use this when charging borrowers or collecting fees (always ensure full collecti
 | liquidation | penalty (keeper reward cap) | nominal_debt | penalty_bps | BPS | floor | Amount paid out to keeper rounds down |
 | liquidation | keeper reward (collateral) | reward_coin | price_ray | RAY | floor | Collateral paid out to keeper rounds down |
 | schedule | discount interpolation | discount_rise | elapsed_into_segment | segment_span | floor | Flooring the discount interpolation yields smaller discount; bidder pays more; favours protocol |
-| price | Q64x64 conversion | oracle_raw | RAY | 2^64 | floor | Converts oracle price from Q64x64 to RAY; flooring gives conservative (lower) price estimate |
+| price | Q64x64 conversion | oracle_raw | RAY | 2^64 | floor | P is collateral per coin; a lower P pays out less collateral, so floor favours the protocol |
 | price | confidence margin | m | max_conf_bps | BPS | floor | Calculates confidence limit; flooring tightens the limit (smaller margin); more conservative |
-| price | band lower bound | redemption_ray | band_lo_bps | BPS | floor | Flooring lower bound makes it lower; allows price to fall further below 90% of redemption |
-| price | band upper bound | redemption_ray | band_hi_bps | BPS | floor | Flooring upper bound caps upside; price cannot exceed floor(110% of redemption) |
-| price | oracle clamp lower | admin_ray | BPS − REF_ORACLE_CLAMP_BPS | BPS | floor | Flooring lower clamp allows oracle to deviate further down (by ~20%) from admin price |
-| price | oracle clamp upper | admin_ray | BPS + REF_ORACLE_CLAMP_BPS | BPS | floor | Flooring upper clamp caps upside; oracle cannot deviate above floor(120% of admin price) |
+| price | band lower bound | redemption_ray | band_lo_bps | BPS | floor | Floor lowers the lower clamp; a lower P pays out less collateral per coin, so floor favours the protocol |
+| price | band upper bound | redemption_ray | band_hi_bps | BPS | floor | Floor lowers the upper clamp; a lower P pays out less collateral per coin, so floor favours the protocol |
+| price | oracle clamp lower | admin_ray | BPS − REF_ORACLE_CLAMP_BPS | BPS | floor | Protocol-token reference price clamp; direction set by its consumer (Task 10 debt/surplus auctions); error ≤ 1 RAY unit (1e-27 relative), immaterial |
+| price | oracle clamp upper | admin_ray | BPS + REF_ORACLE_CLAMP_BPS | BPS | floor | Protocol-token reference price clamp; direction set by its consumer (Task 10 debt/surplus auctions); error ≤ 1 RAY unit (1e-27 relative), immaterial |
 
 ## Overflow Handling
 

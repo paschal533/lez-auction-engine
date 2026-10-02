@@ -328,7 +328,7 @@ mod tests {
     fn global_reservation_blocks_alone() {
         // Setup: type room ample, global_reserved=1 blocks even though type_reserved=0
         // amount_to_raise=100000 exceeds global room (100000 - 1 = 99999) but fits type
-        // nomical_debt such that ceil(D×11000/10000)=100000 requires D>=90909
+        // nominal_debt such that ceil(D×11000/10000)=100000 requires D>=90909
         let i = LiquidationInput {
             position_collateral: 100,
             vault_balance: 100,

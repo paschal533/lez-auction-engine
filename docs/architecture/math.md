@@ -101,7 +101,7 @@ Computes `ceil(x * y / d)`.
 
 ## Rounding Semantics
 
-**General rule**: Amounts paid out round down (floor); amounts owed or charged round up (ceil).
+**General rule**: Ceil for amounts owed or charged (e.g., `amount_to_raise`, `chost`). Floor for amounts paid out and for prices/discounts, so that rounding favours the protocol.
 
 ### Floor
 
@@ -111,7 +111,7 @@ When exact division is impossible, we round down:
 floor(7 * 3 / 2) = floor(21 / 2) = floor(10.5) = 10
 ```
 
-Use this for distributing a pool or calculating interest that accrues to the protocol (never overestimate outflows).
+Use this when paying out funds (never overestimate outflows) and when computing prices or discounts that the protocol uses as bounds (rounding down favours conservative bounds).
 
 ### Ceiling
 
@@ -121,7 +121,7 @@ When exact division is impossible, we round up:
 ceil(7 * 3 / 2) = ceil(21 / 2) = ceil(10.5) = 11
 ```
 
-Use this for interest that accrues to borrowers or when you owe someone (always ensure full repayment).
+Use this when charging borrowers or collecting fees (always ensure full collection).
 
 ### Call Sites
 
@@ -132,13 +132,13 @@ Use this for interest that accrues to borrowers or when you owe someone (always 
 | liquidation | chip (keeper reward component) | nominal_debt | chip_bps | BPS | floor | Amount paid out to keeper rounds down |
 | liquidation | penalty (keeper reward cap) | nominal_debt | penalty_bps | BPS | floor | Amount paid out to keeper rounds down |
 | liquidation | keeper reward (collateral) | reward_coin | price_ray | RAY | floor | Collateral paid out to keeper rounds down |
-| schedule | discount interpolation | discount_rise | elapsed_into_segment | segment_span | floor | Discount favours bidder, rounds down |
-| price | Q64x64 conversion | oracle_raw | RAY | 2^64 | floor | Price conversion (protocol conservative) rounds down |
-| price | confidence margin | ref_price | max_conf_bps | BPS | floor | Confidence scaling (conservative) rounds down |
-| price | band lower bound | redemption_ray | band_lo_bps | BPS | floor | Lower price bound (conservative) rounds down |
-| price | band upper bound | redemption_ray | band_hi_bps | BPS | floor | Upper price bound (conservative) rounds down |
-| price | oracle clamp lower | admin_ray | BPS − REF_ORACLE_CLAMP_BPS | BPS | floor | Oracle lower clamp (conservative) rounds down |
-| price | oracle clamp upper | admin_ray | BPS + REF_ORACLE_CLAMP_BPS | BPS | floor | Oracle upper clamp (conservative) rounds down |
+| schedule | discount interpolation | discount_rise | elapsed_into_segment | segment_span | floor | Flooring the discount interpolation yields smaller discount; bidder pays more; favours protocol |
+| price | Q64x64 conversion | oracle_raw | RAY | 2^64 | floor | Converts oracle price from Q64x64 to RAY; flooring gives conservative (lower) price estimate |
+| price | confidence margin | m | max_conf_bps | BPS | floor | Calculates confidence limit; flooring tightens the limit (smaller margin); more conservative |
+| price | band lower bound | redemption_ray | band_lo_bps | BPS | floor | Flooring lower bound makes it lower; allows price to fall further below 90% of redemption |
+| price | band upper bound | redemption_ray | band_hi_bps | BPS | floor | Flooring upper bound caps upside; price cannot exceed floor(110% of redemption) |
+| price | oracle clamp lower | admin_ray | BPS − REF_ORACLE_CLAMP_BPS | BPS | floor | Flooring lower clamp allows oracle to deviate further down (by ~20%) from admin price |
+| price | oracle clamp upper | admin_ray | BPS + REF_ORACLE_CLAMP_BPS | BPS | floor | Flooring upper clamp caps upside; oracle cannot deviate above floor(120% of admin price) |
 
 ## Overflow Handling
 

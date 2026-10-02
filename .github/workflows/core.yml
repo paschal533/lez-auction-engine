@@ -10,7 +10,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy -p auction_core --all-targets -- -D warnings
       - run: cargo test -p auction_core
-      # - run: PROPTEST_CASES=2000 cargo test -p auction_core --test invariants --test s5_pause_onset
-      # - uses: actions/setup-python@v5
-      #   with: { python-version: "3.12" }
-      # - run: cargo run -q -p auction_core --example vectors > /tmp/vectors.json && python3 tools/differential/check.py /tmp/vectors.json
+      - run: PROPTEST_CASES=2000 cargo test -p auction_core --test invariants --test s5_pause_onset
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: cargo run -q -p auction_core --example vectors > /tmp/vectors.json && python3 tools/differential/check.py /tmp/vectors.json

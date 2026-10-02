@@ -338,6 +338,9 @@ The R4/R5 test and Kani are not on the critical path.
 **Status**
 Accepted (spec v5)
 
+**Update (Plan 1, Task 12)**
+The Kani proofs are written (`crates/auction_core/src/kani_proofs.rs`, behind `cfg(kani)`) but were not run in Plan 1: Kani does not support Windows, the development platform. Execution moves to M6 per this ADR; the proptest suite and the Python differential model remain the Plan 1 gates.
+
 ---
 
 ## ADR-016: Final Partial-Capable Hook Shape

@@ -7,6 +7,7 @@
 pub mod accounting;
 pub mod auction;
 pub mod error;
+mod kani_proofs;
 pub mod liquidation;
 pub mod math;
 pub mod pause;

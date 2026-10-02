@@ -30,45 +30,49 @@ impl PauseClock {
         self.paused_since_ms.is_some()
     }
 
+    /// Stale time between the previous known publish going stale and the newest publish `ts`
+    /// that nobody observed (policy (b)). Zero when there is no earlier publish or no gap.
+    fn unobserved_gap_ms(&self, ts: u64, max_age_ms: u64) -> u64 {
+        self.last_seen_oracle_ts
+            .map_or(0, |last| ts.saturating_sub(last.saturating_add(max_age_ms)))
+    }
+
     pub fn observed(self, o: Observation, policy: OnsetPolicy) -> Self {
         let paused_now = o.admin_paused || !o.feed_valid;
-        let derived_onset = |last: Option<u64>| -> u64 {
-            match (policy, last) {
-                (OnsetPolicy::DerivedFromOracle, Some(ts)) if !o.admin_paused => {
-                    ts.saturating_add(o.max_age_ms).min(o.now_ms)
-                }
-                _ => o.now_ms,
-            }
-        };
+        let derived = policy == OnsetPolicy::DerivedFromOracle;
+        // A publish timestamp from the future is clamped: over-pausing would be a griefing vector.
+        let ts = o.oracle_ts.min(o.now_ms);
         let mut next = self;
         match (paused_now, self.paused_since_ms) {
-            (true, None) => next.paused_since_ms = Some(derived_onset(self.last_seen_oracle_ts)),
             (false, Some(since)) => {
                 next.paused_total_ms = self
                     .paused_total_ms
                     .saturating_add(o.now_ms.saturating_sub(since));
                 next.paused_since_ms = None;
             }
-            (false, None) => {
-                // Policy (b): close a gap nobody observed (the feed went stale, then recovered unseen).
-                if let (OnsetPolicy::DerivedFromOracle, Some(last)) =
-                    (policy, self.last_seen_oracle_ts)
-                {
-                    let stale_from = last.saturating_add(o.max_age_ms);
-                    if o.oracle_ts > stale_from {
-                        next.paused_total_ms = self
-                            .paused_total_ms
-                            .saturating_add(o.oracle_ts - stale_from);
-                    }
+            // An open interval already covers any unobserved gap (closing it would double count).
+            (true, Some(_)) => {}
+            (_, None) => {
+                if derived {
+                    // Policy (b): close a gap nobody observed (the feed went stale, then recovered unseen).
+                    next.paused_total_ms = self
+                        .paused_total_ms
+                        .saturating_add(self.unobserved_gap_ms(ts, o.max_age_ms));
+                }
+                if paused_now {
+                    let onset = if derived && !o.feed_valid {
+                        // The observation's own publish time is valid information even when stale.
+                        let latest = self.last_seen_oracle_ts.map_or(ts, |l| l.max(ts));
+                        latest.saturating_add(o.max_age_ms).min(o.now_ms)
+                    } else {
+                        o.now_ms
+                    };
+                    next.paused_since_ms = Some(onset);
                 }
             }
-            (true, Some(_)) => {}
         }
-        if o.feed_valid {
-            next.last_seen_oracle_ts = Some(
-                self.last_seen_oracle_ts
-                    .map_or(o.oracle_ts, |l| l.max(o.oracle_ts)),
-            );
+        if o.feed_valid || derived {
+            next.last_seen_oracle_ts = Some(self.last_seen_oracle_ts.map_or(ts, |l| l.max(ts)));
         }
         next
     }
@@ -131,5 +135,42 @@ mod tests {
         // stale from 0+100 to 400 → 300 ms paused
         assert_eq!(c1.paused_total_ms, 300);
         assert_eq!(c1.effective_elapsed(0, 0, 400), 100);
+    }
+    #[test]
+    fn admin_pause_on_stale_feed_keeps_derived_onset() {
+        // valid at ts 0 (max_age 100); first seen again at 450, admin-paused and stale.
+        let c0 =
+            PauseClock::default().observed(obs(0, true, false, 0), OnsetPolicy::DerivedFromOracle);
+        let c1 = c0.observed(obs(450, false, true, 0), OnsetPolicy::DerivedFromOracle);
+        assert_eq!(c1.paused_since_ms, Some(100)); // stale from 0+100, not 450
+                                                   // admin unpauses and a valid publish (ts 600) is seen at 600: paused [100,600] = 500
+        let c2 = c1.observed(obs(600, true, false, 600), OnsetPolicy::DerivedFromOracle);
+        assert_eq!(c2.paused_total_ms, 500);
+        assert_eq!(c2.effective_elapsed(0, 0, 600), 100); // only the fresh [0,100)
+    }
+    #[test]
+    fn admin_pause_closes_unobserved_gap() {
+        // valid at 0; stale from 100; recovers unseen at ts 400; admin pauses at 450 (feed valid, ts 400).
+        let c0 =
+            PauseClock::default().observed(obs(0, true, false, 0), OnsetPolicy::DerivedFromOracle);
+        let c1 = c0.observed(obs(450, true, true, 400), OnsetPolicy::DerivedFromOracle);
+        assert_eq!(c1.paused_total_ms, 300); // gap [100,400]
+        assert_eq!(c1.paused_since_ms, Some(450));
+        // at 460: wall 460 - closed 300 - open (460-450) = 150 = fresh [0,100) + [400,450)
+        assert_eq!(c1.effective_elapsed(0, 0, 460), 150);
+        let c2 = c1.observed(obs(460, true, false, 400), OnsetPolicy::DerivedFromOracle);
+        assert_eq!(c2.paused_total_ms, 310); // + admin [450,460)
+        assert_eq!(c2.effective_elapsed(0, 0, 460), 150);
+    }
+    #[test]
+    fn future_oracle_timestamp_cannot_add_pause_time() {
+        let c0 =
+            PauseClock::default().observed(obs(0, true, false, 0), OnsetPolicy::DerivedFromOracle);
+        let c1 = c0.observed(obs(50, true, false, 10_000), OnsetPolicy::DerivedFromOracle);
+        assert_eq!(c1.paused_total_ms, 0);
+        assert_eq!(c1.last_seen_oracle_ts, Some(50)); // clamped to now
+        let c2 = c1.observed(obs(500, true, false, 500), OnsetPolicy::DerivedFromOracle);
+        assert_eq!(c2.paused_total_ms, 350); // stale [150,500) after the clamped publish at 50
+        assert!(c2.paused_total_ms <= 500);
     }
 }

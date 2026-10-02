@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::arithmetic_side_effects)]
 
+pub mod accounting;
 pub mod auction;
 pub mod error;
 pub mod liquidation;
@@ -11,4 +12,5 @@ pub mod math;
 pub mod pause;
 pub mod price;
 pub mod schedule;
+pub mod system;
 pub mod units;

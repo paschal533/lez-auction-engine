@@ -84,3 +84,49 @@ ADR-012 has no expiry, so an auction that cannot settle would hold its cap reser
 ## Rounding
 
 See the `auction` rows in the Call Sites table of [math.md](math.md).
+
+## Accounting
+
+`Accounting` (engine-only, immutable updates) tracks bad debt and totals. Flows:
+
+- `record_bid(BidFill)`: `total_debt_burned += debt_part`, `total_penalty_collected += penalty_part`. `unbacked_debt` is untouched by bids.
+- `record_chain_end(ChainEnd)`: `unbacked_debt += shortfall` and `total_shortfall_booked += shortfall`. Only a chain end (from `apply_bid` or `settle_empty`) can book a shortfall.
+- All counters use saturating addition.
+
+## settle_debt
+
+`settle_debt(amount, buffer_balance)` burns `min(amount, buffer_balance, unbacked_debt)` and returns the new `Accounting` and the burned amount. `buffer_balance` is the ACTUAL balance of the surplus holding account, never a ledger-tracked figure, so debt can only be settled with coin that really exists. It decreases `unbacked_debt` and increases `total_debt_settled` by the burned amount; it cannot underflow because `burn <= unbacked_debt`.
+
+## Surplus Auction (F5)
+
+An instant Dutch auction that sells stablecoin surplus for protocol tokens, which are burned. `ref_ray` is RAY **stablecoin per 1 protocol token**.
+
+- Start (`start_surplus`) requires, in order: no live surplus auction, token configured, `unbacked_debt == 0`, `buffer >= surplus_buffer_target + surplus_lot`, and `now >= last_end + surplus_delay`.
+- Multiplier (bps, dimensionless): `mult(t) = max(BPS + surplus_premium_bps - decay_bps(t), BPS - surplus_max_discount_bps)`, where `decay_bps(t) = surplus_decay.discount_ray(t) / BPS_TO_RAY`.
+- Price: `tokens = ceil( ceil(coin * mult / BPS) * RAY / ref_ray )`. Units: coin (stablecoin) x dimensionless / (RAY coin per token) = protocol tokens. Tokens are owed by the taker, so both steps round up (favours the protocol).
+- `take_surplus` caps the take at `lot_left`, rejects zero (`ZeroFill`), a nonzero remainder below `min_take` (`DustRemainder`), and `tokens > max_tokens_in` (`Slippage`). It returns the tokens to burn.
+
+## Debt Auction (F4)
+
+An instant Dutch auction that mints protocol tokens in exchange for stablecoin, which is burned against `unbacked_debt`.
+
+- Start (`start_debt`) requires, in order: no live debt auction, token configured, protocol token matches (`ProtocolTokenMismatch`), mint authority held (`MintAuthorityMissing`), and `unbacked_debt - buffer >= debt_lot` (`InsufficientBadDebt`); then `debt_start_amount` must fit the mint cap (`MintCapConfig`).
+- Start amount (protocol tokens): `floor( floor(debt_lot * RAY / ref_ray) * (BPS - debt_initial_discount_bps) / BPS )`. Units: coin / (RAY coin per token) = tokens. Capped at `max_mint_per_auction`, itself at most `MAX_MINT_HARD_CAP`; exceeding either is `MintCapConfig`.
+- Offered for the whole lot at `t`: `min( floor(start_amount * (BPS + growth_bps(t)) / BPS), max_mint_per_auction )`, with `growth_bps(t) = debt_growth.discount_ray(t) / BPS_TO_RAY`.
+- `take_debt(coin)` mints `floor(offered * take / debt_lot)` tokens (minted tokens are paid out, so round down; favours the protocol), subject to `min_tokens_out` (`Slippage`) and the same zero/dust rules as the surplus auction. The mint cap therefore holds at every `t`.
+
+## check_solvency
+
+`check_solvency(unbacked_after_settle, threshold, token_configured, freeze_on_bad_debt, debt_auction_live, start_check)` is evaluated top to bottom, first match wins. Callers pass `unbacked` after `settle_debt`.
+
+| Case (from `solvency_decisions`) | Condition | Decision |
+|---|---|---|
+| Within threshold | `unbacked <= threshold` | `Healthy` |
+| No protocol token | `unbacked > threshold`, token not configured | `Freeze` |
+| Recovery already running | token configured, debt auction live | `RecoveryInProgress` |
+| Freeze disabled | token configured, none live, `freeze_on_bad_debt == false` | `NoAction` |
+| Unstartable: `MintCapConfig` | none live, freeze enabled, `start_check = Err(MintCapConfig)` | `Freeze` |
+| Unstartable: `MintAuthorityMissing` | as above, `Err(MintAuthorityMissing)` | `Freeze` |
+| Unstartable: `ProtocolTokenMismatch` | as above, `Err(ProtocolTokenMismatch)` | `Freeze` |
+| Start already live | as above, `Err(DebtAuctionAlreadyLive)` | `RecoveryInProgress` |
+| Startable (or transient error) | as above, `Ok(())` or any other error | `NoAction` (a keeper should start an auction) |

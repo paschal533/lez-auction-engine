@@ -139,11 +139,17 @@ Prices are RAY collateral per 1 stablecoin: a lower price pays out less collater
 | price | confidence margin | m | max_conf_bps | BPS | floor | Calculates confidence limit; flooring tightens the limit (smaller margin); more conservative |
 | price | band lower bound | redemption_ray | band_lo_bps | BPS | floor | Floor lowers the lower clamp; a lower P pays out less collateral per coin, so floor favours the protocol |
 | price | band upper bound | redemption_ray | band_hi_bps | BPS | floor | Floor lowers the upper clamp; a lower P pays out less collateral per coin, so floor favours the protocol |
-| price | oracle clamp lower | admin_ray | BPS − REF_ORACLE_CLAMP_BPS | BPS | floor | Protocol-token reference price clamp; direction set by its consumer (Task 10 debt/surplus auctions); error ≤ 1 RAY unit (1e-27 relative), immaterial |
-| price | oracle clamp upper | admin_ray | BPS + REF_ORACLE_CLAMP_BPS | BPS | floor | Protocol-token reference price clamp; direction set by its consumer (Task 10 debt/surplus auctions); error ≤ 1 RAY unit (1e-27 relative), immaterial |
+| price | oracle clamp lower | admin_ray | BPS − REF_ORACLE_CLAMP_BPS | BPS | floor | Protocol-token ref price is RAY coin per token. Floor lowers it: debt auctions then mint slightly more tokens per coin (favours taker), surplus auctions require slightly more tokens (favours protocol); error ≤ 1 RAY unit (1e-27 relative), immaterial |
+| price | oracle clamp upper | admin_ray | BPS + REF_ORACLE_CLAMP_BPS | BPS | floor | Protocol-token ref price is RAY coin per token. Floor lowers it: debt auctions then mint slightly more tokens per coin (favours taker), surplus auctions require slightly more tokens (favours protocol); error ≤ 1 RAY unit (1e-27 relative), immaterial |
 | auction | bid collateral out (`full_out`) | coin | price_ray | RAY - discount_ray | floor | Collateral paid out to the bidder rounds down; favours the protocol |
 | auction | bid charge when the lot binds (`charged`) | collateral_left | RAY - discount_ray | price_ray | ceil | Coin owed by the bidder for the remaining lot rounds up (then capped at the bid's coin); favours the protocol |
 | auction | final-fill exception (`collateral_out`) | n/a | n/a | n/a | up (exception) | Only place a payout rounds UP: when the target-reaching fill (`coin == remaining`) floors to 0 collateral and the lot is non-empty, pay out exactly 1 base unit instead of 0 so the auction stays biddable. Bounded by 1 collateral base unit per auction; trades at most 1 unit of rounding for liveness |
+| system | surplus tokens, coin scaled by multiplier (`surplus_required_tokens`) | coin | mult_bps | BPS | ceil | Intermediate of tokens owed by the surplus taker; rounds up; favours the protocol |
+| system | surplus tokens owed (`surplus_required_tokens`) | scaled_coin | RAY | ref_ray | ceil | Protocol tokens owed by the surplus taker (burned) round up; favours the protocol |
+| system | debt start amount, tokens at ref price (`debt_start_amount`) | debt_lot | RAY | ref_ray | floor | Tokens minted/paid out to the debt taker round down; favours the protocol |
+| system | debt start amount, initial discount (`debt_start_amount`) | tokens | BPS - debt_initial_discount_bps | BPS | floor | Tokens minted/paid out round down; favours the protocol |
+| system | debt offered tokens (`debt_offered_tokens`) | start_amount | BPS + growth_bps | BPS | floor | Tokens minted/paid out round down; favours the protocol; then capped at max_mint_per_auction |
+| system | debt tokens minted per take (`take_debt`) | offered | take | debt_lot | floor | Tokens minted/paid out to the taker round down; favours the protocol |
 
 ## Overflow Handling
 

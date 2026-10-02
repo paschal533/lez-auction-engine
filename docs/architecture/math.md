@@ -127,7 +127,18 @@ Use this for interest that accrues to borrowers or when you owe someone (always 
 
 | Module | Operation | x | y | d | Mode | Rationale |
 |--------|-----------|---|---|---|------|-----------|
-| *(future)* | *(TBD)* | ... | ... | ... | floor/ceil | *(added as tasks progress)* |
+| liquidation | chost (debt floor multiplier) | debt_floor | BPS + penalty_bps | BPS | ceil | Debt owed by vault (charged to borrower) rounds up |
+| liquidation | amount_to_raise | nominal_debt | BPS + penalty_bps | BPS | ceil | Debt owed by vault (charged to borrower) rounds up |
+| liquidation | chip (keeper reward component) | nominal_debt | chip_bps | BPS | floor | Amount paid out to keeper rounds down |
+| liquidation | penalty (keeper reward cap) | nominal_debt | penalty_bps | BPS | floor | Amount paid out to keeper rounds down |
+| liquidation | keeper reward (collateral) | reward_coin | price_ray | RAY | floor | Collateral paid out to keeper rounds down |
+| schedule | discount interpolation | discount_rise | elapsed_into_segment | segment_span | floor | Discount favours bidder, rounds down |
+| price | Q64x64 conversion | oracle_raw | RAY | 2^64 | floor | Price conversion (protocol conservative) rounds down |
+| price | confidence margin | ref_price | max_conf_bps | BPS | floor | Confidence scaling (conservative) rounds down |
+| price | band lower bound | redemption_ray | band_lo_bps | BPS | floor | Lower price bound (conservative) rounds down |
+| price | band upper bound | redemption_ray | band_hi_bps | BPS | floor | Upper price bound (conservative) rounds down |
+| price | oracle clamp lower | admin_ray | BPS − REF_ORACLE_CLAMP_BPS | BPS | floor | Oracle lower clamp (conservative) rounds down |
+| price | oracle clamp upper | admin_ray | BPS + REF_ORACLE_CLAMP_BPS | BPS | floor | Oracle upper clamp (conservative) rounds down |
 
 ## Overflow Handling
 

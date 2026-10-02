@@ -298,7 +298,7 @@ proptest! {
         g in 1u64..600_000, open_len in 0u64..600_000, admin in any::<bool>()) {
         let d = OnsetPolicy::AtObservation;
         let o = |now: u64, bad: bool| Observation {
-            now_ms: now, feed_valid: !(bad && !admin), admin_paused: bad && admin, oracle_ts: now, max_age_ms: 100,
+            now_ms: now, feed_valid: !bad || admin, admin_paused: bad && admin, oracle_ts: now, max_age_ms: 100,
         };
         let base = PauseClock { paused_since_ms: None, paused_total_ms: pre_total, last_seen_oracle_ts: Some(0) };
         let t_pause = start + p1;

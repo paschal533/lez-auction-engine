@@ -254,4 +254,117 @@ mod tests {
             Err(ConfigError::ChostBelowMinBid)
         );
     }
+    #[test]
+    fn reward_cap_binds() {
+        // d=3000, tip=30, chip_bps=300: chip=floor(3000×300/10000)=90
+        // penalty=floor(3000×2000/10000)=600
+        // reward_coin = min(30+90, 50, 600) = min(120, 50, 600) = 50 (reward_cap binds)
+        // At price_ray=RAY: reward_coll=floor(50×RAY/RAY)=50
+        let i = LiquidationInput {
+            position_collateral: 1_000,
+            vault_balance: 1_000,
+            nominal_debt: 3_000,
+            price_ray: RAY,
+        };
+        let p = CollateralParams {
+            penalty_bps: 2000,
+            tip: 30,
+            chip_bps: 300,
+            reward_cap: 50,
+            ..params()
+        };
+        let q = quote_liquidation(&i, &p, &caps()).unwrap();
+        assert_eq!(q.keeper_reward, 50);
+        assert_eq!(q.lot, 950);
+    }
+    #[test]
+    fn penalty_binds_reward() {
+        // d=1000, tip=5, chip_bps=3000: chip=floor(1000×3000/10000)=300
+        // penalty=floor(1000×100/10000)=10
+        // reward_coin = min(5+300, 100, 10) = min(305, 100, 10) = 10 (penalty binds)
+        // At price_ray=RAY: reward_coll=floor(10×RAY/RAY)=10
+        let i = LiquidationInput {
+            position_collateral: 100,
+            vault_balance: 100,
+            nominal_debt: 1_000,
+            price_ray: RAY,
+        };
+        let p = CollateralParams {
+            penalty_bps: 100,
+            tip: 5,
+            chip_bps: 3000,
+            reward_cap: 100,
+            ..params()
+        };
+        let q = quote_liquidation(&i, &p, &caps()).unwrap();
+        assert_eq!(q.keeper_reward, 10);
+        assert_eq!(q.lot, 90);
+    }
+    #[test]
+    fn reward_floors_to_positive_value() {
+        // d=10000, tip=1, chip_bps=100: chip=floor(10000×100/10000)=100
+        // penalty=floor(10000×1000/10000)=1000
+        // reward_coin = min(1+100, 100, 1000) = min(101, 100, 1000) = 100
+        // At price_ray=3×RAY/7≈0.4286: reward_coll=floor(100×(3×RAY/7)/RAY)=floor(100×3/7)=floor(42.857)=42
+        let price_ray_num = 3u128 * RAY / 7;
+        let i = LiquidationInput {
+            position_collateral: 500,
+            vault_balance: 500,
+            nominal_debt: 10_000,
+            price_ray: price_ray_num,
+        };
+        let p = CollateralParams {
+            penalty_bps: 1000,
+            tip: 1,
+            chip_bps: 100,
+            reward_cap: 100,
+            ..params()
+        };
+        let q = quote_liquidation(&i, &p, &caps()).unwrap();
+        assert_eq!(q.keeper_reward, 42);
+        assert_eq!(q.lot, 458);
+    }
+    #[test]
+    fn global_reservation_blocks_alone() {
+        // Setup: type room ample, global_reserved=1 blocks even though type_reserved=0
+        // amount_to_raise=100000 exceeds global room (100000 - 1 = 99999) but fits type
+        // nomical_debt such that ceil(D×11000/10000)=100000 requires D>=90909
+        let i = LiquidationInput {
+            position_collateral: 100,
+            vault_balance: 100,
+            nominal_debt: 90_909,
+            price_ray: P,
+        };
+        let caps = CapState {
+            type_cap: 100_000,
+            type_reserved: 0,
+            global_cap: 100_000,
+            global_reserved: 1,
+        };
+        assert_eq!(
+            quote_liquidation(&i, &params(), &caps),
+            Err(AuctionError::CapacityExhausted)
+        );
+    }
+    #[test]
+    fn global_room_exhausted() {
+        // Type room ample (90000 > 30000), global room smaller than amount_to_raise
+        // amount_to_raise=30000 requires D>=27272 such that ceil(D×11000/10000)=30000
+        let i = LiquidationInput {
+            position_collateral: 100,
+            vault_balance: 100,
+            nominal_debt: 27_272,
+            price_ray: P,
+        };
+        let caps = CapState {
+            type_cap: 100_000,
+            type_reserved: 10_000,
+            global_cap: 50_000,
+            global_reserved: 30_000,
+        };
+        assert_eq!(
+            quote_liquidation(&i, &params(), &caps),
+            Err(AuctionError::CapacityExhausted)
+        );
+    }
 }

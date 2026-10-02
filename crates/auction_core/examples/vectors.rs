@@ -37,6 +37,56 @@ fn emit_bids(out: &mut Vec<String>, s: &mut u128, cfg: &BidCfg, price: u128) {
     }
 }
 
+fn opt(v: Result<u128, impl Sized>) -> String {
+    v.map_or("null".into(), |v| format!("\"{v}\""))
+}
+
+fn md_vector(x: u128, y: u128, d: u128) -> String {
+    format!(
+        r#"{{"k":"md","x":"{x}","y":"{y}","d":"{d}","f":{},"c":{}}}"#,
+        opt(mul_div_floor(x, y, d)),
+        opt(mul_div_ceil(x, y, d))
+    )
+}
+
+/// Small-divisor and overflow-boundary operands, computed (not hand-typed).
+fn md_edge_cases() -> Vec<(u128, u128, u128)> {
+    let m = u128::MAX;
+    // 7 * (2*(MAX/7)+1) == 2^129 - 1 == 2*MAX + 1: with d = 2 floor == MAX (fits), ceil == MAX + 1 (overflows).
+    let y7 = 2 * (m / 7) + 1;
+    let mut v = vec![
+        (m, m, 1),
+        (m, m, m),
+        (m, 1, 1),
+        (m, 2, 2),
+        (1 << 127, 1, 1),
+        (1 << 127, 2, 1),
+        (1 << 127, 3, 3),
+        (7, y7, 2),
+        (7, y7, 1),
+        (7, y7, 3),
+        (m, 1, m),
+        (m, 2, m),
+        (m, m - 1, m),
+    ];
+    for d in [1u128, 2, 3, 7] {
+        for (x, y) in [
+            (0, 5),
+            (5, 0),
+            (0, 0),
+            (1, 1),
+            (m, 1),
+            (m, 3),
+            (3, m),
+            (1 << 64, 1 << 64),
+            (m, m),
+        ] {
+            v.push((x, y, d));
+        }
+    }
+    v
+}
+
 fn main() {
     let mut s = 42u128;
     let mut out = Vec::new();
@@ -46,11 +96,18 @@ fn main() {
             lcg(&mut s) >> 40,
             (lcg(&mut s) >> 60).max(1),
         );
-        out.push(format!(
-            r#"{{"k":"md","x":"{x}","y":"{y}","d":"{d}","f":{},"c":{}}}"#,
-            mul_div_floor(x, y, d).map_or("null".into(), |v| format!("\"{v}\"")),
-            mul_div_ceil(x, y, d).map_or("null".into(), |v| format!("\"{v}\""))
-        ));
+        out.push(md_vector(x, y, d));
+    }
+    for (x, y, d) in md_edge_cases() {
+        out.push(md_vector(x, y, d));
+    }
+    for _ in 0..200 {
+        let (x, y, d) = (
+            lcg(&mut s) >> (lcg(&mut s) % 128),
+            lcg(&mut s) >> (lcg(&mut s) % 128),
+            (lcg(&mut s) >> (lcg(&mut s) % 128)).max(1),
+        );
+        out.push(md_vector(x, y, d));
     }
     let sch = rai_default();
     for t in (0..3_000_000u64).step_by(7_919) {

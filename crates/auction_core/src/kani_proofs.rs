@@ -1,5 +1,5 @@
-#![allow(clippy::arithmetic_side_effects)]
 #[cfg(kani)]
+#[allow(clippy::arithmetic_side_effects)]
 mod proofs {
     use crate::math::*;
     #[kani::proof]

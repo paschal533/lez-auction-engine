@@ -14,6 +14,8 @@ def mul_div_ceil(x, y, d):
     return q if q <= U128 else None
 
 
+# NOTE: these points are pinned to `schedule::rai_default()` in the Rust crate. A mismatch after
+# changing rai_default is the intended failure: update this model deliberately alongside it.
 def rai_discount(t):
     if t >= 2_700_000:
         return 1000 * BPS_TO_RAY

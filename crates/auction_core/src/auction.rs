@@ -99,6 +99,10 @@ pub fn quote_bid(
     if a.status != Status::Auctioning {
         return Err(AuctionError::NotAuctioning);
     }
+    // Unreachable via validate_feed/bid_price (bid price >= M > 0); stops the final-fill exception paying out at a zero price.
+    if price_ray == 0 {
+        return Err(AuctionError::Math);
+    }
     let remaining = a.remaining_target();
     let coin = req.coin_in_max.min(remaining);
     let d = a.schedule.discount_ray(t_eff_ms);
@@ -483,13 +487,16 @@ mod tests {
 
     #[test]
     fn zero_price_is_math_error() {
-        // price 0: full_out = 0 for any coin. Partial coin (< remaining) -> ZeroFill, no panic.
+        // price 0 is rejected up front with Math for any coin, small or target-reaching; no panic.
         let a = Auction::open(&quote(1_000, 900, 990), 0, flat(0), 0);
         assert_eq!(
             quote_bid(&a, &bid_req(100), 0, 0, 25, 110),
-            Err(AuctionError::ZeroFill)
+            Err(AuctionError::Math)
         );
-        // lot 0 with price 0: full_out 0 >= 0 -> mul_div_ceil(0, denom, 0) divides by zero -> Math.
+        assert_eq!(
+            quote_bid(&a, &bid_req(990), 0, 0, 25, 110),
+            Err(AuctionError::Math)
+        );
         let z = Auction::open(&quote(0, 900, 990), 0, flat(0), 0);
         assert_eq!(
             quote_bid(&z, &bid_req(100), 0, 0, 25, 110),

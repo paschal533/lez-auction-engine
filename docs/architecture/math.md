@@ -141,6 +141,8 @@ Prices are RAY collateral per 1 stablecoin: a lower price pays out less collater
 | price | band upper bound | redemption_ray | band_hi_bps | BPS | floor | Floor lowers the upper clamp; a lower P pays out less collateral per coin, so floor favours the protocol |
 | price | oracle clamp lower | admin_ray | BPS − REF_ORACLE_CLAMP_BPS | BPS | floor | Protocol-token reference price clamp; direction set by its consumer (Task 10 debt/surplus auctions); error ≤ 1 RAY unit (1e-27 relative), immaterial |
 | price | oracle clamp upper | admin_ray | BPS + REF_ORACLE_CLAMP_BPS | BPS | floor | Protocol-token reference price clamp; direction set by its consumer (Task 10 debt/surplus auctions); error ≤ 1 RAY unit (1e-27 relative), immaterial |
+| auction | bid collateral out (`full_out`) | coin | price_ray | RAY - discount_ray | floor | Collateral paid out to the bidder rounds down; favours the protocol |
+| auction | bid charge when the lot binds (`charged`) | collateral_left | RAY - discount_ray | price_ray | ceil | Coin owed by the bidder for the remaining lot rounds up (then capped at the bid's coin); favours the protocol |
 
 ## Overflow Handling
 

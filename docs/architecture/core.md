@@ -110,7 +110,7 @@ An instant Dutch auction that sells stablecoin surplus for protocol tokens, whic
 
 An instant Dutch auction that mints protocol tokens in exchange for stablecoin, which is burned against `unbacked_debt`.
 
-- Start (`start_debt`) requires, in order: no live debt auction, token configured, protocol token matches (`ProtocolTokenMismatch`), mint authority held (`MintAuthorityMissing`), and `unbacked_debt - buffer >= debt_lot` (`InsufficientBadDebt`); then `debt_start_amount` must fit the mint cap (`MintCapConfig`).
+- Start (`start_debt`) requires, in order: no live debt auction, token configured, protocol token matches (`ProtocolTokenMismatch`), mint authority held (`MintAuthorityMissing`), and `unbacked_debt - buffer >= debt_lot` (`InsufficientBadDebt`); then `debt_start_amount` must fit the mint cap (`MintCapConfig`). A `start_amount` of 0 (ref price so high that the lot mints nothing) is also `MintCapConfig`: the auction cannot mint usefully, so `check_solvency` treats it as a freeze-worthy config fault.
 - Start amount (protocol tokens): `floor( floor(debt_lot * RAY / ref_ray) * (BPS - debt_initial_discount_bps) / BPS )`. Units: coin / (RAY coin per token) = tokens. Capped at `max_mint_per_auction`, itself at most `MAX_MINT_HARD_CAP`; exceeding either is `MintCapConfig`.
 - Offered for the whole lot at `t`: `min( floor(start_amount * (BPS + growth_bps(t)) / BPS), max_mint_per_auction )`, with `growth_bps(t) = debt_growth.discount_ray(t) / BPS_TO_RAY`.
 - `take_debt(coin)` mints `floor(offered * take / debt_lot)` tokens (minted tokens are paid out, so round down; favours the protocol), subject to `min_tokens_out` (`Slippage`) and the same zero/dust rules as the surplus auction. The mint cap therefore holds at every `t`.
@@ -129,4 +129,22 @@ An instant Dutch auction that mints protocol tokens in exchange for stablecoin, 
 | Unstartable: `MintAuthorityMissing` | as above, `Err(MintAuthorityMissing)` | `Freeze` |
 | Unstartable: `ProtocolTokenMismatch` | as above, `Err(ProtocolTokenMismatch)` | `Freeze` |
 | Start already live | as above, `Err(DebtAuctionAlreadyLive)` | `RecoveryInProgress` |
-| Startable (or transient error) | as above, `Ok(())` or any other error | `NoAction` (a keeper should start an auction) |
+| Startable (or transient error) | as above, `Ok(())` or a transient start error (`InsufficientBadDebt`, `TokenNotConfigured`, `NotLive`, ...) | `NoAction` (a keeper should start an auction) |
+
+## Debt Reservation (no double coverage)
+
+A live debt auction sells the same bad debt that `settle_debt` could burn from the buffer; covering it twice would mint tokens for debt that no longer exists. `Accounting.debt_on_auction` reserves it (invariant: `debt_on_auction <= unbacked_debt`):
+
+- `record_debt_start(lot)`: `debt_on_auction += lot`.
+- `record_debt_take(coin_taken)`: `unbacked_debt -= coin_taken`, `debt_on_auction -= coin_taken`, `total_debt_auctioned += coin_taken`. `total_debt_burned` stays reserved for collateral-auction debt.
+- `record_debt_close(lot_left)`: `debt_on_auction -= lot_left`; the untaken remainder is settleable again.
+- `settle_debt` burns `min(amount, buffer_balance, unbacked_debt - debt_on_auction)`.
+
+`take_surplus` and `take_debt` fill at most `lot_left`: the coin actually filled is `old.lot_left - new.lot_left` (<= the requested coin), and callers must transfer/burn that amount, not the requested one. A `take_debt` that would mint 0 tokens is `ZeroFill`.
+
+## Closing System Auctions and Params Validation
+
+- `close_surplus` / `close_debt` (spec §5.11): permitted once `now >= start_ms + system_ttl_ms`; a non-live auction is `NotLive`, an early close is `DelayNotElapsed`. The result is `live: false, lot_left: 0` plus the released amount: surplus coin returns to the buffer; for debt nothing is minted for the untaken part, and the caller pairs it with `Accounting::record_debt_close`.
+- `SystemParams::validate` (program layer must call it): `surplus_max_discount_bps <= 3000`, `debt_initial_discount_bps <= 3000`, nonzero lots, `min_take <=` both lots, `0 < max_mint_per_auction <= MAX_MINT_HARD_CAP`, `system_ttl_ms > 0`. The schedules are validated `Schedule`s.
+- `bad_debt_freeze_threshold >= debt_lot` (ADR-017) is a config precondition enforced at the program layer (Plan 2), since the threshold is not a `SystemParams` field.
+- `surplus_nonce`, `debt_nonce` and `host_frozen_by_engine` in `Accounting` are written by the program layer (Plan 2), not by these pure functions.

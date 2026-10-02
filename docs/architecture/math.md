@@ -150,6 +150,8 @@ Prices are RAY collateral per 1 stablecoin: a lower price pays out less collater
 | system | debt start amount, initial discount (`debt_start_amount`) | tokens | BPS - debt_initial_discount_bps | BPS | floor | Tokens minted/paid out round down; favours the protocol |
 | system | debt offered tokens (`debt_offered_tokens`) | start_amount | BPS + growth_bps | BPS | floor | Tokens minted/paid out round down; favours the protocol; then capped at max_mint_per_auction |
 | system | debt tokens minted per take (`take_debt`) | offered | take | debt_lot | floor | Tokens minted/paid out to the taker round down; favours the protocol |
+| system | surplus decay bps (`surplus_multiplier_bps`) | discount_ray | n/a | BPS_TO_RAY | floor | Plain integer division of the decay to bps; floor makes decay smaller, so the taker pays slightly more tokens; favours the protocol |
+| system | debt growth bps (`debt_offered_tokens`) | discount_ray | n/a | BPS_TO_RAY | floor | Plain integer division of the growth to bps; floor makes growth smaller, so slightly fewer tokens are minted; favours the protocol |
 
 ## Overflow Handling
 

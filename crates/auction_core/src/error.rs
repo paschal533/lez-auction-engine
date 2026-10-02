@@ -13,6 +13,11 @@ pub enum ConfigError {
     ConfidenceAboveMax,
     ChostBelowMinBid,
     MintCapAboveHardCap,
+    SystemDiscountAboveMax,
+    ZeroLot,
+    MinTakeAboveLot,
+    MintCapZero,
+    ZeroTtl,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

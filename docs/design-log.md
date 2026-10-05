@@ -415,23 +415,26 @@ Accepted (S1)
 
 ---
 
-## ADR-019: S2 Outcome: Host Authentication of the Engine via the Engine Authority PDA
+## ADR-019: S2 Outcome: Host Authentication of the Engine via Caller Program ID plus Engine Authority PDA (Variant C)
 
 **Context**
-Spike S2 (docs/spikes/S2.md) compared three guards for calls from the host program into engine-only entry points (`liquidate_position`, `engine_freeze_new_debt`): A, `caller_program_id == stored engine program id`; B, the stored engine authority PDA is authorised in the call; C, both. Tested in-process on lee v0.2.4 (`47eba256`) with SPEL `1ef0500f` and risc0-zkvm 3.0.5, four tests per variant: legitimate chained call, direct top-level call, impostor program chaining to the callee (forged flag, forged flag with wrong seeds, own PDA), and a user-signed tx listing the PDA. All 12 tests pass.
+Spike S2 (docs/spikes/S2.md) compared three guards for calls from the host program into engine-only entry points (`liquidate_position`, `engine_freeze_new_debt`): A, `caller_program_id == stored engine program id`; B, the stored engine authority PDA is authorised in the call; C, both. Tested in-process on lee v0.2.4 (`47eba256`) with SPEL `1ef0500f` and risc0-zkvm 3.0.5. The brief's four tests (legitimate call, direct call, impostor program, user-signed tx listing the PDA) all pass for all three variants and originally selected B. Fix round 1 added a fifth attack, authorisation laundering: lee propagates authorisation down the call chain (`validated_state_diff/mod.rs:262-290`, monotonically growing authorised set), so if the engine chains with the `ENGINE_AUTH` seeds to any program X, X can chain to `callee.guarded_*` with the PDA authorised and B accepts it. The spike's `call_guarded` takes a caller-supplied program id, which makes this reachable. Test results: B accepts the laundered call (the bypass); A and C reject it with `guard A: caller program is not the engine program`.
 
 **Decision**
-Variant B. The host stores the engine authority PDA and requires it to be present and authorised; the engine authorises it with `ChainedCall::with_pda_seeds`. Cycles of the legitimate transaction (caller + callee, 2 executions): A 367,354, B 372,316, C 372,601. A is only 1.35% cheaper than B, below the 20% threshold in the brief, and B mirrors the stablecoin's existing admin and freeze checks.
+Variant C (A and B together). The brief's decision rule ("cheapest variant passing all four tests") rested on an incomplete attack set and is superseded by the spec's requirement that only the engine can invoke the hook. A's check uses the immediate caller, which lee enforces per call (`MismatchedCallerProgramId`, `validated_state_diff/mod.rs:184-191`). Cycles of the legitimate transaction (caller + callee, 2 executions): A 367,354, B 372,316, C 372,601; C costs +285 over B (+0.08%) and +5,247 over A (+1.43%).
+B's guarantee, stated correctly: the engine authority PDA is authorised somewhere in the chain that led to the call; it does not say the engine is the caller.
+Invariants for Plan 2 (defence in depth): (i) the engine never authorises `ENGINE_AUTH` for any program other than the stored host program id (no caller-supplied program ids); (ii) the host never chains to an untrusted or user-chosen program while the engine authority is authorised in its call.
 
 **Trade-offs**
-- The guard in the guest does not reject a forged `is_authorized` flag by itself; the impostor attacks (modes 0 and 1) on B were rejected by lee's post-execution `InvalidAccountAuthorization` check. B is as strong as that lee rule. A relies on `caller_program_id`, which lee also checks (`MismatchedCallerProgramId`).
-- Test (4), a user-signed tx listing the PDA, only exercises the PDA path for B; A and C reject it earlier on the `caller_program_id` check.
-- Both A and B bind to the engine's ImageID (the PDA is derived from the program id), so a second or upgraded engine build needs its own stored config; the config creation and rotation path was not tested (the config account was inserted with `force_insert_account`).
-- The brief's `guarded(expected_caller)` argument was replaced by a stored config, because an argument chosen by the caller is not a guard.
-- Cycles are executor cycles (dev mode, natively built guests), not proving cost. Nothing was run on a sequencer.
+- Zero ids: SPEL sets `ctx.caller_program_id` to zeros for top-level calls (`spel-framework-core/src/context.rs:30-33`), so A and C accept a direct call if the stored `engine_program_id` is zero or uninitialised. The config initialiser must reject zero program ids and zero authorities (Plan 2 test). The config was inserted with `force_insert_account`; creation and rotation are untested.
+- Private path untested, wider scope: in the circuit `authorized_accounts` is one set for the whole transaction (`privacy_preserving_circuit/src/execution_state.rs:54,601-608`), so laundering reaches sibling calls too; forgery is still blocked (`output.rs:38`, `circuit/mod.rs:420-433`, `execution_state.rs:285-305`); a PDA first seen inside a chained call is not seed-checked in the Vacant branch, so the engine must list the authority in its own accounts. `caller_program_id` is enforced in the circuit per call (`execution_state.rs:164-170`), so C's immediate-caller check holds there, but this is from source reading only; a private-path test is an open item for Plan 2.
+- Both A and B bind to the engine ImageID (PDA derived from the program id): a second or upgraded engine needs its own stored config.
+- Upstream fit of B: the stablecoin uses plain `is_authorized` assertions (`lez-programs/programs/stablecoin/src/checks.rs:109`, `src/freeze.rs:58`); those have the same laundering property when the authority is a PDA.
+- The brief's `guarded(expected_caller)` argument was replaced by a stored config (an argument chosen by the caller is not a guard). Lee rejects forged flags itself (`InvalidAccountAuthorization`), which stopped the forgery attacks on B.
+- Cycles are executor cycles (dev mode, natively built guests), not proving cost. Nothing was run on a sequencer. Evidence excerpt: `spikes/s2_s3_s7/logs/final-excerpt.log`.
 
 **Status**
-Accepted (S2)
+Accepted (S2, revised in fix round 1: B superseded by C)
 
 ---
 
@@ -445,8 +448,8 @@ Use these forms (exact syntax in S3.md): record `#[account(mut, pda = [literal("
 
 **Trade-offs**
 - Tested in-process only: no sequencer submit, no `spel` CLI call with arg-seeded PDAs, no IDL generation check for the array/u64 args.
-- The brief is ambiguous about the counter: here both `open_record` and `open_auction` increment the same `count`; the engine design must pick one owner.
-- `config` was a plain default account and the instructions are permissionless for any signer; access control is not part of this result.
+- Counter owner (controller ruling): `count` is incremented only by auction creation. This is the spike's `open_auction` reading (record created if absent inside `open_auction`, `nonce == count`, `count += 1`). The standalone `open_record` that also bumps `count` is the rejected shared-counter design: a permissionless `open_record` lets anyone bump `count` and front-run or grief auction creation. It stays in the spike only as a create-if-absent demonstration; Plan 2 removes the standalone bump.
+- `config` was a plain default account and must be validated in Plan 2; the instructions are permissionless for any signer, so access control is not part of this result.
 - The macro rewrite to `execute_with_claims` only happens for the exact two-segment path `SpelOutput::execute` with a `vec![idents]` argument.
 - Cycles are executor cycles from natively built guests.
 
@@ -465,6 +468,8 @@ The engine can be the sole minter of the mock protocol token: set the definition
 
 **Trade-offs**
 - The definition and the holder's holding were inserted into the test state directly; the S1 spike created a PDA-authority token on a real sequencer for the faucet PDA, but this harness did not repeat that for the engine PDA. Minting to a fresh (uninitialised) holding and burning tokens held by an engine PDA were not tested.
+- Deviation from the brief, which names `Token::Mint`: the working path is `Token::MintWithAuthority` (external authority account); `Token::Mint` needs the definition account itself to sign.
+- Untested paths that are prerequisites for later features, each needing a Plan 2 test: minting into a taker's possibly-fresh holding (F4 `take_debt`) and burning from an engine-PDA-held holding with seeds (`settle_debt`, F5).
 - `mint_to` is open to any signer in the spike; the PDA only guarantees that the engine program is the sole minting path. Gating who may trigger a mint is engine logic and is untested here.
 - Cycles are executor cycles from natively built guests, not proving cost.
 

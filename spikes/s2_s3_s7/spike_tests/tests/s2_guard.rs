@@ -187,3 +187,36 @@ fn variant_c_impostor_fails() {
 fn variant_c_user_signed_fails() {
     user_signed(VARIANT_C, GUARD_A);
 }
+
+/// (5) Laundering (lee propagates authorisation down the chain, validated_state_diff/mod.rs:262-290):
+/// engine -> X (authority PDA authorised by the engine) -> callee.guarded_*.
+fn laundered(variant: u8) -> Result<(), lee::error::LeeError> {
+    let mut state = base_state();
+    let signer = key(USER);
+    let res = submit(
+        &mut state,
+        caller_id(),
+        vec![callee_config_id(), engine_authority(), user_id()],
+        &[&signer],
+        CallerInstruction::CallUntrusted {
+            target_program_id: impostor_id(),
+            callee_program_id: callee_id(),
+            variant,
+        },
+    );
+    println!("LAUNDER[variant {}] {:?}", name(variant), res);
+    res
+}
+
+#[test]
+fn laundering_variant_a_rejects() {
+    assert_fail("variant A laundered", laundered(VARIANT_A), GUARD_A);
+}
+#[test]
+fn laundering_variant_b_accepts_the_bypass() {
+    laundered(VARIANT_B).expect("variant B accepts the laundered call (the bypass)");
+}
+#[test]
+fn laundering_variant_c_rejects() {
+    assert_fail("variant C laundered", laundered(VARIANT_C), GUARD_A);
+}

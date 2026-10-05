@@ -187,6 +187,14 @@ pub enum CallerInstruction {
     MintTo { amount_to_mint: u128 },
     /// S7: chained `Token::Burn`, authorised by the holder's top-level signature.
     BurnFrom { amount_to_burn: u128 },
+    /// S2 laundering finding: the engine authorises `ENGINE_AUTH` for an arbitrary,
+    /// caller-supplied program (`target_program_id`) and chains `ImpostorInstruction::Launder`.
+    /// This is the FLAW the finding is about; it must never exist in the real engine.
+    CallUntrusted {
+        target_program_id: ProgramId,
+        callee_program_id: ProgramId,
+        variant: u8,
+    },
 }
 
 /// Impostor instructions.
@@ -200,5 +208,11 @@ pub enum ImpostorInstruction {
         callee_program_id: ProgramId,
         variant: u8,
         mode: u8,
+    },
+    /// Re-enters `callee.guarded_*` passing on the authorisation it inherited from the engine
+    /// (no seeds, no forging: lee propagates authorisation down the chain).
+    Launder {
+        callee_program_id: ProgramId,
+        variant: u8,
     },
 }

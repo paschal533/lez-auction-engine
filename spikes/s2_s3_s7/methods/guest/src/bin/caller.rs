@@ -1,7 +1,7 @@
 #![cfg_attr(not(test), no_main)]
 
 use spel_framework::prelude::*;
-use spike_core::{
+use spike_core::{ImpostorInstruction, 
     auction_seed, combine_seeds, named_pda_seed, seed_from_str, Auction, CalleeInstruction,
     LiqRecord, ENGINE_AUTH_SEED, LIQREC_TAG, MINT_AUTH_SEED, VARIANT_A,
 };
@@ -194,5 +194,26 @@ mod caller {
             vec![definition, holder_holding],
             vec![call],
         ))
+    }
+
+    /// FLAW (spike only): authorises `ENGINE_AUTH` for a caller-supplied program.
+    #[instruction]
+    pub fn call_untrusted(
+        config: AccountWithMetadata,
+        #[account(pda = literal("ENGINE_AUTH"))] authority: AccountWithMetadata,
+        #[account(signer)] user: AccountWithMetadata,
+        target_program_id: ProgramId,
+        callee_program_id: ProgramId,
+        variant: u8,
+    ) -> SpelResult {
+        let mut authority_for_call = authority.clone();
+        authority_for_call.is_authorized = true;
+        let call = ChainedCall::new(
+            target_program_id,
+            vec![config.clone(), authority_for_call, user.clone()],
+            &ImpostorInstruction::Launder { callee_program_id, variant },
+        )
+        .with_pda_seeds(vec![named_pda_seed(ENGINE_AUTH_SEED)]);
+        Ok(SpelOutput::execute(vec![config, authority, user], vec![call]))
     }
 }

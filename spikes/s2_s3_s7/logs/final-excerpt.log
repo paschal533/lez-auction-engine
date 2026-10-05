@@ -1,0 +1,125 @@
+running 15 tests
+test laundering_variant_a_rejects ... 
+LAUNDER[variant A] Err(ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [2046707345, 2357479425, 1787604581, 1478855044, 3358996277, 2780248291, 1287698090, 3236723151]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997, 42354580
+FAIL[variant A laundered] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [2046707345, 2357479425, 1787604581, 1478855044, 3358996277, 2780248291, 1287698090, 3236723151]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997, 42354
+test laundering_variant_b_accepts_the_bypass ...
+LAUNDER[variant B] Ok(())
+test laundering_variant_c_rejects ... 
+LAUNDER[variant C] Err(ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [2046707345, 2357479425, 1787604581, 1478855044, 3358996277, 2780248291, 1287698090, 3236723151]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997, 42354580
+FAIL[variant C laundered] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [2046707345, 2357479425, 1787604581, 1478855044, 3358996277, 2780248291, 1287698090, 3236723151]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997, 42354
+test variant_a_direct_call_fails ... 
+FAIL[variant A direct] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [0, 0, 0, 0, 0, 0, 0, 0]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997, 4235458036, 1873343043, 1065975426]")
+test variant_a_impostor_fails ... 
+FAIL[variant A impostor mode 0] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [2046707345, 2357479425, 1787604581, 1478855044, 3358996277, 2780248291, 1287698090, 3236723151]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997,
+FAIL[variant A impostor mode 1] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [2046707345, 2357479425, 1787604581, 1478855044, 3358996277, 2780248291, 1287698090, 3236723151]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997,
+FAIL[variant A impostor mode 2] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [2046707345, 2357479425, 1787604581, 1478855044, 3358996277, 2780248291, 1287698090, 3236723151]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997,
+test variant_a_legit_chained_call_succeeds ...
+CYCLES[S2 variant A legit] exec#1 depth=0 program=caller cycles=214258
+CYCLES[S2 variant A legit] exec#2 depth=1 program=callee cycles=153386
+CYCLES[S2 variant A legit] TOTAL executions=2 cycles=367644
+S2RESULT variant=A caller_cycles=214258 callee_cycles=153386 total_cycles=367644
+test variant_a_user_signed_fails ... 
+FAIL[variant A user-signed] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [0, 0, 0, 0, 0, 0, 0, 0]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997, 4235458036, 1873343043, 1065975426]")
+test variant_b_direct_call_fails ... 
+FAIL[variant B direct] ProgramExecutionFailed("Guest panicked: guard B: engine authority is not authorised in this call")
+test variant_b_impostor_fails ...
+FAIL[variant B impostor mode 0] InvalidProgramBehavior(InvalidAccountAuthorization { account_id: 6ue5cttKuqrXH6rsyPeMo5BM1LJML4f9Qqh6zQ4kpBXh })
+FAIL[variant B impostor mode 1] InvalidProgramBehavior(InvalidAccountAuthorization { account_id: 6ue5cttKuqrXH6rsyPeMo5BM1LJML4f9Qqh6zQ4kpBXh })
+FAIL[variant B impostor mode 2] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard B: authority account is not the stored engine authority\n  left: D49cUsuMFzGYt9VU9gfhLU3FxoM9gigedB2AniBd9vEB\n right: 6ue5cttKuqrXH6rsyPeMo5BM1LJML4f9Qqh6zQ4kpBXh")
+test variant_b_legit_chained_call_succeeds ...
+CYCLES[S2 variant B legit] exec#1 depth=0 program=caller cycles=219210
+CYCLES[S2 variant B legit] exec#2 depth=1 program=callee cycles=153396
+CYCLES[S2 variant B legit] TOTAL executions=2 cycles=372606
+S2RESULT variant=B caller_cycles=219210 callee_cycles=153396 total_cycles=372606
+test variant_b_user_signed_fails ... 
+FAIL[variant B user-signed] ProgramExecutionFailed("Guest panicked: guard B: engine authority is not authorised in this call")
+test variant_c_direct_call_fails ... 
+FAIL[variant C direct] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [0, 0, 0, 0, 0, 0, 0, 0]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997, 4235458036, 1873343043, 1065975426]")
+test variant_c_impostor_fails ... 
+FAIL[variant C impostor mode 0] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [2046707345, 2357479425, 1787604581, 1478855044, 3358996277, 2780248291, 1287698090, 3236723151]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997,
+FAIL[variant C impostor mode 1] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [2046707345, 2357479425, 1787604581, 1478855044, 3358996277, 2780248291, 1287698090, 3236723151]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997,
+FAIL[variant C impostor mode 2] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [2046707345, 2357479425, 1787604581, 1478855044, 3358996277, 2780248291, 1287698090, 3236723151]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997,
+test variant_c_legit_chained_call_succeeds ...
+CYCLES[S2 variant C legit] exec#1 depth=0 program=caller cycles=219209
+CYCLES[S2 variant C legit] exec#2 depth=1 program=callee cycles=153682
+CYCLES[S2 variant C legit] TOTAL executions=2 cycles=372891
+S2RESULT variant=C caller_cycles=219209 callee_cycles=153682 total_cycles=372891
+test variant_c_user_signed_fails ... 
+FAIL[variant C user-signed] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: guard A: caller program is not the engine program\n  left: [0, 0, 0, 0, 0, 0, 0, 0]\n right: [3513845836, 3661755660, 2107232312, 105531562, 1074542997, 4235458036, 1873343043, 1065975426]")
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 87.82s
+running 7 tests
+test offchain_derivation_equals_onchain_derivation ...
+CYCLES[S3 offchain==onchain] exec#1 depth=0 program=caller cycles=225324
+CYCLES[S3 offchain==onchain] TOTAL executions=1 cycles=225324
+S3RESULT S3 offchain==onchain caller_cycles=225324
+CYCLES[S3 offchain==onchain n1] exec#1 depth=0 program=caller cycles=231916
+CYCLES[S3 offchain==onchain n1] TOTAL executions=1 cycles=231916
+S3RESULT S3 offchain==onchain n1 caller_cycles=231916
+test open_auction_existing_uses_the_macro_generated_claim ... 
+FAIL[existing w/o record] ProgramExecutionFailed("Guest panicked: assertion `left != right` failed: record must be opened before the auction\n  left: Account { program_owner: \"0000000000000000000000000000000000000000000000000000000000000000\", balance: 0, data: Data([]), nonce: Nonce(0) }\n right: Account { program_owner: \"000
+CYCLES[S3 open_record] exec#1 depth=0 program=caller cycles=159287
+CYCLES[S3 open_record] TOTAL executions=1 cycles=159287
+S3RESULT S3 open_record caller_cycles=159287
+CYCLES[S3 open_auction_existing nonce1] exec#1 depth=0 program=caller cycles=243943
+CYCLES[S3 open_auction_existing nonce1] TOTAL executions=1 cycles=243943
+S3RESULT S3 open_auction_existing nonce1 caller_cycles=243943
+FAIL[existing replay] ProgramExecutionFailed("Guest panicked: account validation failed: AccountAlreadyInitialized { account_index: 3 }")
+FAIL[existing stale nonce] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: auction nonce must equal the record count\n  left: 0\n right: 2")
+test open_auction_first_call_creates_record_and_auction ...
+CYCLES[S3 open_auction nonce0 (first use)] exec#1 depth=0 program=caller cycles=225309
+CYCLES[S3 open_auction nonce0 (first use)] TOTAL executions=1 cycles=225309
+S3RESULT S3 open_auction nonce0 (first use) caller_cycles=225309
+test open_auction_same_nonce_again_fails_and_next_nonce_succeeds ...
+CYCLES[S3 open_auction nonce0] exec#1 depth=0 program=caller cycles=225309
+CYCLES[S3 open_auction nonce0] TOTAL executions=1 cycles=225309
+S3RESULT S3 open_auction nonce0 caller_cycles=225309
+FAIL[replay nonce 0] ProgramExecutionFailed("Guest panicked: account validation failed: AccountAlreadyInitialized { account_index: 3 }")
+CYCLES[S3 open_auction nonce1] exec#1 depth=0 program=caller cycles=231796
+CYCLES[S3 open_auction nonce1] TOTAL executions=1 cycles=231796
+S3RESULT S3 open_auction nonce1 caller_cycles=231796
+FAIL[skipped nonce] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: auction nonce must equal the record count\n  left: 5\n right: 2")
+test open_record_first_call_creates_the_record ...
+CYCLES[S3 open_record first] exec#1 depth=0 program=caller cycles=159092
+CYCLES[S3 open_record first] TOTAL executions=1 cycles=159092
+S3RESULT S3 open_record first caller_cycles=159092
+test open_record_second_call_increments_without_reclaiming ...
+CYCLES[S3 open_record first] exec#1 depth=0 program=caller cycles=159242
+CYCLES[S3 open_record first] TOTAL executions=1 cycles=159242
+S3RESULT S3 open_record first caller_cycles=159242
+CYCLES[S3 open_record second] exec#1 depth=0 program=caller cycles=166079
+CYCLES[S3 open_record second] TOTAL executions=1 cycles=166079
+S3RESULT S3 open_record second caller_cycles=166079
+test wrong_pda_address_is_rejected ... 
+FAIL[wrong pda] ProgramExecutionFailed("Guest panicked: account validation failed: PdaMismatch { account_name: \"record\", expected: \"CPwmt1SyThLpG8RGcHjHxB9PwYe5CzYMQnj2ji5zCrei\", actual: \"EFLLbS16d179L5e3Ly38tDd4enMEoFTWZAPmomwTATCo\" }")
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.82s
+running 4 tests
+test burn_by_the_holder_succeeds ...
+CYCLES[S7 mint_to (setup)] exec#1 depth=0 program=caller cycles=286251
+CYCLES[S7 mint_to (setup)] exec#2 depth=1 program=token cycles=179943
+CYCLES[S7 mint_to (setup)] TOTAL executions=2 cycles=466194
+S7RESULT S7 mint_to (setup) caller_cycles=286251 token_cycles=179943 total_cycles=466194 executions=2
+CYCLES[S7 burn_from] exec#1 depth=0 program=caller cycles=189246
+CYCLES[S7 burn_from] exec#2 depth=1 program=token cycles=141865
+CYCLES[S7 burn_from] TOTAL executions=2 cycles=331111
+S7RESULT S7 burn_from caller_cycles=189246 token_cycles=141865 total_cycles=331111 executions=2
+test burn_without_the_holders_signature_fails ...
+CYCLES[S7 mint_to (setup)] exec#1 depth=0 program=caller cycles=286251
+CYCLES[S7 mint_to (setup)] exec#2 depth=1 program=token cycles=179943
+CYCLES[S7 mint_to (setup)] TOTAL executions=2 cycles=466194
+S7RESULT S7 mint_to (setup) caller_cycles=286251 token_cycles=179943 total_cycles=466194 executions=2
+FAIL[S7 burn without holder signature] ProgramExecutionFailed("Guest panicked: account validation failed: Unauthorized { message: \"Account 'holder_holding' (index 1) must be a signer\" }")
+test mint_by_a_user_key_fails ... 
+FAIL[S7 user key as authority] ProgramExecutionFailed("Guest panicked: assertion `left == right` failed: Mint authority check failed: signer is not the current authority\n  left: 8W9V8bwV5bH2XZgBEET5bB77vPf1qN9AXsT55ymqnMTG\n right: GyzR7KHf4rkwYjjraE7M8v5xwDesY4YKxKQtHbpEv8x2")
+FAIL[S7 PDA listed, not authorised] ProgramExecutionFailed("Guest panicked: account validation failed: Unauthorized { message: \"Account 'authority_account' (index 2) must be a signer\" }")
+FAIL[S7 definition as self authority] ProgramExecutionFailed("Guest panicked: account validation failed: Unauthorized { message: \"Account 'definition_account' (index 0) must be a signer\" }")
+test mint_by_the_pda_succeeds ...
+CYCLES[S7 mint_to (via PDA)] exec#1 depth=0 program=caller cycles=286251
+CYCLES[S7 mint_to (via PDA)] exec#2 depth=1 program=token cycles=179943
+CYCLES[S7 mint_to (via PDA)] TOTAL executions=2 cycles=466194
+S7RESULT S7 mint_to (via PDA) caller_cycles=286251 token_cycles=179943 total_cycles=466194 executions=2
+CYCLES[S7 mint_to again] exec#1 depth=0 program=caller cycles=286251
+CYCLES[S7 mint_to again] exec#2 depth=1 program=token cycles=179941
+CYCLES[S7 mint_to again] TOTAL executions=2 cycles=466192
+S7RESULT S7 mint_to again caller_cycles=286251 token_cycles=179941 total_cycles=466192 executions=2
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.99s
+EXIT 0

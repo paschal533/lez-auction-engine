@@ -1,0 +1,9 @@
+[package]
+name = "s4_s6_host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+risc0-zkvm = { version = "=3.0.5" }
+s4_s6_methods = { path = "../methods" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4", features = ["host"] }

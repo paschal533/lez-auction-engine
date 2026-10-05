@@ -1,0 +1,21 @@
+[package]
+name = "s4_s6_guest"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[profile.release]
+debug = 0
+strip = "symbols"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+[dependencies]
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }
+# auction_core stays dependency-free; the serialiser (borsh) lives here only.
+auction_core = { path = "../../../../crates/auction_core" }
+borsh = { version = "1.5", features = ["derive"] }
+nssa_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4", package = "lee_core" }

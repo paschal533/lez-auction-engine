@@ -475,3 +475,51 @@ The engine can be the sole minter of the mock protocol token: set the definition
 
 **Status**
 Accepted (S7)
+
+---
+
+## ADR-022: S4 Outcome: Keep the Piecewise-Linear Discount Schedule
+
+**Context**
+Spike S4 (docs/spikes/S4.md) measured the zkVM cost of the `auction_core` operations in a risc0 3.0.5 guest (executor cycles, dev mode, natively built guest; `auction_core` copied at `627bba4`) and compared the piecewise-linear schedule with an exponential variant `RAY * (1 - r)^t` (binary exponentiation with `mul_div_floor`, `t` up to 7 200 seconds). Marginal cycles per operation: `mul_div_floor` about 10.3k; `discount_ray` 8,889 (2 points) and 8,936 (8 points); `quote_liquidation` 38,537; `quote_bid` + `apply_bid` 19,802; `take_debt` 29,032; exponential 165,779 at `t = 7 200` and 248,565 in the worst case (`t = 6 143`).
+
+**Options**
+- (A) Piecewise-linear schedule of up to 8 points (current).
+- (B) Exponential decay by binary exponentiation.
+- (C) Stairstep.
+
+**Decision**
+Keep (A). The brief's rule allowed (B) only if it was within 10% of (A)'s cycles (at most about 9.8k); it costs 18.7x to 28x as much (+1,765% to +2,696%), so the "reviewers would care" condition was not needed. Inside a bid, (B) would turn 19.8k cycles into 177k to 259k (8.9x to 13.1x). (C) was not run; it needs no `mul_div`, and a piecewise schedule with closely spaced points approximates it.
+
+**Trade-offs**
+- Cycles are executor cycles of a natively built guest, not proving cost and not the Docker-built image. The ratios are the useful result; the absolute values are not a budget.
+- The exponential variant's accuracy was argued, not measured: its floored multiplications slightly overstate the discount (by at most about 24 RAY units), the wrong direction for a protocol-favouring rule.
+- `mul_div_floor` has no cheap path for small operands (10,365 cycles vs 10,260 worst case), so every `mul_div` in a hot path costs about 10k cycles; the 8-point schedule costs only 47 cycles more than the 2-point one.
+- Evidence excerpt: `spikes/s4_s6/logs/cycles-excerpt.log`.
+
+**Status**
+Accepted (S4)
+
+---
+
+## ADR-023: S6 Outcome: `Accounting` Is Updated at Chain End, Not on Every Bid
+
+**Context**
+Spike S6 (docs/spikes/S6.md) priced updating `Accounting` per bid. Measured with the current `Accounting` struct (10 fields, 129 bytes in borsh): the borsh read-modify-write (decode, `record_bid`, encode) is 1,530 cycles, but adding the account to the instruction costs 93,374 cycles more (read as a pre-state, echoed in the program output, written as a post-state; real `lee_core` v0.2.4 types), so a per-bid update adds 94,904 cycles. Against a bid modelled as S1's measured `withdraw_collateral` execution (626,902) plus two token transfers (2 x 133,827) = 894,556 cycles, that is 10.6% (8.9% under a second, account-count estimate; 479% of the core-only bid of 19,802).
+
+**Options**
+- (A) Per-bid `Accounting` update (simpler R6 statement).
+- (B) Update only at chain end, folding in the auction's cumulative `debt_raised` and `penalty_raised`.
+
+**Decision**
+(B). The brief's rule prefers (A) unless it adds more than 5% of a bid's cycles; it adds about 10.6%, so (B). `record_bid` is additive and the `Auction` already holds the running sums, so one application at chain end gives the same totals; nothing in the core reads `total_debt_burned` or `total_penalty_collected` to decide anything, and the supply invariant of spec section 5.8 does not use them. The final bid writes `Accounting` anyway (`record_chain_end`). Non-final bids no longer share an account across auctions, which also tightens R3 isolation. The 5% threshold would only be met by a full bid above about 1.9 M cycles.
+
+**Trade-offs**
+- The denominator is modelled (no engine program exists yet): re-measure in Plan 3 (`CYCLES.md`). If a real bid exceeds about 1.9 M cycles the decision flips cheaply.
+- The counters lag for in-flight auctions: `total_debt_burned + total_penalty_collected` equals the sum of `raised()` only after each chain end. The property test `tests/invariants.rs` and any dashboard must be restated accordingly (Plan 2).
+- Plan 2 should add a small `Accounting::record_settled(&Auction)` helper rather than build a synthetic `BidFill`; no change was made to the reviewed core in this task.
+- Per-account guest I/O is expensive because `Account.data` serialises one word per byte and `AccountId` through a string; this also matters for every other account the engine instructions take.
+- Executor cycles of a natively built guest; not proving cost.
+
+**Status**
+Accepted (S6)

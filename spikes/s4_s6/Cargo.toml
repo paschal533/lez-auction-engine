@@ -1,0 +1,5 @@
+# Spikes S4/S6: zkVM executor cycles of the auction_core operations. Not part of the main workspace.
+[workspace]
+members = ["host", "methods"]
+exclude = ["methods/guest"]
+resolver = "2"

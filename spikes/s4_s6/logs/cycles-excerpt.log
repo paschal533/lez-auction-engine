@@ -1,0 +1,24 @@
+# S4/S6 cycle excerpt. auction_core copied at repo HEAD 627bba4 (git archive). rustc 1.94.0, risc0-zkvm =3.0.5, rzup rust 1.94.1, r0vm 3.0.5.
+# Command: RISC0_DEV_MODE=1 cargo run --release -p s4_s6_host   (executor only; cycles = session.cycles() = sum of per-segment user cycles, no po2/paging overhead)
+NOTE: executor cycles (session.cycles()), RISC0_DEV_MODE executor only; not proving cost.
+CYCLES[noop] op=0 gross_reps1=53703 reps11=54183 marginal_per_op=48 segments(po2,cycles)=[(17, 53703)]/[(17, 54183)] checksum=0
+CYCLES[mul_div_floor_worst] op=1 gross_reps1=63905 reps11=166505 marginal_per_op=10260 segments(po2,cycles)=[(17, 63905)]/[(18, 166505)] checksum=340282366920938463463374607431768211454
+CYCLES[mul_div_floor_small] op=2 gross_reps1=64010 reps11=167664 marginal_per_op=10365 segments(po2,cycles)=[(17, 64010)]/[(18, 167664)] checksum=1000000
+CYCLES[schedule_new_8pts] op=9 gross_reps1=54455 reps11=62465 marginal_per_op=801 segments(po2,cycles)=[(17, 54455)]/[(17, 62465)] checksum=200000000000000000000000000
+CYCLES[discount_ray_2pts] op=3 gross_reps1=62543 reps11=151433 marginal_per_op=8889 segments(po2,cycles)=[(17, 62543)]/[(18, 151433)] checksum=60000000000000000000000000
+CYCLES[discount_ray_8pts] op=4 gross_reps1=62590 reps11=151950 marginal_per_op=8936 segments(po2,cycles)=[(17, 62590)]/[(18, 151950)] checksum=170000000000000000000000000
+CYCLES[quote_liquidation] op=5 gross_reps1=92181 reps11=477558 marginal_per_op=38537 segments(po2,cycles)=[(17, 92181)]/[(19, 477558)] checksum=11280
+CYCLES[quote_bid+apply_bid] op=6 gross_reps1=73439 reps11=271459 marginal_per_op=19802 segments(po2,cycles)=[(17, 73439)]/[(19, 271459)] checksum=9588720
+CYCLES[take_debt] op=7 gross_reps1=82686 reps11=373006 marginal_per_op=29032 segments(po2,cycles)=[(17, 82686)]/[(19, 373006)] checksum=212600000
+CYCLES[exp_discount_t7200] op=8 gross_reps1=219739 reps11=1877529 marginal_per_op=165779 segments(po2,cycles)=[(18, 219739)]/[(20, 999964), (20, 877565)] checksum=302329953196956638806293900
+CYCLES[exp_discount_t6143] op=8 gross_reps1=302456 reps11=2788110 marginal_per_op=248565 segments(po2,cycles)=[(19, 302456)]/[(20, 999964), (20, 1013204), (20, 774942)] checksum=264465386603599432990682014
+CYCLES[exp_discount_t4095] op=8 gross_reps1=292103 reps11=2674227 marginal_per_op=238212 segments(po2,cycles)=[(19, 292103)]/[(20, 999964), (20, 1013204), (20, 661059)] checksum=185153167446570817070359369
+CYCLES[exp_discount_t100] op=8 gross_reps1=147261 reps11=1080355 marginal_per_op=93309 segments(po2,cycles)=[(18, 147261)]/[(20, 999964), (17, 80391)] checksum=4987645188015852486679901
+CYCLES[accounting_borsh_serialise] op=10 gross_reps1=54346 reps11=61256 marginal_per_op=691 segments(po2,cycles)=[(17, 54346)]/[(17, 61256)] checksum=129
+CYCLES[accounting_rmw_per_bid] op=11 gross_reps1=55185 reps11=70485 marginal_per_op=1530 segments(po2,cycles)=[(17, 55185)]/[(17, 70485)] checksum=129
+CYCLES[account_in_only_n0_data129] gross_reps1=53689 segments(po2,cycles)=[(17, 53689)]
+CYCLES[account_in_only_n1_data129] gross_reps1=90465 segments(po2,cycles)=[(17, 90465)]
+CYCLES[account_in_only_n3_data129] gross_reps1=163911 segments(po2,cycles)=[(18, 163911)]
+CYCLES[account_in_pre_echo_post_n0_data129] gross_reps1=54060 segments(po2,cycles)=[(17, 54060)]
+CYCLES[account_in_pre_echo_post_n1_data129] gross_reps1=147452 segments(po2,cycles)=[(18, 147452)]
+CYCLES[account_in_pre_echo_post_n3_data129] gross_reps1=334183 segments(po2,cycles)=[(19, 334183)]

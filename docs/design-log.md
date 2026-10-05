@@ -391,3 +391,23 @@ With a working protocol token configured, `check_solvency` never freezes, even i
 
 **Status**
 Accepted (spec v5)
+
+---
+
+## ADR-018: S1 Outcome: Toolchain, Multi-Instance Build, Chained-Call Budget
+
+**Context**
+Spike S1 (docs/spikes/S1.md) ran the pinned toolchain end to end: logos-execution-zone v0.2.4 (`47eba256`), lez-programs `64c01210`, risc0-zkvm 3.0.5.
+
+**Decision**
+- Confirmed commands: Docker guest build `make build-programs` (output `target/guest/*.bin`, deterministic; token and twap_oracle ImageIDs equal the live testnet ones), standalone sequencer `sequencer_service <config> --home .. -p 3040` with `RISC0_DEV_MODE=1`, wallet `deploy-program`, `spel` for instructions, offscreen Basecamp bundle with the inspector on 3768. Details and environment workarounds are in S1.md and `spikes/s1/run.sh`.
+- Second host build: `#[used] static HOST_INSTANCE_TAG: [u8; 8] = *b"INST-B01";` in the stablecoin guest changes the ImageID (A `c655d477...`, B `6032adb2...`); other guests stay byte-identical. Two instances run independently with separate PDAs and oracles.
+- Chained-call budget: `MAX_NUMBER_CHAINED_CALLS = 10`; public txs may run 11 programs, private 10. Modelled liquidate (hook, init-holding, withdraw_collateral, token transfer) = 4 executions, 865,665 cycles excluding the hook. Re-measure with the real hook in Plan 3.
+- Module-builder pin for Plan 4: `logos-module-builder` `6ef42ea8661121831ece79e6b702e27ac1cf46e7`, with lez_core `acf0cd501b262c4c15969e3735e85318297b85bf`.
+- Operational constraints: signers must be `auth-transfer init`-ed before first use (a default-owned account can sign a stablecoin tx only once); spel at this rev cannot encode i128.
+
+**Trade-offs**
+Heavy, slow builds (about 70 min cold guests, 75 min lez_core from source); network flakiness needed retries. The hook cost is not yet measured.
+
+**Status**
+Accepted (S1)

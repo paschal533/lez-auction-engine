@@ -1,0 +1,14 @@
+diff --git a/programs/stablecoin/methods/guest/src/bin/stablecoin.rs b/programs/stablecoin/methods/guest/src/bin/stablecoin.rs
+index 0d35a4b..9a70b90 100644
+--- a/programs/stablecoin/methods/guest/src/bin/stablecoin.rs
++++ b/programs/stablecoin/methods/guest/src/bin/stablecoin.rs
+@@ -7,6 +7,9 @@ use spel_framework::prelude::*;
+ #[cfg(not(test))]
+ risc0_zkvm::guest::entry!(main);
+ 
++#[used]
++static HOST_INSTANCE_TAG: [u8; 8] = *b"INST-B01";
++
+ #[lez_program(instruction = "stablecoin_core::Instruction")]
+ mod stablecoin {
+     #[allow(unused_imports)]

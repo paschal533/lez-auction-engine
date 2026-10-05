@@ -31,6 +31,24 @@ export PKG_CONFIG_PATH=$HOME/lez-spikes/s1/sysroot/root/usr/lib/x86_64-linux-gnu
 export PKG_CONFIG_SYSROOT_DIR=$HOME/lez-spikes/s1/sysroot/root
 export LD_LIBRARY_PATH=$HOME/lez-spikes/s1/sysroot/root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 XEOF
+  # shorthand used by step4/step5; the ids are the S1 run's, replace with yours
+  cat > "$S1/s1env.sh" <<'XEOF'
+. $HOME/lez-spikes/s1/env.sh
+cd $HOME/lez-spikes/s1
+export LEE_WALLET_HOME_DIR=$HOME/lez-spikes/s1/wallet-home
+SP=$PWD/spel/target/debug/spel; W=lez/target/debug/wallet; A=$PWD/lez-programs/artifacts
+TOK=14b3bc6cc129d0359f9595ba0f60a13e4a8df08ffe8eb1a83251c47abecc67a8
+TWAP=5681e27c27b3ece4a7c161bbf8e12e6ece6ca69925a87b77f9e193fa4a249b31
+STABLE=c655d477f2aa5a1684b4e22e50bab81b70218a0f99e44cd5959340f2b1c596ba
+CLOCK=4BdcjoXkq786TMWcBGGHqcxeLYMZmn17rL4eM9ZyRWNU
+FAUCET_PDA=GmAwyCjGaT7ocZ2ePDgGFmNw9Yv51ohG421dHMukZRQC
+ADMIN=ANrZnv2VFYpFNKiT5L6jUP4nb4wFx8q91iDxGYhoN14t; FREEZE=5xJg9LwMZwAxvxC2f8wVXTyy2AefRCk9DWS72Bg5wnkE
+ORSRC=Gy2vucuTCPvxx7LVLjY3nnCtFv1ybjkwcVfTDPXxvuJf; COLLDEF=98zNtVZcjppaXxRf2kRXzveVq7po1tqPce9y8YCeNgFC
+COLLHOLD=3L3JSx5rveVZeC8stfzpX7tbxvhhuVdDAXDRFy2tdRcu; ORACLE=63ETbn37pNdwKcYT4UxokjwKsNdAqumuzeus7gNRaYb6
+PP=8jZQco4Py4ChAxMfE4AGn4N1j7kRwhS1hW62rDUGmpzV; SFA=7BuSzbPeGdbZQwxqkaPjecjLiRuAUXT9T4P8ifJecyyY
+RPS=FbJ9RP5dpLzaC2bFYe6EkRFMnyGMiYcwBsD2vM3XZHXo; SDEF=8C4KgWQZYkBkZVo8P1mmrf5xkJNimtkjoMKE91vevrKb
+SMASTER=4Xdmh1MFxBptfMn91TFiS2PTLDK1PDdirn43m81a2vpa
+XEOF
 }
 
 step1_clone() {
@@ -66,15 +84,27 @@ step4_deploy_and_init() {
   export LEE_WALLET_HOME_DIR="$S1/wallet-home"; mkdir -p "$LEE_WALLET_HOME_DIR"
   cp lez/lez/wallet/configs/debug/wallet_config.json "$LEE_WALLET_HOME_DIR/"     # sequencer_addr 127.0.0.1:3040
   W=lez/target/debug/wallet; SP=spel/target/debug/spel
-  for l in admin freeze oracle-src coll-def coll-hold; do echo pw | $W account new public --label $l; done
+  for l in admin freeze oracle-src coll-def coll-hold user-hold; do echo pw | $W account new public --label $l; done
   for p in token twap_oracle token_mint_authority stablecoin; do $W deploy-program lez-programs/target/guest/$p.bin; done
   $SP -- program-id lez-programs/target/guest/stablecoin.bin       # ImageID + ProgramId limbs
   # PDAs: helper examples run inside the lez-programs workspace (RISC0_SKIP_BUILD=1 avoids rebuilding guests)
   cp "$REPO_S1_DIR/global_pdas.rs" lez-programs/programs/stablecoin/examples/global_pdas.rs
-  echo "see docs/spikes/S1.md section Commands for the exact spel invocations (new-fungible-definition,"
-  echo "create-oracle-price-account, initialize-program) with the concrete account ids used."
-  # NOTE: spel at this rev cannot encode i128 args; the run used a copy of stablecoin-idl.json with
-  # "i128" -> "u128" (sed 's/"i128"/"u128"/g'); safe only for gain values 0 or positive.
+  # Ids come from the s1env.sh written in step0 (the S1 run's ids; substitute yours:
+  # accounts via `$W account list`, PDAs via the global_pdas / mint_authority / twap_oracle_pdas examples).
+  . "$S1/s1env.sh"
+  # spel at this rev cannot encode i128 args: use an IDL copy with i128 -> u128 (valid only for gains >= 0; we used 0).
+  sed 's/"i128"/"u128"/g' "$A/stablecoin-idl.json" > "$S1/stablecoin-idl-u128.json"
+  $SP --idl $A/token-idl.json -p $TOK -- new-fungible-definition --name COLL --total-supply 1000000000000000000000000 \
+    --mint-authority $FAUCET_PDA --definition-target-account $COLLDEF --holding-target-account $COLLHOLD
+  $SP --idl $A/twap_oracle-idl.json -p $TWAP -- create-oracle-price-account --base-asset $SDEF --quote-asset $COLLDEF \
+    --initial-price 1000000000000000000000000000 --window-duration 3600000 --oracle-price-account $ORACLE --price-source $ORSRC --clock $CLOCK
+  $SP --idl "$S1/stablecoin-idl-u128.json" -p $STABLE -- initialize-program --freeze-authority-account-id $FREEZE \
+    --initial-stability-fee-per-millisecond 1000000000000001000000000000 --initial-controller-proportional-gain 0 --initial-controller-integral-gain 0 \
+    --initial-minimum-collateralization-ratio 1500000000000000000000000000 --minimum-milliseconds-between-rate-updates 60000 \
+    --maximum-oracle-price-age-milliseconds 3600000 --initial-redemption-price 1000000000000000000000000000 --stablecoin-name SPIKE \
+    --admin $ADMIN --protocol-parameters $PP --stability-fee-accumulator $SFA --redemption-price-state $RPS \
+    --stablecoin-definition $SDEF --stablecoin-master-holding $SMASTER --collateral-definition $COLLDEF --market-price-oracle $ORACLE --clock $CLOCK
+  # A key that signs more than one stablecoin tx must first run: $W auth-transfer init --account-id Public/<id>
 }
 
 step5_second_build() {
@@ -94,11 +124,16 @@ step6_chain_count() {
 
 step7_basecamp_offscreen() {
   cd "$S1" && mkdir -p s7
+  # One-time: trust the logos binary cache (from Basecamp's flake nixConfig), else Nix ignores its unsigned substitutes.
+  #   ~/.config/nix/nix.conf: extra-substituters = https://cache.nix.logos.co/public
+  #                           extra-trusted-public-keys = public:l4HrXgL4nw246+LBh2SOJyhz64BoGegOYLheT/iIAPU=
+  # The S1 run used the floating ref (rev not recorded; bundle store path s4sk19kp...). master was 9697d110... when checked later.
+  # To pin: github:logos-co/logos-basecamp/9697d11084b9538fdfdd373b611f05a5680a2c30#bin-bundle-dir-inspector (unverified to reproduce).
   nix build github:logos-co/logos-basecamp#bin-bundle-dir-inspector -o s7/result-bundle -L
   nix build 'github:logos-blockchain/logos-execution-zone-module/acf0cd501b262c4c15969e3735e85318297b85bf#install-portable' -o s7/lez-core-install -L
   mkdir -p s7/user/modules s7/user/plugins && cp -RL s7/lez-core-install/modules/. s7/user/modules/
-  XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir QT_QPA_PLATFORM=offscreen QML_INSPECTOR_PORT=3768 \
-    LD_LIBRARY_PATH="$PWD/s7/result-bundle/lib" setsid nohup s7/result-bundle/bin/LogosBasecamp \
+  XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir QT_QPA_PLATFORM=offscreen QML_DISABLE_DISK_CACHE=1 QML_INSPECTOR_PORT=3768 \
+    LEE_WALLET_HOME_DIR="$S1/wallet-home" LD_LIBRARY_PATH="$PWD/s7/result-bundle/lib" setsid nohup s7/result-bundle/bin/LogosBasecamp \
     --user-dir "$PWD/s7/user" -platform offscreen > logs/basecamp.log 2>&1 < /dev/null &
 }
 

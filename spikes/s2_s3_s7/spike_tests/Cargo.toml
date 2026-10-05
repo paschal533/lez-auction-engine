@@ -1,0 +1,15 @@
+[package]
+name = "spike_tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lee = { workspace = true }
+lee_core = { workspace = true, features = ["host", "test_utils"] }
+risc0-zkvm = { workspace = true }
+serde = { workspace = true }
+spike_core = { path = "../core" }
+spike-methods = { path = "../methods" }
+token_core = { git = "https://github.com/logos-blockchain/lez-programs", rev = "64c01210adecd6b557dbd021a3cc94553f243fd8", package = "token_core" }
+token-methods = { git = "https://github.com/logos-blockchain/lez-programs", rev = "64c01210adecd6b557dbd021a3cc94553f243fd8", package = "token-methods" }
+spel-framework = { git = "https://github.com/logos-co/spel.git", rev = "1ef0500f8fc8ce3ddf95523726ae159db83f744f", package = "spel-framework" }

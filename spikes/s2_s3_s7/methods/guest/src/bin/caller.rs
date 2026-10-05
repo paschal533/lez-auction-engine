@@ -1,0 +1,198 @@
+#![cfg_attr(not(test), no_main)]
+
+use spel_framework::prelude::*;
+use spike_core::{
+    auction_seed, combine_seeds, named_pda_seed, seed_from_str, Auction, CalleeInstruction,
+    LiqRecord, ENGINE_AUTH_SEED, LIQREC_TAG, MINT_AUTH_SEED, VARIANT_A,
+};
+
+#[cfg(not(test))]
+risc0_zkvm::guest::entry!(main);
+
+/// Claim for a multi-seed PDA, computed the same way the SPEL macro does for `init, pda = [..]`.
+fn pda_claim(seeds: &[&[u8; 32]]) -> Claim {
+    Claim::Pda(PdaSeed::new(combine_seeds(seeds)))
+}
+
+/// Applies `count += 1` to a record account, creating the record payload when the account is
+/// still default. Returns the updated account and the count before the increment.
+fn bump_record(mut record: AccountWithMetadata, position: [u8; 32]) -> (Account, u64) {
+    let mut state = if record.account == Account::default() {
+        LiqRecord { position, count: 0 }
+    } else {
+        LiqRecord::try_from(&record.account.data).expect("record must decode")
+    };
+    assert_eq!(state.position, position, "record belongs to another position");
+    let before = state.count;
+    state.count = state.count.checked_add(1).expect("record count overflow");
+    record.account.data = (&state).into();
+    (record.account, before)
+}
+
+#[lez_program(instruction = "spike_core::CallerInstruction")]
+mod caller {
+    #[allow(unused_imports)]
+    use super::*;
+
+    /// S2: chain to `callee.guarded_{a,b,c}`. Variants B and C authorise the engine authority
+    /// PDA (`ENGINE_AUTH`) for the callee via PDA seeds; variant A only relies on `caller_program_id`.
+    #[instruction]
+    pub fn call_guarded(
+        config: AccountWithMetadata,
+        #[account(pda = literal("ENGINE_AUTH"))] authority: AccountWithMetadata,
+        #[account(signer)] user: AccountWithMetadata,
+        variant: u8,
+        callee_program_id: ProgramId,
+    ) -> SpelResult {
+        let uses_pda = variant != VARIANT_A;
+        let mut authority_for_call = authority.clone();
+        authority_for_call.is_authorized = uses_pda;
+        let seeds = if uses_pda {
+            vec![named_pda_seed(ENGINE_AUTH_SEED)]
+        } else {
+            vec![]
+        };
+        let call = ChainedCall::new(
+            callee_program_id,
+            vec![config.clone(), authority_for_call, user.clone()],
+            &CalleeInstruction::from_variant(variant),
+        )
+        .with_pda_seeds(seeds);
+        Ok(SpelOutput::execute(vec![config, authority, user], vec![call]))
+    }
+
+    /// S3: create `["LIQREC", config, position]` on first use (`Claim::Pda`), `count += 1`.
+    #[instruction]
+    pub fn open_record(
+        #[account(signer)] user: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut, pda = [literal("LIQREC"), account("config"), arg("position")])]
+        record: AccountWithMetadata,
+        position: [u8; 32],
+    ) -> SpelResult {
+        let claim = pda_claim(&[
+            &seed_from_str(LIQREC_TAG),
+            config.account_id.value(),
+            &position,
+        ]);
+        let (record_account, _before) = bump_record(record, position);
+        Ok(spel_framework::SpelOutput::execute(
+            vec![
+                AccountPostState::new(user.account),
+                AccountPostState::new(config.account),
+                AccountPostState::new_claimed_if_default(record_account, claim),
+            ],
+            vec![],
+        ))
+    }
+
+    /// S3: first-use path. Creates the record if absent (claim-if-default), asserts
+    /// `nonce == record.count`, creates `["AUCTION", config, position, nonce]`, `count += 1`.
+    #[instruction]
+    pub fn open_auction(
+        #[account(signer)] user: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut, pda = [literal("LIQREC"), account("config"), arg("position")])]
+        record: AccountWithMetadata,
+        #[account(init, pda = [literal("AUCTION"), account("config"), arg("position"), arg("nonce")])]
+        mut auction: AccountWithMetadata,
+        position: [u8; 32],
+        nonce: u64,
+    ) -> SpelResult {
+        let record_claim = pda_claim(&[
+            &seed_from_str(LIQREC_TAG),
+            config.account_id.value(),
+            &position,
+        ]);
+        let auction_claim = Claim::Pda(auction_seed(&config.account_id, &position, nonce));
+        let (record_account, before) = bump_record(record, position);
+        assert_eq!(nonce, before, "auction nonce must equal the record count");
+        auction.account.data = (&Auction { position, nonce }).into();
+        Ok(spel_framework::SpelOutput::execute(
+            vec![
+                AccountPostState::new(user.account),
+                AccountPostState::new(config.account),
+                AccountPostState::new_claimed_if_default(record_account, record_claim),
+                AccountPostState::new_claimed(auction.account, auction_claim),
+            ],
+            vec![],
+        ))
+    }
+
+    /// S3: record must already exist; the auction claim is generated by the SPEL macro
+    /// (`SpelOutput::execute(vec![idents..], ..)` -> `execute_with_claims`).
+    #[instruction]
+    pub fn open_auction_existing(
+        #[account(signer)] user: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut, pda = [literal("LIQREC"), account("config"), arg("position")])]
+        mut record: AccountWithMetadata,
+        #[account(init, pda = [literal("AUCTION"), account("config"), arg("position"), arg("nonce")])]
+        mut auction: AccountWithMetadata,
+        position: [u8; 32],
+        nonce: u64,
+    ) -> SpelResult {
+        assert_ne!(
+            record.account,
+            Account::default(),
+            "record must be opened before the auction"
+        );
+        let (record_account, before) = bump_record(record.clone(), position);
+        assert_eq!(nonce, before, "auction nonce must equal the record count");
+        record.account = record_account;
+        auction.account.data = (&Auction { position, nonce }).into();
+        Ok(SpelOutput::execute(
+            vec![user, config, record, auction],
+            vec![],
+        ))
+    }
+
+    /// S7: mint `amount_to_mint` of the token whose mint authority is this program's
+    /// `MINT_AUTH` PDA, via chained `Token::MintWithAuthority`.
+    #[instruction]
+    pub fn mint_to(
+        #[account(signer)] operator: AccountWithMetadata,
+        #[account(mut)] definition: AccountWithMetadata,
+        #[account(mut)] holder_holding: AccountWithMetadata,
+        #[account(pda = literal("MINT_AUTH"))] mint_authority: AccountWithMetadata,
+        amount_to_mint: u128,
+    ) -> SpelResult {
+        let token_program_id = definition.account.program_owner;
+        let mut authority_authorized = mint_authority.clone();
+        authority_authorized.is_authorized = true;
+        let call = ChainedCall::new(
+            token_program_id,
+            vec![
+                definition.clone(),
+                holder_holding.clone(),
+                authority_authorized,
+            ],
+            &token_core::Instruction::MintWithAuthority { amount_to_mint },
+        )
+        .with_pda_seeds(vec![named_pda_seed(MINT_AUTH_SEED)]);
+        Ok(SpelOutput::execute(
+            vec![operator, definition, holder_holding, mint_authority],
+            vec![call],
+        ))
+    }
+
+    /// S7: burn `amount_to_burn` from the holder (who signs the top-level transaction) via
+    /// chained `Token::Burn`.
+    #[instruction]
+    pub fn burn_from(
+        #[account(mut)] definition: AccountWithMetadata,
+        #[account(mut, signer)] holder_holding: AccountWithMetadata,
+        amount_to_burn: u128,
+    ) -> SpelResult {
+        let token_program_id = definition.account.program_owner;
+        let call = ChainedCall::new(
+            token_program_id,
+            vec![definition.clone(), holder_holding.clone()],
+            &token_core::Instruction::Burn { amount_to_burn },
+        );
+        Ok(SpelOutput::execute(
+            vec![definition, holder_holding],
+            vec![call],
+        ))
+    }
+}

@@ -1,0 +1,11 @@
+[workspace]
+members = ["core", "methods", "spike_tests"]
+exclude = ["methods/guest"]
+resolver = "2"
+
+[workspace.dependencies]
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4", features = ["host"] }
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4", features = ["test-utils"] }
+risc0-zkvm = { version = "=3.0.5" }
+borsh = { version = "1.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }

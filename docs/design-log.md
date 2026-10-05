@@ -411,3 +411,62 @@ Heavy, slow builds (about 70 min cold guests, 75 min lez_core from source); netw
 
 **Status**
 Accepted (S1)
+
+
+---
+
+## ADR-019: S2 Outcome: Host Authentication of the Engine via the Engine Authority PDA
+
+**Context**
+Spike S2 (docs/spikes/S2.md) compared three guards for calls from the host program into engine-only entry points (`liquidate_position`, `engine_freeze_new_debt`): A, `caller_program_id == stored engine program id`; B, the stored engine authority PDA is authorised in the call; C, both. Tested in-process on lee v0.2.4 (`47eba256`) with SPEL `1ef0500f` and risc0-zkvm 3.0.5, four tests per variant: legitimate chained call, direct top-level call, impostor program chaining to the callee (forged flag, forged flag with wrong seeds, own PDA), and a user-signed tx listing the PDA. All 12 tests pass.
+
+**Decision**
+Variant B. The host stores the engine authority PDA and requires it to be present and authorised; the engine authorises it with `ChainedCall::with_pda_seeds`. Cycles of the legitimate transaction (caller + callee, 2 executions): A 367,354, B 372,316, C 372,601. A is only 1.35% cheaper than B, below the 20% threshold in the brief, and B mirrors the stablecoin's existing admin and freeze checks.
+
+**Trade-offs**
+- The guard in the guest does not reject a forged `is_authorized` flag by itself; the impostor attacks (modes 0 and 1) on B were rejected by lee's post-execution `InvalidAccountAuthorization` check. B is as strong as that lee rule. A relies on `caller_program_id`, which lee also checks (`MismatchedCallerProgramId`).
+- Test (4), a user-signed tx listing the PDA, only exercises the PDA path for B; A and C reject it earlier on the `caller_program_id` check.
+- Both A and B bind to the engine's ImageID (the PDA is derived from the program id), so a second or upgraded engine build needs its own stored config; the config creation and rotation path was not tested (the config account was inserted with `force_insert_account`).
+- The brief's `guarded(expected_caller)` argument was replaced by a stored config, because an argument chosen by the caller is not a guard.
+- Cycles are executor cycles (dev mode, natively built guests), not proving cost. Nothing was run on a sequencer.
+
+**Status**
+Accepted (S2)
+
+---
+
+## ADR-020: S3 Outcome: Arg-Seeded PDAs Created on First Use
+
+**Context**
+Spike S3 (docs/spikes/S3.md) checked whether SPEL at `1ef0500f` can create `["LIQREC", config, position]` on first use with `Claim::Pda` and derive `["AUCTION", config, position, nonce]` from instruction arguments, and whether the off-chain derivation equals the on-chain one. All 7 tests pass in-process.
+
+**Decision**
+Use these forms (exact syntax in S3.md): record `#[account(mut, pda = [literal("LIQREC"), account("config"), arg("position")])]` with an explicit `AccountPostState::new_claimed_if_default(.., Claim::Pda(seed))` (the `init` attribute fails with `AccountAlreadyInitialized` on a non-default account, so it cannot express create-if-absent); auction `#[account(init, pda = [literal("AUCTION"), account("config"), arg("position"), arg("nonce")])]`, claimed either by the macro (two-segment `SpelOutput::execute(vec![idents], ..)`) or explicitly (three-segment path). Seed encoding: literal zero-padded to 32 bytes, `account` is the 32-byte id, `[u8;32]` raw, `u64` little-endian zero-padded, several seeds combined as SHA-256 of the concatenation. Off-chain code must use the same rule; `spike_core::combine_seeds` is verified equal to `spel_framework::pda::compute_pda` and to the addresses actually claimed. A replayed nonce is rejected (by `AccountAlreadyInitialized` first, by the `nonce == count` assertion second); a skipped nonce is rejected by the assertion. Cycles (`caller` only): `open_record` about 158k create / 165k update, `open_auction` about 224k to 231k, macro-claim variant 244k.
+
+**Trade-offs**
+- Tested in-process only: no sequencer submit, no `spel` CLI call with arg-seeded PDAs, no IDL generation check for the array/u64 args.
+- The brief is ambiguous about the counter: here both `open_record` and `open_auction` increment the same `count`; the engine design must pick one owner.
+- `config` was a plain default account and the instructions are permissionless for any signer; access control is not part of this result.
+- The macro rewrite to `execute_with_claims` only happens for the exact two-segment path `SpelOutput::execute` with a `vec![idents]` argument.
+- Cycles are executor cycles from natively built guests.
+
+**Status**
+Accepted (S3)
+
+---
+
+## ADR-021: S7 Outcome: Mock Protocol Token Minted from an Engine PDA
+
+**Context**
+Spike S7 (docs/spikes/S7.md) checked the mint-by-PDA flow of `lez-programs/programs/token_mint_authority` for the engine: a token definition whose `mint_authority` is a PDA of the engine program, minted through a chained `Token::MintWithAuthority` with PDA seeds, then burned through a chained `Token::Burn`. All 4 tests pass in-process against the token guest at lez-programs `64c01210`.
+
+**Decision**
+The engine can be the sole minter of the mock protocol token: set the definition's authority to the engine's `MINT_AUTH` PDA and chain `MintWithAuthority` with `.with_pda_seeds`. A user key cannot mint (wrong authority, or PDA listed but unauthorised, or self-authority `Mint` not signed). A holder-signed chained `Burn` works. Cycles (2 executions each): mint 465,840 (caller 285,927 + token 179,913), burn 330,939 (caller 189,074 + token 141,865).
+
+**Trade-offs**
+- The definition and the holder's holding were inserted into the test state directly; the S1 spike created a PDA-authority token on a real sequencer for the faucet PDA, but this harness did not repeat that for the engine PDA. Minting to a fresh (uninitialised) holding and burning tokens held by an engine PDA were not tested.
+- `mint_to` is open to any signer in the spike; the PDA only guarantees that the engine program is the sole minting path. Gating who may trigger a mint is engine logic and is untested here.
+- Cycles are executor cycles from natively built guests, not proving cost.
+
+**Status**
+Accepted (S7)

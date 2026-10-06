@@ -1,5 +1,5 @@
 //! Engine-only accounting (spec §5.8, ADR-010). Immutable updates.
-use crate::auction::{BidFill, ChainEnd};
+use crate::auction::{Auction, BidFill, ChainEnd};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Accounting {
@@ -32,6 +32,21 @@ impl Accounting {
             total_shortfall_booked: self.total_shortfall_booked.saturating_add(e.shortfall),
             ..self
         }
+    }
+
+    /// Chain-end fold (ADR-023): `Accounting` is not written by non-final bids, so the settling
+    /// transition adds the auction's cumulative raised amounts and books its shortfall, once.
+    /// Call it on every chain-end path (`apply_bid` returning `Some(ChainEnd)`, `settle_empty`).
+    pub fn record_settled(self, a: &Auction, e: &ChainEnd) -> Self {
+        debug_assert!(a.status == crate::auction::Status::Settled);
+        Self {
+            total_debt_burned: self.total_debt_burned.saturating_add(a.debt_raised),
+            total_penalty_collected: self
+                .total_penalty_collected
+                .saturating_add(a.penalty_raised),
+            ..self
+        }
+        .record_chain_end(e)
     }
 
     /// A debt auction of `lot` starts: that much unbacked debt is reserved (cannot be settled from the buffer).
@@ -156,5 +171,79 @@ mod fix1_tests {
         assert_eq!(a.debt_on_auction, 0);
         let (a, burned) = a.settle_debt(u128::MAX, 1_000);
         assert_eq!((burned, a.unbacked_debt), (200, 0));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::arithmetic_side_effects)] // the crate denies it; test sums of small constants
+mod record_settled_tests {
+    use super::*;
+    use crate::auction::{
+        apply_bid, quote_bid, settle_empty, Auction, BidRequest, ChainEnd, Status,
+    };
+    use crate::liquidation::LiquidationQuote;
+    use crate::schedule::{Schedule, SchedulePoint};
+    use crate::units::RAY;
+
+    fn flat() -> Schedule {
+        Schedule::new(&[SchedulePoint {
+            elapsed_ms: 0,
+            discount_bps: 0,
+        }])
+        .unwrap()
+    }
+
+    #[test]
+    fn fold_at_chain_end_equals_per_bid_fold() {
+        let q = LiquidationQuote {
+            debt_principal: 900,
+            amount_to_raise: 990,
+            reserve: 990,
+            keeper_reward: 0,
+            lot: 2_000,
+            seized: 2_000,
+        };
+        let mut a = Auction::open(&q, 0, flat(), 0);
+        let mut per_bid = Accounting::default();
+        let mut end = None;
+        for coin in [400u128, 590] {
+            let req = BidRequest {
+                coin_in_max: coin,
+                min_collateral_out: 0,
+            };
+            let f = quote_bid(&a, &req, RAY, 0, 25, 110).unwrap();
+            per_bid = per_bid.record_bid(&f);
+            let (n, e) = apply_bid(&a, &f);
+            a = n;
+            end = e;
+        }
+        let e: ChainEnd = end.expect("second bid reaches the target");
+        assert_eq!(a.status, Status::Settled);
+        let per_bid = per_bid.record_chain_end(&e);
+        let at_end = Accounting::default().record_settled(&a, &e);
+        assert_eq!(at_end, per_bid);
+        assert_eq!(
+            at_end.total_debt_burned + at_end.total_penalty_collected,
+            a.raised()
+        );
+    }
+
+    #[test]
+    fn settle_empty_with_earlier_raise_books_raised_and_shortfall() {
+        let q = LiquidationQuote {
+            debt_principal: 900,
+            amount_to_raise: 990,
+            reserve: 990,
+            keeper_reward: 0,
+            lot: 0,
+            seized: 0,
+        };
+        let mut a = Auction::open(&q, 0, flat(), 0);
+        a.debt_raised = 300; // raised by earlier bids before the lot ran out
+        let (s, e) = settle_empty(&a).unwrap();
+        let acc = Accounting::default().record_settled(&s, &e);
+        assert_eq!(acc.total_debt_burned, 300);
+        assert_eq!(acc.unbacked_debt, 600);
+        assert_eq!(acc.total_shortfall_booked, 600);
     }
 }

@@ -91,6 +91,7 @@ See the `auction` rows in the Call Sites table of [math.md](math.md).
 
 - `record_bid(BidFill)`: `total_debt_burned += debt_part`, `total_penalty_collected += penalty_part`. `unbacked_debt` is untouched by bids.
 - `record_chain_end(ChainEnd)`: `unbacked_debt += shortfall` and `total_shortfall_booked += shortfall`. Only a chain end (from `apply_bid` or `settle_empty`) can book a shortfall.
+- `record_settled(&Auction, &ChainEnd)`: the chain-end fold the program uses (ADR-023). Non-final bids do not write `Accounting`; the settling transition adds the auction's cumulative `debt_raised` to `total_debt_burned` and `penalty_raised` to `total_penalty_collected`, then applies `record_chain_end`. Every chain-end path (settling bid, `settle_empty`) calls it exactly once. For live auctions the raised amounts live only in the `Auction`; dashboards must add them (ADR-023 consequence 4).
 - All counters use saturating addition.
 
 ## settle_debt

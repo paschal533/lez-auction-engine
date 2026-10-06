@@ -46,7 +46,7 @@ fn check_settle_empty(q: &LiquidationQuote) -> Result<(), TestCaseError> {
     prop_assert_eq!(e.shortfall, q.debt_principal);
     prop_assert_eq!(e.release, q.reserve);
     prop_assert_eq!(e.leftover, 0);
-    let acc = Accounting::default().record_chain_end(&e);
+    let acc = Accounting::default().record_settled(&s, &e);
     prop_assert_eq!(acc.unbacked_debt, q.debt_principal);
     prop_assert_eq!(acc.total_shortfall_booked, q.debt_principal);
     prop_assert_eq!(settle_empty(&s), Err(AuctionError::NotAuctioning));
@@ -82,6 +82,7 @@ proptest! {
         }
         let mut a = Auction::open(&q, 0, params().schedule, 0);
         let mut acc = Accounting::default();
+        let mut per_bid = Accounting::default(); // shadow: the old per-bid fold, cross-checked at chain end
         let mut t = 0u64; let mut last_d = 0u128; let mut ends = 0u32;
         let (mut sum_debt, mut sum_pen) = (0u128, 0u128);
         let chost = params().chost().unwrap();
@@ -97,7 +98,7 @@ proptest! {
             sum_debt += f.debt_part;
             sum_pen += f.penalty_part;
             let (n, end) = apply_bid(&a, &f);
-            acc = acc.record_bid(&f);
+            per_bid = per_bid.record_bid(&f);
             // Invariant 8 (running): independent sums match the auction's counters
             prop_assert_eq!(n.debt_raised, sum_debt);
             prop_assert_eq!(n.penalty_raised, sum_pen);
@@ -110,7 +111,9 @@ proptest! {
             prop_assert!(n.status == Status::Settled || n.remaining_target() == 0 || n.remaining_target() >= chost);
             if let Some(e) = end {
                 ends += 1;
-                acc = acc.record_chain_end(&e);
+                acc = acc.record_settled(&n, &e);
+                // ADR-023: the chain-end fold equals the per-bid fold plus the chain end
+                prop_assert_eq!(acc, per_bid.record_chain_end(&e));
                 // Invariant 8: raised debt + shortfall = principal
                 prop_assert_eq!(n.debt_raised + e.shortfall, n.debt_principal);
                 prop_assert_eq!(e.shortfall, n.debt_principal - sum_debt);
@@ -142,7 +145,12 @@ proptest! {
             a = n;
         }
         prop_assert!(ends <= 1); // chain end applied once
-        prop_assert_eq!(acc.total_debt_burned + acc.total_penalty_collected, a.raised());
+        // ADR-023: the counters lag until chain end, then equal the auction's cumulative raise.
+        if a.status == Status::Settled {
+            prop_assert_eq!(acc.total_debt_burned + acc.total_penalty_collected, a.raised());
+        } else {
+            prop_assert_eq!(acc.total_debt_burned + acc.total_penalty_collected, 0);
+        }
     }
 
     /// Reward consumes the whole seizure (lot 0); settle_empty is the only way out.

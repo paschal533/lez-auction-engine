@@ -1,0 +1,221 @@
+From 45bf4969f342e7776f0334e2baeffc61dab7510d Mon Sep 17 00:00:00 2001
+From: paschal533 <okwuosahpaschal@gmail.com>
+Date: Tue, 6 Oct 2026 14:48:32 +0100
+Subject: [PATCH] fix(stablecoin): round the proportional seize bound down
+ (owner protection); projection and threshold tests
+
+A ceiling let every liquidate_position call take at least one collateral unit however
+small normalized_debt_to_cover was, so repeated tiny partial liquidations could drain a
+position. The bound now rounds down; full seizure is unaffected (floor(1.25*C) >= C,
+capped at C). ADR-026 amended (spec 5.10 / ADR-016 pointer), hooks.md updated with the
+rounding rationale and the dust note. New tests: exact floor values, projection-only
+liquidatability, and equality-at-threshold is healthy.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ programs/stablecoin/src/liquidation_hooks.rs | 132 +++++++++++++++++--
+ 1 file changed, 121 insertions(+), 11 deletions(-)
+
+diff --git a/programs/stablecoin/src/liquidation_hooks.rs b/programs/stablecoin/src/liquidation_hooks.rs
+index bda0057..7ed87ba 100644
+--- a/programs/stablecoin/src/liquidation_hooks.rs
++++ b/programs/stablecoin/src/liquidation_hooks.rs
+@@ -175,8 +175,11 @@ pub fn engine_freeze_new_debt(
+ 
+ const BPS: u128 = 10_000;
+ 
+-/// `min(collateral, ceil(collateral × cover / debt × (1e4 + MAX_PENALTY_BPS) / 1e4))` in U512
+-/// (owner protection independent of the engine, lez-auction-engine spec §5.10). `debt > 0`.
++/// `min(collateral, floor(collateral × cover / debt × (1e4 + MAX_PENALTY_BPS) / 1e4))` in U512
++/// (owner protection independent of the engine, lez-auction-engine spec §5.10 as amended by
++/// ADR-026). Rounds DOWN: the seized collateral is paid out of the owner's funds, and a ceiling
++/// would let every call take at least one unit however small `cover` is. Full seizure is
++/// unaffected (`floor(1.25 × C) >= C`, then capped at `C`). `debt > 0`.
+ pub(crate) fn proportional_seize_bound(collateral: u128, cover: u128, debt: u128) -> u128 {
+     // Checked U512 arithmetic (upstream's denied `arithmetic_side_effects` style); cannot overflow:
+     // u128 × u128 × 12_500 < 2^270.
+@@ -189,9 +192,7 @@ pub(crate) fn proportional_seize_bound(collateral: u128, cover: u128, debt: u128
+         .checked_mul(U512::from(BPS))
+         .expect("fits U512");
+     let bound = numerator
+-        .checked_add(denominator)
+-        .and_then(|v| v.checked_sub(U512::from(1u64)))
+-        .and_then(|v| v.checked_div(denominator))
++        .checked_div(denominator)
+         .expect("debt > 0 is asserted before the bound");
+     if bound >= U512::from(collateral) {
+         collateral
+@@ -781,6 +782,8 @@ mod tests {
+         cover: u128,
+         oracle_ts: u64,
+         frozen: bool,
++        fee_per_millisecond: u128,
++        accrued_at: u64,
+     }
+ 
+     /// Defaults: min CR 1.5, redemption 0.5, accumulator 1.0 → liquidatable iff collateral < 0.75 × debt.
+@@ -795,6 +798,8 @@ mod tests {
+             cover: 2_000,
+             oracle_ts: NOW,
+             frozen: false,
++            fee_per_millisecond: TEST_STABILITY_FEE_PER_MILLISECOND,
++            accrued_at: NOW,
+         }
+     }
+ 
+@@ -839,11 +844,12 @@ mod tests {
+             a.position,
+             a.vault,
+             a.custody,
+-            accumulator_account(ACCUMULATOR_ANCHOR, NOW),
++            accumulator_account(ACCUMULATOR_ANCHOR, c.accrued_at),
+             a.redemption,
+             oracle_account(c.oracle_ts, REDEMPTION_PRICE_ANCHOR),
+             protocol_parameters_account(ParameterOverrides {
+                 is_frozen: c.frozen,
++                stability_fee_per_millisecond: c.fee_per_millisecond,
+                 ..ParameterOverrides::default()
+             }),
+             clock_account(NOW),
+@@ -897,7 +903,7 @@ mod tests {
+ 
+     #[test]
+     fn partial_seizure_moves_exactly_the_amount() {
+-        // bound = ceil(1000 × 1000 / 2000 × 1.25) = 625
++        // bound = floor(1000 × 1000 / 2000 × 1.25) = 625
+         let (post, calls) = run(Case {
+             seize: 400,
+             cover: 1_000,
+@@ -1059,7 +1065,7 @@ mod tests {
+ 
+     #[test]
+     fn full_collateral_with_partial_debt_moves_only_the_seized_amount() {
+-        // bound = min(1000, ceil(1000 x 1600 / 2000 x 1.25)) = 1000, so all collateral but not all debt may go;
++        // bound = min(1000, floor(1000 x 1600 / 2000 x 1.25)) = 1000, so all collateral but not all debt may go;
+         // that is a partial seizure: the donation stays in the vault and the debt remainder stays on the position.
+         let (post, calls) = run(Case {
+             seize: 1_000,
+@@ -1147,13 +1153,117 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn proportional_bound_is_capped_at_collateral_and_rounds_up() {
+-        assert_eq!(proportional_seize_bound(1_000, 2_000, 2_000), 1_000); // 1250 capped
++    fn proportional_bound_is_capped_at_collateral_and_rounds_down() {
++        assert_eq!(proportional_seize_bound(1_000, 2_000, 2_000), 1_000); // 2500 capped
+         assert_eq!(proportional_seize_bound(1_000, 1_000, 2_000), 625);
+-        assert_eq!(proportional_seize_bound(3, 1, 7), 1); // ceil(3 × 1 × 12500 / 70000) = ceil(0.535…)
++        assert_eq!(proportional_seize_bound(3, 1, 7), 0); // floor(3 × 1 × 12500 / 70000) = floor(0.5357)
++        assert_eq!(proportional_seize_bound(1_000, 1, 2_000_000), 0); // 1000 × 1 × 1.25 / 2e6 = 0.000625
++        assert_eq!(proportional_seize_bound(1_000, 1_600, 2_000_000), 1); // exactly 1.0
++        assert_eq!(proportional_seize_bound(1_000, 1_599, 2_000_000), 0); // 0.99937…
++        assert_eq!(proportional_seize_bound(1_000, 800, 1_000), 1_000); // 1250 capped: full seizure stays possible
+         assert_eq!(
+             proportional_seize_bound(u128::MAX, u128::MAX, u128::MAX),
+             u128::MAX
+         );
+     }
++
++    #[test]
++    #[should_panic(expected = "collateral_to_seize exceeds the proportional bound")]
++    fn tiny_cover_cannot_seize_even_one_unit() {
++        // bound = floor(1000 × 1 × 1.25 / 2_000_000) = 0: a ceiling would have allowed 1 per call.
++        run(Case {
++            debt: 2_000_000,
++            cover: 1,
++            seize: 1,
++            ..unsafe_case()
++        });
++    }
++
++    #[test]
++    fn exact_integer_bound_is_accepted() {
++        // bound = floor(1000 × 1600 × 1.25 / 2_000_000) = 1.
++        let (post, calls) = run(Case {
++            debt: 2_000_000,
++            cover: 1_600,
++            seize: 1,
++            ..unsafe_case()
++        });
++        assert_eq!(position_after(&post).collateral_amount, 999);
++        assert!(transferred(&calls, 1));
++    }
++
++    #[test]
++    #[should_panic(expected = "collateral_to_seize exceeds the proportional bound")]
++    fn one_above_the_exact_bound_rejected() {
++        run(Case {
++            debt: 2_000_000,
++            cover: 1_600,
++            seize: 2,
++            ..unsafe_case()
++        });
++    }
++
++    #[test]
++    #[should_panic(expected = "collateral_to_seize exceeds the proportional bound")]
++    fn cover_just_below_full_share_cannot_take_all_collateral() {
++        // C = 1000, N = 2000, cover = 1599 → floor(999.375) = 999 < 1000.
++        run(Case {
++            cover: 1_599,
++            seize: 1_000,
++            ..unsafe_case()
++        });
++    }
++
++    /// C = 1000, N = 1000, minimum ratio 1.5, redemption price 0.5, fee 2.0 per millisecond.
++    fn projection_case(accrued_at: u64) -> Case {
++        Case {
++            collateral: 1_000,
++            debt: 1_000,
++            vault_balance: 1_000,
++            seize: 1_000,
++            cover: 1_000,
++            fee_per_millisecond: stablecoin_core::math::FIXED_POINT_ONE * 2,
++            accrued_at,
++            ..unsafe_case()
++        }
++    }
++
++    #[test]
++    fn liquidatable_only_after_projection() {
++        // Anchor 1.0 at NOW (no projection): required = 1000 × 1.0 × 0.5 × 1.5 = 750 <= 1000 → healthy.
++        let control = std::panic::catch_unwind(|| run(projection_case(NOW)));
++        assert!(control.is_err(), "healthy on the stored accumulator");
++        // Anchor is 1 ms old, so the projected accumulator is 2.0:
++        // required = 1000 × 2.0 × 0.5 × 1.5 = 1500 > 1000 → liquidatable.
++        let (post, _) = run(projection_case(NOW - 1));
++        assert_eq!(position_after(&post).collateral_amount, 0);
++    }
++
++    #[test]
++    #[should_panic(expected = "Position is not liquidatable: it is collateralized")]
++    fn exactly_at_threshold_is_rejected() {
++        // C = 1500, N = 2000: required = 2000 × 1.0 × 0.5 × 1.5 = 1500 == collateral → collateralised.
++        run(Case {
++            collateral: 1_500,
++            debt: 2_000,
++            vault_balance: 1_500,
++            seize: 1_500,
++            cover: 2_000,
++            ..unsafe_case()
++        });
++    }
++
++    #[test]
++    fn one_unit_below_threshold_is_liquidatable() {
++        // C = 1499 < 1500 required.
++        let (post, _) = run(Case {
++            collateral: 1_499,
++            debt: 2_000,
++            vault_balance: 1_499,
++            seize: 1_499,
++            cover: 2_000,
++            ..unsafe_case()
++        });
++        assert_eq!(position_after(&post).collateral_amount, 0);
++    }
+ }
+-- 
+2.50.1.windows.1
+

@@ -13,10 +13,13 @@ The vendor commit has the subject `vendor: lez-programs 64c01210 (stablecoin, to
 
 ## Local adjustments (not offered upstream)
 
-- `programs/upstream_integration_tests/Cargo.toml`: amm, ata and token_mint_authority dependencies removed (their tests are not vendored).
+- `programs/upstream_integration_tests/Cargo.toml`: the dependencies `amm_core`, `ata_core`, `token_mint_authority_core`, `amm-methods`, `ata-methods`, `twap-oracle-methods` and `token-mint-authority-methods` are removed, because upstream's `tests/token.rs`, `tests/amm.rs`, `tests/ata.rs` and `tests/token_mint_authority.rs` (and the twap_oracle guest) are not vendored; only `tests/stablecoin.rs` is.
 - Root `Cargo.toml` carries upstream's `[workspace.lints]` verbatim so `[lints] workspace = true` resolves.
 - Upstream's root `clippy.toml` and `rustfmt.toml` are copied into `programs/stablecoin/`, `programs/token/` and `programs/twap_oracle/` (not the repo root, so our crates keep their own style). The stablecoin crates do not opt into `[workspace.lints]` upstream either; their clippy gate is `-D warnings` with this `clippy.toml`. No nightly toolchain is installed in WSL (`rustup toolchain list`: stable (default), 1.94.0 (active), risc0), so upstream's `cargo +nightly fmt` cannot run here; formatting is checked with stable rustfmt and this config against the Task 3 baseline below.
 - `Cargo.lock` is seeded from upstream's lock at the pin, then `proptest` is pinned to `1.11.0` (auction_core dev-dependency); `ruint` resolves to `1.17.0`.
+
+- Build and test only through `scripts/wsl-cargo.sh`: cargo run from Git Bash on Windows cannot fetch the vendored crates' git dependencies (CI on Ubuntu is unaffected).
+- Changes under `programs/upstream_integration_tests/` are NOT exported in the patch series: its path differs from upstream's `programs/integration_tests/`. Upstream-bound tests for the hooks live in `programs/stablecoin` (unit tests) or must be ported by hand in the upstream PR.
 
 ## Formatting baseline (stable rustfmt, vendored config)
 

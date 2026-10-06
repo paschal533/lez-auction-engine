@@ -13,3 +13,7 @@ patches=("$repo"/patches/stablecoin/*.patch)
 if (( ${#patches[@]} == 0 )); then echo "check-hook-patches: no patches"; exit 0; fi
 git -c user.email=check@local -c user.name=check am -q "${patches[@]}"
 echo "check-hook-patches: ${#patches[@]} patch(es) apply cleanly"
+# The patched pristine tree must equal the repo's stablecoin tree (catches a drifting export).
+diff -r -x methods_b -x clippy.toml -x rustfmt.toml "$tmp/programs/stablecoin" "$repo/programs/stablecoin" \
+  || { echo "check-hook-patches: patched tree differs from repo programs/stablecoin" >&2; exit 1; }
+echo "check-hook-patches: patched tree matches programs/stablecoin"

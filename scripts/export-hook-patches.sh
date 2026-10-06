@@ -9,10 +9,11 @@ if [[ -z "$base" ]]; then echo "export-hook-patches: vendor commit not found" >&
 out=patches/stablecoin
 mkdir -p "$out"; rm -f "$out"/*.patch
 n=0
-for sha in $(git rev-list --reverse "$base"..HEAD -- programs/stablecoin); do
+paths=(programs/stablecoin ':(exclude)programs/stablecoin/methods_b' ':(exclude)programs/stablecoin/clippy.toml' ':(exclude)programs/stablecoin/rustfmt.toml')
+for sha in $(git rev-list --reverse "$base"..HEAD -- "${paths[@]}"); do
   if git log -1 --format=%s "$sha" | grep -q '\[local\]'; then continue; fi
+  if [[ -z "$(git diff-tree --no-commit-id --name-only -r "$sha" -- "${paths[@]}")" ]]; then continue; fi
   n=$((n + 1))
-  git format-patch -1 "$sha" --start-number "$n" -o "$out" --quiet -- programs/stablecoin \
-    ':(exclude)programs/stablecoin/methods_b' ':(exclude)programs/stablecoin/clippy.toml' ':(exclude)programs/stablecoin/rustfmt.toml'
+  git format-patch -1 "$sha" --start-number "$n" -o "$out" --quiet -- "${paths[@]}"
 done
 echo "export-hook-patches: $n patch(es) in $out"

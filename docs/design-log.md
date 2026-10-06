@@ -358,6 +358,8 @@ Partial liquidation (M1) requires the hook to accept amounts smaller than the fu
 (B): The PoC passes full amounts `(collateral_amount, normalized_debt)`, so M1 is an engine-only change with no second upstream PR. The host enforces a proportionality bound (owner protection independent of engine correctness):
 `collateral_to_seize ≤ min(Position.collateral_amount, ceil(Position.collateral_amount · normalized_debt_to_cover / Position.normalized_debt · (1e4 + MAX_PENALTY_BPS) / 1e4))`
 
+*Amended by ADR-026 (Task 5 review): the rounding is `floor`, not `ceil`.*
+
 Vault sweep applies on full seizure only: transfer the entire vault balance (sweeping donations).
 
 **Trade-offs**
@@ -608,3 +610,5 @@ Rotation is a single admin step (like `set_admin`). A wrong pair simply makes th
 
 **Status**
 Accepted (Plan 2, Task 4)
+
+**Amendment (Task 5 review).** Spec §5.10 and ADR-016 round the proportional seize bound `min(C, C·cover/N·(1e4 + MAX_PENALTY_BPS)/1e4)` up. That lets every call take at least one collateral unit regardless of `cover` (C = 1000, N = 2,000,000, cover = 1 gives a bound of 1 against a fair share of 0.000625), so repeated tiny partial liquidations could drain a position while clearing about 0.05% of its debt. This contradicts the spec's own "never more than its share plus the maximum penalty" and the global rule that paid-out amounts round down (the owner's collateral is paid out). The bound now rounds down. Full seizure is unaffected: `floor(1.25·C) >= C`, capped at `C`. A full-collateral, partial-debt seizure can leave dust debt on a zero-collateral position; that is the engine's concern.

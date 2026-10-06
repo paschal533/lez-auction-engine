@@ -1,7 +1,7 @@
 #![cfg_attr(not(test), no_main)]
 
 use spel_framework::prelude::*;
-use spike_core::{ImpostorInstruction, 
+use spike_core::{ImpostorInstruction,
     auction_seed, combine_seeds, named_pda_seed, seed_from_str, Auction, CalleeInstruction,
     LiqRecord, ENGINE_AUTH_SEED, LIQREC_TAG, MINT_AUTH_SEED, VARIANT_A,
 };

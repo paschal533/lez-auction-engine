@@ -40,7 +40,7 @@ impl PauseClock {
     pub fn observed(self, o: Observation, policy: OnsetPolicy) -> Self {
         let paused_now = o.admin_paused || !o.feed_valid;
         let derived = policy == OnsetPolicy::DerivedFromOracle;
-        // A publish timestamp from the future is clamped: over-pausing would be a griefing vector.
+        // Clamped: a future ts would both over-pause (griefing) and suppress later gap closure (under-pause).
         let ts = o.oracle_ts.min(o.now_ms);
         let mut next = self;
         match (paused_now, self.paused_since_ms) {

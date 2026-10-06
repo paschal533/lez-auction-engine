@@ -21,7 +21,7 @@ Module: `crates/auction_core/src/auction.rs` (spec sections 5.5, 5.6, 5.8). Pure
 
 `Auctioning -> Settled` is the only transition. Settled is the only terminal state. There is no restart and no expiry (ADR-012):
 
-- No restart: the starting price is fixed by the schedule, not by an oracle snapshot at open, so a restart would only reset the discount to its starting value, which achieves nothing.
+- No restart: The price is re-read at every bid, so a restart would only reset the discount from its maximum back to the start.
 - No expiry: Maker's `redo` exists because Maker fixes its starting price; this engine does not. Expiring an auction would book a shortfall while unsold collateral still exists, minting against debt that is still recoverable and diluting holders without a real loss. Instead an unsold auction stays open at its maximum discount until it settles.
 
 ## Opening
@@ -95,7 +95,7 @@ See the `auction` rows in the Call Sites table of [math.md](math.md).
 
 ## settle_debt
 
-`settle_debt(amount, buffer_balance)` burns `min(amount, buffer_balance, unbacked_debt)` and returns the new `Accounting` and the burned amount. `buffer_balance` is the ACTUAL balance of the surplus holding account, never a ledger-tracked figure, so debt can only be settled with coin that really exists. It decreases `unbacked_debt` and increases `total_debt_settled` by the burned amount; it cannot underflow because `burn <= unbacked_debt`.
+`settle_debt(amount, buffer_balance)` burns `min(amount, buffer_balance, unbacked_debt - debt_on_auction)` (see Debt Reservation) and returns the new `Accounting` and the burned amount. `buffer_balance` is the ACTUAL balance of the surplus holding account, never a ledger-tracked figure, so debt can only be settled with coin that really exists. It decreases `unbacked_debt` and increases `total_debt_settled` by the burned amount; it cannot underflow because `burn <= unbacked_debt - debt_on_auction <= unbacked_debt`.
 
 ## Surplus Auction (F5)
 
@@ -129,7 +129,7 @@ An instant Dutch auction that mints protocol tokens in exchange for stablecoin, 
 | Unstartable: `MintAuthorityMissing` | as above, `Err(MintAuthorityMissing)` | `Freeze` |
 | Unstartable: `ProtocolTokenMismatch` | as above, `Err(ProtocolTokenMismatch)` | `Freeze` |
 | Start already live | as above, `Err(DebtAuctionAlreadyLive)` | `RecoveryInProgress` |
-| Startable (or transient error) | as above, `Ok(())` or a transient start error (`InsufficientBadDebt`, `TokenNotConfigured`, `NotLive`, ...) | `NoAction` (a keeper should start an auction) |
+| Startable (or transient error) | as above, `Ok(())` or a transient start error (`InsufficientBadDebt`, `Math`) | `NoAction` (a keeper should start an auction) |
 
 ## Debt Reservation (no double coverage)
 

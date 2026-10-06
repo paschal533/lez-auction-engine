@@ -1,4 +1,4 @@
-//! Invariants 1–17 (spec §5.13) over random action sequences, plus split-bid neutrality and two-type pause.
+//! Core-level invariants 1, 3, 4, 5, 6, 8, 13, 14, 15, 16 (spec 5.13); 2, 7, 9-12, 17 are Plan 2 integration tests (plan Task 11 coverage split).
 use auction_core::{
     accounting::Accounting, auction::*, error::AuctionError, liquidation::*, math::mul_div_floor,
     pause::*, schedule::*, units::RAY,

@@ -6,7 +6,7 @@ The `auction_core::math` module provides safe, explicit arithmetic for the RFP-0
 
 This module exists because:
 1. **No u256 dependency**: Adding a u256 crate introduces significant code size overhead and is incompatible with zkVM cost targets (recursion, proving, verification time).
-2. **Explicit rounding**: Floor and ceiling rounding are explicit in the API, preventing silent truncation bugs when proportions and interest rates are computed.
+2. **Explicit rounding**: Floor and ceiling rounding are explicit in the API, preventing silent truncation bugs when proportions, prices and discounts are computed.
 3. **Safety**: The functions return errors on division by zero and overflow rather than silently wrapping.
 
 ## Architecture
@@ -101,7 +101,7 @@ Computes `ceil(x * y / d)`.
 
 ## Rounding Semantics
 
-**General rule**: Ceil for amounts owed or charged (e.g., `amount_to_raise`, `chost`). Floor for amounts paid out and for prices/discounts, so that rounding favours the protocol.
+**General rule**: Ceil for amounts owed or charged (e.g., `amount_to_raise`, `chost`). Floor for amounts paid out and for prices/discounts, so that rounding favours the protocol. Sole exception: the final-fill liveness rule (ADR-024; core.md Liveness).
 
 ### Floor
 
@@ -142,7 +142,7 @@ Prices are RAY collateral per 1 stablecoin: a lower price pays out less collater
 | price | oracle clamp lower | admin_ray | BPS − REF_ORACLE_CLAMP_BPS | BPS | floor | Protocol-token ref price is RAY coin per token. Floor lowers it: debt auctions then mint slightly more tokens per coin (favours taker), surplus auctions require slightly more tokens (favours protocol); error ≤ 1 RAY unit (1e-27 relative), immaterial |
 | price | oracle clamp upper | admin_ray | BPS + REF_ORACLE_CLAMP_BPS | BPS | floor | Protocol-token ref price is RAY coin per token. Floor lowers it: debt auctions then mint slightly more tokens per coin (favours taker), surplus auctions require slightly more tokens (favours protocol); error ≤ 1 RAY unit (1e-27 relative), immaterial |
 | auction | bid collateral out (`full_out`) | coin | price_ray | RAY - discount_ray | floor | Collateral paid out to the bidder rounds down; favours the protocol |
-| auction | bid charge when the lot binds (`charged`) | collateral_left | RAY - discount_ray | price_ray | ceil | Coin owed by the bidder for the remaining lot rounds up (then capped at the bid's coin); favours the protocol |
+| auction | bid charge when the lot binds (`charged`) | collateral_left | RAY - discount_ray | price_ray | ceil | Coin owed by the bidder for the remaining lot rounds up; favours the protocol |
 | auction | final-fill exception (`collateral_out`) | n/a | n/a | n/a | up (exception) | Only place a payout rounds UP: when the target-reaching fill (`coin == remaining`) floors to 0 collateral and the lot is non-empty, pay out exactly 1 base unit instead of 0 so the auction stays biddable. Bounded by 1 collateral base unit per auction; trades at most 1 unit of rounding for liveness |
 | system | surplus tokens, coin scaled by multiplier (`surplus_required_tokens`) | coin | mult_bps | BPS | ceil | Intermediate of tokens owed by the surplus taker; rounds up; favours the protocol |
 | system | surplus tokens owed (`surplus_required_tokens`) | scaled_coin | RAY | ref_ray | ceil | Protocol tokens owed by the surplus taker (burned) round up; favours the protocol |

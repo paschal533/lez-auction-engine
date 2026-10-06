@@ -45,7 +45,7 @@ Accepted (spec v5)
 ## ADR-003: GEB Increasing-Discount Auction with Maker Rails
 
 **Context**
-The collateral auction (F6) needs a pricing model that is both efficient (single-pass discount evaluation) and robust to parameter changes (restarting loses nothing). Reflexer's GEB uses an increasing-discount design; Maker uses caps and dust rules for safety.
+The collateral auction (F6) needs a pricing model that is both efficient (single-pass discount evaluation) and robust to parameter changes (the price is re-read at every bid, so a restart would only reset the discount from its maximum back to the start). Reflexer's GEB uses an increasing-discount design; Maker uses caps and dust rules for safety.
 
 **Options**
 - (A) Maker-style fixed-price auction with expiry and restart.
@@ -262,7 +262,7 @@ An auction can be larger than the type cap. Should it be blocked? Should unsold 
 - (C) Allow oversized alone (if all existing caps are free, liquidate alone).
 
 **Decision**
-(C): An oversized position `(amount_to_raise > cap − reserved)` is allowed only if both type and global reservations are 0 (it goes alone). When it settles, it releases its (over-size) reservation. There is no restart: a fixed starting price would mean restarting just resets the discount to the start, pointless. There is no expiry: `redo` in Maker exists because Maker fixes the starting price; we don't. Expiry would book a shortfall while unsold collateral exists (minting against recoverable debt, dilution without loss). Instead, unsold auctions sit at max discount until settled.
+(C): An oversized position `(amount_to_raise > cap − reserved)` is allowed only if both type and global reservations are 0 (it goes alone). When it settles, it releases its (over-size) reservation. There is no restart. The price is re-read at every bid, so a restart would only reset the discount from its maximum back to the start. There is no expiry: `redo` in Maker exists because Maker fixes the starting price; we don't. Expiry would book a shortfall while unsold collateral exists (minting against recoverable debt, dilution without loss). Instead, unsold auctions sit at max discount until settled.
 
 Vault sweep (full seizure only): the hook requires vault balance ≥ position collateral (not equal); on full seizure, transfer the **whole** vault balance, sweeping any donations. Shortfall is booked only when the lot is exhausted.
 
@@ -341,6 +341,8 @@ Accepted (spec v5)
 **Update (Plan 1, Task 12)**
 The Kani proofs are written (`crates/auction_core/src/kani_proofs.rs`, behind `cfg(kani)`) but were not run in Plan 1: Kani does not support Windows, the development platform. Execution moves to M6 per this ADR; the proptest suite and the Python differential model remain the Plan 1 gates.
 
+Kani `schedule_bounded` unwind(3) unverified; revisit at M6.
+
 ---
 
 ## ADR-016: Final Partial-Capable Hook Shape
@@ -388,6 +390,7 @@ If a debt auction is live, `check_solvency` reverts with `RecoveryInProgress` an
 
 **Trade-offs**
 With a working protocol token configured, `check_solvency` never freezes, even if debt auctions keep closing untaken (accepted residual recorded in `THREAT_MODEL.md`; governance monitors). The freeze threshold departs from F4's literal "exceeds the buffer" wording but prevents one-unit rounding errors from freezing the system.
+- `start_amount == 0` is reported as `MintCapConfig` and is therefore freeze-eligible (ADR-024).
 
 **Status**
 Accepted (spec v5)
@@ -421,15 +424,16 @@ Accepted (S1)
 Spike S2 (docs/spikes/S2.md) compared three guards for calls from the host program into engine-only entry points (`liquidate_position`, `engine_freeze_new_debt`): A, `caller_program_id == stored engine program id`; B, the stored engine authority PDA is authorised in the call; C, both. Tested in-process on lee v0.2.4 (`47eba256`) with SPEL `1ef0500f` and risc0-zkvm 3.0.5. The brief's four tests (legitimate call, direct call, impostor program, user-signed tx listing the PDA) all pass for all three variants and originally selected B. Fix round 1 added a fifth attack, authorisation laundering: lee propagates authorisation down the call chain (`validated_state_diff/mod.rs:262-290`, monotonically growing authorised set), so if the engine chains with the `ENGINE_AUTH` seeds to any program X, X can chain to `callee.guarded_*` with the PDA authorised and B accepts it. The spike's `call_guarded` takes a caller-supplied program id, which makes this reachable. Test results: B accepts the laundered call (the bypass); A and C reject it with `guard A: caller program is not the engine program`.
 
 **Decision**
-Variant C (A and B together). The brief's decision rule ("cheapest variant passing all four tests") rested on an incomplete attack set and is superseded by the spec's requirement that only the engine can invoke the hook. A's check uses the immediate caller, which lee enforces per call (`MismatchedCallerProgramId`, `validated_state_diff/mod.rs:184-191`). Cycles of the legitimate transaction (caller + callee, 2 executions): A 367,354, B 372,316, C 372,601; C costs +285 over B (+0.08%) and +5,247 over A (+1.43%).
+Variant C (A and B together). The brief's decision rule ("cheapest variant passing all four tests") rested on an incomplete attack set and is superseded by the spec's requirement that only the engine can invoke the hook. A's check uses the immediate caller, which lee enforces per call (`MismatchedCallerProgramId`, `validated_state_diff/mod.rs:184-191`). Cycles of the legitimate transaction (caller + callee, 2 executions): A 367,644, B 372,606, C 372,891; C costs +285 over B (+0.08%) and +5,247 over A (+1.43%).
 B's guarantee, stated correctly: the engine authority PDA is authorised somewhere in the chain that led to the call; it does not say the engine is the caller.
 Invariants for Plan 2 (defence in depth): (i) the engine never authorises `ENGINE_AUTH` for any program other than the stored host program id (no caller-supplied program ids); (ii) the host never chains to an untrusted or user-chosen program while the engine authority is authorised in its call.
+(iii) Confused deputy: every engine instruction that supplies the `ENGINE_AUTH` seeds derives the callee program id and the hook arguments (amounts) only from engine-validated on-chain state read in the same transaction. Any caller-supplied account id (e.g. `position`) is re-derived or checked against `EngineConfig` (host program id, `ProtocolParameters`, stablecoin definition) before it is forwarded. `ENGINE_AUTH` seeds are supplied only on calls to the stored host program. Every other program reachable later in the same transaction (token) is a pinned program id, never user-chosen, because lee keeps an authorised account authorised for later calls in the chain.
 
 **Trade-offs**
 - Zero ids: SPEL sets `ctx.caller_program_id` to zeros for top-level calls (`spel-framework-core/src/context.rs:30-33`), so A and C accept a direct call if the stored `engine_program_id` is zero or uninitialised. The config initialiser must reject zero program ids and zero authorities (Plan 2 test). The config was inserted with `force_insert_account`; creation and rotation are untested.
 - Private path untested, wider scope: in the circuit `authorized_accounts` is one set for the whole transaction (`privacy_preserving_circuit/src/execution_state.rs:54,601-608`), so laundering reaches sibling calls too; forgery is still blocked (`output.rs:38`, `circuit/mod.rs:420-433`, `execution_state.rs:285-305`); a PDA first seen inside a chained call is not seed-checked in the Vacant branch, so the engine must list the authority in its own accounts. `caller_program_id` is enforced in the circuit per call (`execution_state.rs:164-170`), so C's immediate-caller check holds there, but this is from source reading only; a private-path test is an open item for Plan 2.
 - Both A and B bind to the engine ImageID (PDA derived from the program id): a second or upgraded engine needs its own stored config.
-- Upstream fit of B: the stablecoin uses plain `is_authorized` assertions (`lez-programs/programs/stablecoin/src/checks.rs:109`, `src/freeze.rs:58`); those have the same laundering property when the authority is a PDA.
+- Upstream fit of B: the stablecoin uses plain `is_authorized` assertions (`lez-programs/programs/stablecoin/src/checks.rs:109`, `src/freeze.rs:58`); those have the same laundering property when the authority is a PDA. The upstream hook PR must either add an immediate-caller check to those paths or document that admin and freeze authorities must stay user keys.
 - The brief's `guarded(expected_caller)` argument was replaced by a stored config (an argument chosen by the caller is not a guard). Lee rejects forged flags itself (`InvalidAccountAuthorization`), which stopped the forgery attacks on B.
 - Cycles are executor cycles (dev mode, natively built guests), not proving cost. Nothing was run on a sequencer. Evidence excerpt: `spikes/s2_s3_s7/logs/final-excerpt.log`.
 
@@ -494,7 +498,7 @@ Keep (A). The brief's rule allowed (B) only if it was within 10% of (A)'s cycles
 **Trade-offs**
 - Cycles are executor cycles of a natively built guest, not proving cost and not the Docker-built image. The ratios are the useful result; the absolute values are not a budget.
 - The exponential variant's accuracy was argued, not measured: its floored multiplications slightly overstate the discount (by at most about 24 RAY units), the wrong direction for a protocol-favouring rule.
-- `mul_div_floor` has no cheap path for small operands (10,365 cycles vs 10,260 worst case), so every `mul_div` in a hot path costs about 10k cycles; the 8-point schedule costs only 47 cycles more than the 2-point one.
+- `mul_div_floor` has no cheap path for small operands (10,365 cycles vs 10,260 with wide operands), so every `mul_div` in a hot path costs about 10k cycles; the 8-point schedule costs only 47 cycles more than the 2-point one.
 - Evidence excerpt: `spikes/s4_s6/logs/cycles-excerpt.log`.
 
 **Status**
@@ -518,8 +522,48 @@ Spike S6 (docs/spikes/S6.md) priced updating `Accounting` per bid. Measured with
 - The denominator is modelled (no engine program exists yet): re-measure in Plan 3 (`CYCLES.md`). If a real bid exceeds about 1.9 M cycles the decision flips cheaply.
 - The counters lag for in-flight auctions: `total_debt_burned + total_penalty_collected` equals the sum of `raised()` only after each chain end. The property test `tests/invariants.rs` and any dashboard must be restated accordingly (Plan 2).
 - Every chain-end path must apply the cumulative update, or counters are dropped: the settling `bid` (`apply_bid` returning a `ChainEnd`) and `settle_empty` (the raised amounts from earlier bids still need folding in, and `record_chain_end` books the shortfall). Plan 2 should add a small `Accounting::record_settled(&Auction)` helper rather than build a synthetic `BidFill`; no change was made to the reviewed core in this task.
+- Whether a bid ends the auction is decided at execution time (price and `t_eff` move between signing and inclusion), while LEZ needs the account list at signing. A bid signed without the chain-end accounts (`Accounting`, `CollateralConfig`/`EngineConfig` for the reservation release) that turns out to end the auction must revert with a distinct error so the client re-quotes, or Plan 2 adds a permissionless finalize path. Clients list the accounts whenever `coin_in_max >= remaining` or the quoted fill is near the lot. If most bids end up listing `Accounting`, re-evaluate S6: its 94,904-cycle saving assumes non-final bids omit the account.
 - Per-account guest I/O is expensive because `Account.data` serialises one word per byte and `AccountId` through a string; this also matters for every other account the engine instructions take.
 - Executor cycles of a natively built guest; not proving cost.
 
 **Status**
 Accepted (S6)
+
+---
+
+## ADR-024: Plan 1 Core Amendments to the Spec
+
+**Context**
+Building and reviewing `auction_core` in Plan 1 (Tasks 9 to 12 and the whole-branch review) required deviations from, and additions to, the v5 spec. Each is recorded here with the spec section it changes, the reason, and its bound or cost, so Plan 2 and 3 implement the amended behaviour rather than the original text. This ADR also lists what the program layer must do because the core deliberately does not.
+
+**Decision**
+Amendments to the spec:
+- Final-fill exception (Task 9), spec 5.1 "paid out rounds down". A bid that reaches the target and whose plain floor is 0 receives exactly 1 collateral base unit. Reason: with no expiry (ADR-012) such an auction would be stuck forever and keep its cap reservations pinned. Bound: at most 1 base unit per auction (see core.md Liveness).
+- `settle_empty` (Task 9), spec 5.6 instruction table. New permissionless instruction that settles an auction with lot 0: the shortfall is booked and the reservation is released. Reason: a lot-0 auction cannot be settled by a bid (every bid is `ZeroFill`). Cost: one more instruction to expose.
+- Price-0 guard in `quote_bid` (defensive). A zero price returns `Math` instead of dividing by zero. Cost: none in practice; it should be unreachable.
+- `Accounting` gains `debt_on_auction` and `total_debt_auctioned` (spec 5.4 table). `settle_debt` burns `min(amount, buffer_balance, unbacked_debt - debt_on_auction)` (spec 5.6 formula) and is paired with `record_debt_start`, `record_debt_take` and `record_debt_close`. Reason: the debt a live debt auction is selling must not also be burned from the buffer; covering it twice would mint tokens without a matching loss, which spec 5.5 and ADR-012 forbid. This is the Maker `Ash` pattern. Bound: `debt_on_auction <= unbacked_debt`.
+- `close_surplus` and `close_debt` (with `record_debt_close`) implement spec 5.11 `close_system_auction` in the core, using `system_ttl_ms`. Cost: system auctions have a time-based close; collateral auctions still have none.
+- `SystemParams::validate`, spec 5.11 parameters. Bounds: discounts at most 3000 bps, lots greater than 0, `min_take <= lots`, `0 < mint cap <= hard cap`, `ttl > 0`.
+- `take_debt` that would mint 0 returns `ZeroFill`; `start_debt` with `start_amount == 0` returns `MintCapConfig`, which is therefore freeze-eligible. This widens the meaning of the closed freeze list in spec 5.11 (see ADR-017). A distinct `DebtLotTooSmall` variant mapped to Freeze is a cleaner option for Plan 2.
+- S7 uses `Token::MintWithAuthority`, not `Token::Mint` (ADR-021).
+
+Program-layer obligations (Plan 2/3):
+- `observed()` trusts the caller's `feed_valid`: the engine must derive it with `validate_feed` from the same `(oracle_ts, now, max_age)`.
+- Every `t_eff` evaluation, including SDK and CLI previews, first simulates `observed()` at `now` (Plan 3).
+- Call `CollateralParams::validate`, `FeedParams::validate` and `SystemParams::validate` at config time; core functions do not call them. Unvalidated `SystemParams` panic on `BPS - x`.
+- Enforce `bad_debt_freeze_threshold >= debt_lot` (ADR-017).
+- Pair `start_debt` with `record_debt_start(debt_lot)`, `take_debt` with `record_debt_take(old.lot_left - new.lot_left)`, and `close_debt` with `record_debt_close`. Transfer and burn the FILLED amount (the `lot_left` delta), never the requested amount.
+- Expose the `settle_empty` and `close_system_auction` instructions.
+- Reject zero program ids and zero authorities at config (SPEL's top-level `caller_program_id` is zero; ADR-019).
+- Reject a zero `protocol_token_ref_price` at config. With 0, `start_debt` returns `Math`, so `check_solvency` gives `NoAction` instead of `Freeze`.
+- Create `THREAT_MODEL.md` containing: the S5 residual (a re-stamping producer; unobserved publishes), the 1-unit final-fill bound, the oversized-alone limitation (both directions), and the keeper reward in a shortfall.
+- Plan 4's first task confirms that `lez_core` loads in Basecamp and pins its own Basecamp revision (ADR-018).
+- Plan 2 restates the `tests/invariants.rs` per-bid `Accounting` check for chain-end accounting (a `record_settled` helper; ADR-023).
+
+**Trade-offs**
+- The final-fill exception departs from "paid out rounds down" by at most 1 base unit per auction in exchange for liveness.
+- Reusing `MintCapConfig` for a zero start amount keeps the core small but blurs the closed freeze list; this is the price of not adding a variant in Plan 1.
+- The obligations above are not enforced by the core; each needs a Plan 2 or 3 test.
+
+**Status**
+Accepted (Plan 1)

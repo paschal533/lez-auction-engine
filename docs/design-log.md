@@ -719,3 +719,26 @@ Donations go to whoever the sweep pays; they never change a booked number.
 
 **Status**
 Accepted (Plan 2, Task 11)
+
+---
+
+## ADR-031: System-Auction Accounts and Lifecycle
+
+**Context**
+Spec §5.11 describes F4/F5 as instant Dutch auctions addressed by `Accounting.surplus_nonce` / `debt_nonce`, at most one of each live, closed by `close_system_auction` after `system_ttl_ms`. The core (`auction_core::system`) is stateless about liveness and the last surplus end; the protocol-token reference price may come from an optional oracle.
+
+**Decision**
+- Program-layer `Accounting` fields: `surplus_live`, `debt_live`, `last_surplus_end_ms`, and counters `total_protocol_burned`, `total_protocol_minted`, `total_surplus_lots_out`, `total_surplus_returned` (invariants 9 and 17). `start_*(nonce)` requires `nonce == *_nonce`, then increments it, so a nonce can never be replayed after its auction ended.
+- The surplus lot moves into its own holding `["SURPVAULT", surplus_auction]` at start (spec: "into the auction's holding"), so `settle_debt` cannot spend coin a live surplus auction is selling. `close_surplus_auction` returns the whole vault balance (ADR-033); a fully taken auction ends at its last take.
+- `ref_ray` is snapshotted into `SurplusAuction` at start (the debt auction snapshots `start_amount` in the core), so takes need no oracle account and never read `ref_oracle_max_age_ms`. The oracle, its max age and the admin price may change while an auction is live without altering that auction's price (Task 8 review carry-forward; tests `live_take_ignores_later_ref_price_and_oracle_max_age_changes`).
+- Use-time protocol-token checks (Task 8 review): every instruction that spends or mints the protocol token verifies, in the same transaction, that the definition slot is the configured id (or the placeholder), owned by `cfg.token_program_id` and a fungible definition (`ProtocolTokenMismatch`), and, for minting (Task 14), that its mint authority is `["MINT_AUTH", config]` (`MintAuthorityMissing`).
+- `close_system_auction` is two instructions, `close_surplus_auction` and `close_debt_auction`, because their account lists differ (the surplus close returns the vault balance to the buffer; the debt close only releases `debt_on_auction`).
+- `set_engine_params` refuses to change the protocol token, its oracle or the system-auction parameters while a system auction is live (`ProtocolTokenLocked`), since takes read them.
+- Reference-price step rule (plan review ruling I5): each admin change of `protocol_token_ref_price` stays within `[old/2, 2*old]` (`args::check_ref_price_step`, `RefPriceStepTooLarge`; tests `ref_price_steps_are_bounded_to_half_and_double`).
+- No admin path moves surplus funds: the buffer, the surplus vault and the lot move only through the permissionless start/take/close paths.
+
+**Trade-offs**
+One more holding per surplus auction (accounts are never released). The reference price of a running auction does not follow the oracle (it is a Dutch schedule seed, ADR-017). Governance-trust residual (I5): the step bound limits one change, not repeated changes (a series of changes of at most 2x each can still move the price far over time); switching or disabling the protocol token (allowed whenever no system auction is live) remains an admin power, and disabling it lets anyone's `check_solvency` freeze the host when `unbacked_debt > bad_debt_freeze_threshold` (recorded in `THREAT_MODEL.md`).
+
+**Status**
+Accepted (Plan 2, Task 13)

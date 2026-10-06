@@ -1036,6 +1036,294 @@
           "type": "u128"
         }
       ]
+    },
+    {
+      "name": "start_surplus_auction",
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "accounting",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "ACCT"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "BUFFER"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stablecoin_definition",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "surplus_auction",
+          "writable": true,
+          "signer": false,
+          "init": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "SURP"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "surplus_vault",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "SURPVAULT"
+              },
+              {
+                "kind": "account",
+                "path": "surplus_auction"
+              }
+            ]
+          }
+        },
+        {
+          "name": "ref_oracle",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "take_surplus",
+      "accounts": [
+        {
+          "name": "taker_protocol_holding",
+          "writable": true,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "taker_stable_holding",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "accounting",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "ACCT"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "surplus_auction",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "surplus_vault",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "SURPVAULT"
+              },
+              {
+                "kind": "account",
+                "path": "surplus_auction"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_token_definition",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_coin",
+          "type": "u128"
+        },
+        {
+          "name": "max_protocol_in",
+          "type": "u128"
+        }
+      ]
+    },
+    {
+      "name": "close_surplus_auction",
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "accounting",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "ACCT"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "surplus_auction",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "surplus_vault",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "SURPVAULT"
+              },
+              {
+                "kind": "account",
+                "path": "surplus_auction"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "BUFFER"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": []
     }
   ],
   "instruction_type": "auction_engine_core::Instruction"

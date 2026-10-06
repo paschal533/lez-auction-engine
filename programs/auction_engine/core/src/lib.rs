@@ -313,4 +313,17 @@ mod tests {
             6
         );
     }
+
+    #[test]
+    fn surplus_indices() {
+        assert_eq!(idx(&Instruction::StartSurplusAuction { nonce: 0 }), 10);
+        assert_eq!(
+            idx(&Instruction::TakeSurplus {
+                amount_coin: 0,
+                max_protocol_in: 0
+            }),
+            11
+        );
+        assert_eq!(idx(&Instruction::CloseSurplusAuction), 12);
+    }
 }

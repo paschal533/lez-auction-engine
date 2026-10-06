@@ -18,6 +18,10 @@ pub mod observe;
 pub mod settle;
 #[cfg(test)]
 mod settle_tests;
+pub mod surplus;
+#[cfg(test)]
+mod surplus_tests;
+pub mod system;
 pub mod token_calls;
 
 use auction_engine_core::EngineError;

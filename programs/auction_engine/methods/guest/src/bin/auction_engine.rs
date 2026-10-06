@@ -286,4 +286,62 @@ mod auction_engine {
         let a = engine::settle::SettleDebtAccounts { caller, config, accounting, buffer, stablecoin_definition };
         finish(engine::settle::settle_debt(ctx.self_program_id, a, amount))
     }
+
+    #[instruction]
+    #[allow(clippy::too_many_arguments, reason = "nine accounts (Shared Reference R2)")]
+    pub fn start_surplus_auction(
+        ctx: ProgramContext,
+        #[account(signer)] caller: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut, pda = [literal("ACCT"), account("config")])] accounting: AccountWithMetadata,
+        #[account(mut, pda = [literal("BUFFER"), account("config")])] buffer: AccountWithMetadata,
+        #[account(mut)] stablecoin_definition: AccountWithMetadata,
+        #[account(init, pda = [literal("SURP"), account("config"), arg("nonce")])] surplus_auction: AccountWithMetadata,
+        #[account(mut, pda = [literal("SURPVAULT"), account("surplus_auction")])] surplus_vault: AccountWithMetadata,
+        ref_oracle: AccountWithMetadata,
+        clock: AccountWithMetadata,
+        nonce: u64,
+    ) -> SpelResult {
+        let a = engine::surplus::StartSurplusAccounts {
+            caller, config, accounting, buffer, stablecoin_definition, surplus_auction, surplus_vault, ref_oracle, clock,
+        };
+        finish(engine::surplus::start_surplus_auction(ctx.self_program_id, a, nonce))
+    }
+
+    #[instruction]
+    #[allow(clippy::too_many_arguments, reason = "eight accounts (Shared Reference R2)")]
+    pub fn take_surplus(
+        ctx: ProgramContext,
+        #[account(mut, signer)] taker_protocol_holding: AccountWithMetadata,
+        #[account(mut)] taker_stable_holding: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut, pda = [literal("ACCT"), account("config")])] accounting: AccountWithMetadata,
+        #[account(mut)] surplus_auction: AccountWithMetadata,
+        #[account(mut, pda = [literal("SURPVAULT"), account("surplus_auction")])] surplus_vault: AccountWithMetadata,
+        #[account(mut)] protocol_token_definition: AccountWithMetadata,
+        clock: AccountWithMetadata,
+        amount_coin: u128,
+        max_protocol_in: u128,
+    ) -> SpelResult {
+        let a = engine::surplus::TakeSurplusAccounts {
+            taker_protocol_holding, taker_stable_holding, config, accounting, surplus_auction, surplus_vault,
+            protocol_token_definition, clock,
+        };
+        finish(engine::surplus::take_surplus(ctx.self_program_id, a, amount_coin, max_protocol_in))
+    }
+
+    #[instruction]
+    pub fn close_surplus_auction(
+        ctx: ProgramContext,
+        #[account(signer)] caller: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut, pda = [literal("ACCT"), account("config")])] accounting: AccountWithMetadata,
+        #[account(mut)] surplus_auction: AccountWithMetadata,
+        #[account(mut, pda = [literal("SURPVAULT"), account("surplus_auction")])] surplus_vault: AccountWithMetadata,
+        #[account(mut, pda = [literal("BUFFER"), account("config")])] buffer: AccountWithMetadata,
+        clock: AccountWithMetadata,
+    ) -> SpelResult {
+        let a = engine::surplus::CloseSurplusAccounts { caller, config, accounting, surplus_auction, surplus_vault, buffer, clock };
+        finish(engine::surplus::close_surplus_auction(ctx.self_program_id, a))
+    }
 }

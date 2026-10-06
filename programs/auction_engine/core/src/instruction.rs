@@ -96,7 +96,18 @@ pub enum Instruction {
     ClaimLeftover,
     /// Accounts: caller(s), config, accounting(m), buffer(m), stablecoin_definition(m).
     SettleDebt { amount: u128 },
-    // Tasks 13–15 append the remaining variants here, in Shared Reference R2 order
-    // (start_surplus_auction = 10 … check_solvency = 16). Each appending task also appends the guest
+    /// Accounts: caller(s), config, accounting(m), buffer(m), stablecoin_definition(m), surplus_auction(i,m),
+    /// surplus_vault(m), ref_oracle [slot 0], clock.
+    StartSurplusAuction { nonce: u64 },
+    /// Accounts: taker_protocol_holding(s,m), taker_stable_holding(m), config, accounting(m), surplus_auction(m),
+    /// surplus_vault(m), protocol_token_definition(m) [slot 1], clock.
+    TakeSurplus {
+        amount_coin: u128,
+        max_protocol_in: u128,
+    },
+    /// Accounts: caller(s), config, accounting(m), surplus_auction(m), surplus_vault(m), buffer(m), clock.
+    CloseSurplusAuction,
+    // Tasks 14–15 append the remaining variants here, in Shared Reference R2 order
+    // (start_debt_auction = 13 … check_solvency = 16). Each appending task also appends the guest
     // function and an index assertion to `instruction_indices_follow_reference_order`.
 }

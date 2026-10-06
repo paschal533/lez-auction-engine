@@ -1,5 +1,5 @@
 //! Engine-only accounting (spec §5.8, ADR-010). Immutable updates.
-use crate::auction::{Auction, BidFill, ChainEnd};
+use crate::auction::{Auction, BidFill, ChainEnd, Status};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Accounting {
@@ -36,9 +36,16 @@ impl Accounting {
 
     /// Chain-end fold (ADR-023): `Accounting` is not written by non-final bids, so the settling
     /// transition adds the auction's cumulative raised amounts and books its shortfall, once.
-    /// Call it on every chain-end path (`apply_bid` returning `Some(ChainEnd)`, `settle_empty`).
+    ///
+    /// Preconditions: call exactly once per auction, after it is `Settled`, with the `ChainEnd`
+    /// produced by that same settlement (`apply_bid`'s `Some(end)` or `settle_empty`). `e` is not
+    /// validated against `a`. The fold is not idempotent: a second call double-counts. A
+    /// non-`Settled` auction is a no-op (returns `self` unchanged) so an early call cannot
+    /// fold a partial raise or book a shortfall; it never panics.
     pub fn record_settled(self, a: &Auction, e: &ChainEnd) -> Self {
-        debug_assert!(a.status == crate::auction::Status::Settled);
+        if a.status != Status::Settled {
+            return self;
+        }
         Self {
             total_debt_burned: self.total_debt_burned.saturating_add(a.debt_raised),
             total_penalty_collected: self
@@ -245,5 +252,32 @@ mod record_settled_tests {
         assert_eq!(acc.total_debt_burned, 300);
         assert_eq!(acc.unbacked_debt, 600);
         assert_eq!(acc.total_shortfall_booked, 600);
+    }
+
+    #[test]
+    fn record_settled_on_live_auction_is_a_no_op() {
+        let q = LiquidationQuote {
+            debt_principal: 900,
+            amount_to_raise: 990,
+            reserve: 990,
+            keeper_reward: 0,
+            lot: 2_000,
+            seized: 2_000,
+        };
+        let mut a = Auction::open(&q, 0, flat(), 0);
+        a.debt_raised = 300;
+        a.penalty_raised = 30;
+        assert_eq!(a.status, Status::Auctioning);
+        let e = ChainEnd {
+            shortfall: 600,
+            release: 990,
+            leftover: 0,
+        };
+        let before = Accounting {
+            unbacked_debt: 7,
+            total_debt_burned: 11,
+            ..Accounting::default()
+        };
+        assert_eq!(before.record_settled(&a, &e), before);
     }
 }

@@ -604,3 +604,75 @@ impl World {
         self.bind_engine_to(engine_program(), engine_authority())
     }
 }
+
+// ---- collateral config and feed observation (Task 9) ----
+use auction_engine_core::args::CollateralArgs;
+
+pub fn collateral_ix(c: &CollateralArgs) -> Ix {
+    Ix::SetCollateralConfig {
+        oracle_scale: c.oracle_scale,
+        max_oracle_age_ms: c.max_oracle_age_ms,
+        max_conf_bps: c.max_conf_bps,
+        band_lo_bps: c.band_lo_bps,
+        band_hi_bps: c.band_hi_bps,
+        penalty_bps: c.penalty_bps,
+        tip: c.tip,
+        chip_bps: c.chip_bps,
+        reward_cap: c.reward_cap,
+        debt_floor: c.debt_floor,
+        min_bid: c.min_bid,
+        type_cap: c.type_cap,
+        schedule: c.schedule.clone(),
+        admin_paused: c.admin_paused,
+    }
+}
+
+impl World {
+    pub fn set_collateral_config(
+        &mut self,
+        signer: u8,
+        c: &CollateralArgs,
+    ) -> Result<(), LeeError> {
+        self.engine(
+            vec![
+                id(signer),
+                config(),
+                collateral_def(),
+                coll_config(),
+                oracle(),
+                protocol_parameters(),
+                redemption_state(),
+                CLOCK_01_PROGRAM_ACCOUNT_ID,
+            ],
+            &[signer],
+            collateral_ix(c),
+        )
+    }
+
+    pub fn observe_feed(&mut self) -> Result<(), LeeError> {
+        self.engine(
+            vec![
+                id(k::CALLER),
+                config(),
+                coll_config(),
+                redemption_state(),
+                oracle(),
+                CLOCK_01_PROGRAM_ACCOUNT_ID,
+            ],
+            &[k::CALLER],
+            Ix::ObserveFeed,
+        )
+    }
+
+    /// Host bootstrapped, engine config created with defaults, bound by the host admin, collateral
+    /// configured with defaults (Ray scale, 60 min max age, band 9000-11000, penalty 10%).
+    pub fn with_engine() -> Self {
+        let mut w = Self::new();
+        w.init_engine_config(&EngineParamsArgs::defaults_for_tests())
+            .expect("init_config");
+        w.bind_engine().expect("set_liquidation_engine");
+        w.set_collateral_config(k::ENGINE_ADMIN, &CollateralArgs::defaults_for_tests())
+            .expect("set_collateral_config");
+        w
+    }
+}

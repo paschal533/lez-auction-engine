@@ -648,3 +648,35 @@ Instruction structs are wide and flat. The slot convention must be followed by t
 
 **Status**
 Accepted (Plan 2, Task 6)
+
+---
+
+## ADR-028: The Engine Prices from the Host's Market Oracle
+
+**Context**
+Spec §5.4 stores an `oracle_id` in `CollateralConfig`; spec §5.10 makes the hook check the host's market oracle for freshness. LEZ rejects duplicate account ids in a transaction, so listing "engine oracle" and "host oracle" separately when they are the same account is impossible, and listing two different oracles would let the host's health check and the engine's price disagree within one liquidation.
+
+**Decision**
+`set_collateral_config` requires `oracle_id == ProtocolParameters.market_price_oracle_id`, and `liquidate` re-checks it against the live `ProtocolParameters` (`OracleMismatch` if the host admin rotated its oracle; the engine admin then re-runs `set_collateral_config`). One `oracle` account serves both the engine's validity/price and the hook's freshness gate. Bids keep using the stored id.
+
+**Trade-offs**
+A host oracle rotation pauses new liquidations until the engine admin follows; bids on live auctions are unaffected.
+
+**Status**
+Accepted (Plan 2, Task 9)
+
+---
+
+## ADR-032: `observe_feed` Is Permissionless; Reverted Observations Are Dropped
+
+**Context**
+Spec §5.7: `liquidate`, `bid` and `observe_feed` observe the feed; any panic reverts the whole transaction (spec §3.2), so a `liquidate` or `bid` that finds the feed invalid cannot persist the pause it observed.
+
+**Decision**
+`observe_feed` is permissionless and never reverts on a bad feed; it is the one way to persist an observation of an invalid feed. `liquidate`/`bid` observe in memory, revert when paused, and their observation is lost. Policy (b) (S5, ADR-007) derives the stale onset from `last_seen_oracle_ts + max_age`, so a lost observation does not move the onset; the S5 property test bounds an adversary's extra discount to one block. Keepers and the app call `observe_feed` on refresh (Plan 3).
+
+**Trade-offs**
+An observation costs a transaction; the residual (unobserved publishes, a re-stamping producer) is the S5 residual recorded in `THREAT_MODEL.md`.
+
+**Status**
+Accepted (Plan 2, Task 9)

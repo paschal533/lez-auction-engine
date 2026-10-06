@@ -121,7 +121,7 @@ fn disabled_slot_must_be_the_placeholder() {
         &[k::ENGINE_ADMIN],
         init_config_ix(SALT, &p),
     );
-    assert_err(r, "WrongAccount");
+    assert_err(r, "WrongAccount(\\\"unused slot\\\")");
 }
 
 #[test]
@@ -211,7 +211,7 @@ fn protocol_token_must_differ_from_the_collateral() {
         &[k::ENGINE_ADMIN],
         init_config_ix(SALT, &p),
     );
-    assert_err(r, "WrongAccount");
+    assert_err(r, "WrongAccount(\\\"protocol_token\\\")");
 }
 
 #[test]

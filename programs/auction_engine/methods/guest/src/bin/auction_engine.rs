@@ -110,4 +110,57 @@ mod auction_engine {
         let a = engine::admin::SetEngineParamsAccounts { admin, config, accounting, coll_config, protocol_token_definition, ref_oracle };
         finish(engine::admin::set_engine_params(ctx.self_program_id, a, &p))
     }
+
+    #[instruction]
+    #[allow(clippy::too_many_arguments, reason = "flat spel-encodable arguments (ADR-030)")]
+    pub fn set_collateral_config(
+        ctx: ProgramContext,
+        #[account(signer)] admin: AccountWithMetadata,
+        config: AccountWithMetadata,
+        collateral_definition: AccountWithMetadata,
+        #[account(mut, pda = [literal("COLL"), account("config"), account("collateral_definition")])]
+        coll_config: AccountWithMetadata,
+        oracle: AccountWithMetadata,
+        protocol_parameters: AccountWithMetadata,
+        redemption_price_state: AccountWithMetadata,
+        clock: AccountWithMetadata,
+        oracle_scale: u8,
+        max_oracle_age_ms: u64,
+        max_conf_bps: u32,
+        band_lo_bps: u32,
+        band_hi_bps: u32,
+        penalty_bps: u32,
+        tip: u128,
+        chip_bps: u32,
+        reward_cap: u128,
+        debt_floor: u128,
+        min_bid: u128,
+        type_cap: u128,
+        schedule: Vec<u32>,
+        admin_paused: bool,
+    ) -> SpelResult {
+        let c = auction_engine_core::args::CollateralArgs {
+            oracle_scale, max_oracle_age_ms, max_conf_bps, band_lo_bps, band_hi_bps, penalty_bps, tip,
+            chip_bps, reward_cap, debt_floor, min_bid, type_cap, schedule, admin_paused,
+        };
+        let a = engine::admin::SetCollateralConfigAccounts {
+            admin, config, collateral_definition, coll_config, oracle, protocol_parameters,
+            redemption_price_state, clock,
+        };
+        finish(engine::admin::set_collateral_config(ctx.self_program_id, a, &c))
+    }
+
+    #[instruction]
+    pub fn observe_feed(
+        ctx: ProgramContext,
+        #[account(signer)] caller: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut)] coll_config: AccountWithMetadata,
+        redemption_price_state: AccountWithMetadata,
+        oracle: AccountWithMetadata,
+        clock: AccountWithMetadata,
+    ) -> SpelResult {
+        let a = engine::observe::ObserveFeedAccounts { caller, config, coll_config, redemption_price_state, oracle, clock };
+        finish(engine::observe::observe_feed(ctx.self_program_id, a))
+    }
 }

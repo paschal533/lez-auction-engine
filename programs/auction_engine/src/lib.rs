@@ -7,6 +7,10 @@ pub mod accounts;
 pub mod admin;
 #[cfg(test)]
 mod admin_tests;
+#[cfg(test)]
+mod collateral_tests;
+pub mod feed;
+pub mod observe;
 pub mod token_calls;
 
 use auction_engine_core::EngineError;

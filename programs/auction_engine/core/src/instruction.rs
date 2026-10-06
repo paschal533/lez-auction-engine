@@ -54,7 +54,27 @@ pub enum Instruction {
         min_take: u128,
         system_ttl_ms: u64,
     },
-    // Tasks 9–15 append the remaining variants here, in Shared Reference R2 order
+    /// Accounts: admin(s), config, collateral_definition, coll_config(m), oracle, protocol_parameters,
+    /// redemption_price_state, clock.
+    SetCollateralConfig {
+        oracle_scale: u8,
+        max_oracle_age_ms: u64,
+        max_conf_bps: u32,
+        band_lo_bps: u32,
+        band_hi_bps: u32,
+        penalty_bps: u32,
+        tip: u128,
+        chip_bps: u32,
+        reward_cap: u128,
+        debt_floor: u128,
+        min_bid: u128,
+        type_cap: u128,
+        schedule: Vec<u32>,
+        admin_paused: bool,
+    },
+    /// Accounts: caller(s), config, coll_config(m), redemption_price_state, oracle, clock.
+    ObserveFeed,
+    // Tasks 10–15 append the remaining variants here, in Shared Reference R2 order
     // (set_collateral_config = 2 … check_solvency = 16). Each appending task also appends the guest
     // function and an index assertion to `instruction_indices_follow_reference_order`.
 }

@@ -303,6 +303,177 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "set_collateral_config",
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "collateral_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "coll_config",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "COLL"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              },
+              {
+                "kind": "account",
+                "path": "collateral_definition"
+              }
+            ]
+          }
+        },
+        {
+          "name": "oracle",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "protocol_parameters",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "redemption_price_state",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "oracle_scale",
+          "type": "u8"
+        },
+        {
+          "name": "max_oracle_age_ms",
+          "type": "u64"
+        },
+        {
+          "name": "max_conf_bps",
+          "type": "u32"
+        },
+        {
+          "name": "band_lo_bps",
+          "type": "u32"
+        },
+        {
+          "name": "band_hi_bps",
+          "type": "u32"
+        },
+        {
+          "name": "penalty_bps",
+          "type": "u32"
+        },
+        {
+          "name": "tip",
+          "type": "u128"
+        },
+        {
+          "name": "chip_bps",
+          "type": "u32"
+        },
+        {
+          "name": "reward_cap",
+          "type": "u128"
+        },
+        {
+          "name": "debt_floor",
+          "type": "u128"
+        },
+        {
+          "name": "min_bid",
+          "type": "u128"
+        },
+        {
+          "name": "type_cap",
+          "type": "u128"
+        },
+        {
+          "name": "schedule",
+          "type": {
+            "vec": "u32"
+          }
+        },
+        {
+          "name": "admin_paused",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "observe_feed",
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "coll_config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "redemption_price_state",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "oracle",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": []
     }
   ],
   "instruction_type": "auction_engine_core::Instruction"

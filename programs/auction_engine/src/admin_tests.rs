@@ -17,23 +17,24 @@ use lee_core::{
 use stablecoin_core::ProtocolParameters;
 
 use crate::{
-    accounts::ZERO_ID,
+    accounts::{load_config, ZERO_ID},
     admin::{init_config, set_engine_params, InitConfigAccounts, SetEngineParamsAccounts},
     EngineResult,
 };
 
-const ENGINE: ProgramId = [0xE1; 8];
-const HOST: ProgramId = [0xA1; 8];
-const TOKEN: ProgramId = [0xB1; 8];
-const SALT: u64 = 1;
-const ADMIN: AccountId = AccountId::new([0x10; 32]);
-const STABLE: AccountId = AccountId::new([0x20; 32]);
-const COLLATERAL: AccountId = AccountId::new([0x30; 32]);
-const OTHER: AccountId = AccountId::new([0x40; 32]);
-const ONE: u128 = 1_000_000_000_000_000_000_000_000_000;
+pub(crate) const ENGINE: ProgramId = [0xE1; 8];
+pub(crate) const HOST: ProgramId = [0xA1; 8];
+pub(crate) const TOKEN: ProgramId = [0xB1; 8];
+pub(crate) const SALT: u64 = 1;
+pub(crate) const ADMIN: AccountId = AccountId::new([0x10; 32]);
+pub(crate) const STABLE: AccountId = AccountId::new([0x20; 32]);
+pub(crate) const COLLATERAL: AccountId = AccountId::new([0x30; 32]);
+pub(crate) const OTHER: AccountId = AccountId::new([0x40; 32]);
+pub(crate) const ORACLE: AccountId = AccountId::new([0x50; 32]);
+pub(crate) const ONE: u128 = 1_000_000_000_000_000_000_000_000_000;
 const OLD_REF_PRICE: u128 = 100;
 
-fn meta(id: AccountId, account: Account, signed: bool) -> AccountWithMetadata {
+pub(crate) fn meta(id: AccountId, account: Account, signed: bool) -> AccountWithMetadata {
     AccountWithMetadata {
         account,
         is_authorized: signed,
@@ -41,17 +42,17 @@ fn meta(id: AccountId, account: Account, signed: bool) -> AccountWithMetadata {
     }
 }
 
-fn fresh(id: AccountId) -> AccountWithMetadata {
+pub(crate) fn fresh(id: AccountId) -> AccountWithMetadata {
     meta(id, Account::default(), false)
 }
 
-fn host_params() -> ProtocolParameters {
+pub(crate) fn host_params() -> ProtocolParameters {
     ProtocolParameters {
         admin_account_id: ADMIN,
         freeze_authority_account_id: ADMIN,
         stablecoin_definition_id: STABLE,
         collateral_definition_id: COLLATERAL,
-        market_price_oracle_id: OTHER,
+        market_price_oracle_id: ORACLE,
         stability_fee_per_millisecond: ONE,
         controller_proportional_gain: 0,
         controller_integral_gain: 0,
@@ -93,7 +94,7 @@ fn init(a: InitConfigAccounts, p: &EngineParamsArgs) -> EngineResult {
     init_config(ENGINE, a, SALT, p)
 }
 
-fn rejected(r: EngineResult) -> EngineError {
+pub(crate) fn rejected(r: EngineResult) -> EngineError {
     match r {
         Err(e) => e,
         Ok(_) => panic!("handler must reject"),
@@ -210,7 +211,7 @@ fn init_config_validates_the_parameters() {
     );
 }
 
-fn config_state() -> EngineConfigState {
+pub(crate) fn config_state() -> EngineConfigState {
     let system = EngineParamsArgs::defaults_for_tests()
         .validate()
         .expect("valid defaults");
@@ -219,7 +220,7 @@ fn config_state() -> EngineConfigState {
         salt: SALT,
         admin: ADMIN,
         host_program_id: HOST,
-        host_protocol_parameters_id: OTHER,
+        host_protocol_parameters_id: stablecoin_core::compute_protocol_parameters_pda(HOST),
         stablecoin_definition_id: STABLE,
         collateral_definition_id: COLLATERAL,
         token_program_id: TOKEN,
@@ -235,12 +236,12 @@ fn config_state() -> EngineConfigState {
     }
 }
 
-fn coll_state(config: AccountId, type_cap: u128) -> CollateralConfigState {
+pub(crate) fn coll_state(config: AccountId, type_cap: u128) -> CollateralConfigState {
     CollateralConfigState {
         tag: TAG_COLL,
         config,
         collateral_definition_id: COLLATERAL,
-        oracle_id: OTHER,
+        oracle_id: ORACLE,
         oracle_scale: 0,
         max_oracle_age_ms: 3_600_000,
         max_conf_bps: 100,
@@ -418,5 +419,137 @@ fn init_config_rejects_a_parameters_account_that_is_not_the_host_pda() {
     assert_eq!(
         rejected(init(a, &EngineParamsArgs::defaults_for_tests())),
         EngineError::HostMismatch
+    );
+}
+
+#[test]
+fn set_engine_params_locks_with_debt_live_too() {
+    let live = AccountingState {
+        debt_live: true,
+        ..AccountingState::new()
+    };
+    let changed = EngineParamsArgs {
+        min_take: 11,
+        ..at_price(OLD_REF_PRICE)
+    };
+    assert_eq!(
+        rejected(set(set_accounts(ADMIN, true, None, &live), &changed)),
+        EngineError::ProtocolTokenLocked
+    );
+    assert!(set(
+        set_accounts(ADMIN, true, None, &live),
+        &at_price(OLD_REF_PRICE)
+    )
+    .is_ok());
+}
+
+#[test]
+fn set_engine_params_locks_a_protocol_token_swap_while_live() {
+    let enabled = EngineParamsArgs {
+        protocol_token_enabled: true,
+        ..at_price(OLD_REF_PRICE)
+    };
+    for live in [
+        AccountingState {
+            surplus_live: true,
+            ..AccountingState::new()
+        },
+        AccountingState {
+            debt_live: true,
+            ..AccountingState::new()
+        },
+    ] {
+        let mut a = set_accounts(ADMIN, true, None, &live);
+        a.protocol_token_definition = fresh(OTHER);
+        assert_eq!(rejected(set(a, &enabled)), EngineError::ProtocolTokenLocked);
+    }
+    // Not live: the same swap is accepted.
+    let mut a = plain(ADMIN, true);
+    a.protocol_token_definition = fresh(OTHER);
+    assert!(set(a, &enabled).is_ok());
+}
+
+#[test]
+fn set_engine_params_locks_a_ref_oracle_swap_while_live() {
+    let enabled = EngineParamsArgs {
+        ref_oracle_enabled: true,
+        ..at_price(OLD_REF_PRICE)
+    };
+    for live in [
+        AccountingState {
+            surplus_live: true,
+            ..AccountingState::new()
+        },
+        AccountingState {
+            debt_live: true,
+            ..AccountingState::new()
+        },
+    ] {
+        let mut a = set_accounts(ADMIN, true, None, &live);
+        a.ref_oracle = fresh(OTHER);
+        assert_eq!(rejected(set(a, &enabled)), EngineError::ProtocolTokenLocked);
+    }
+    let mut a = plain(ADMIN, true);
+    a.ref_oracle = fresh(OTHER);
+    assert!(set(a, &enabled).is_ok());
+}
+
+fn config_account() -> AccountWithMetadata {
+    let cfg_id = config_pda(&ENGINE, &ADMIN, SALT);
+    meta(
+        cfg_id,
+        Account {
+            program_owner: ENGINE,
+            data: (&config_state()).into(),
+            ..Account::default()
+        },
+        false,
+    )
+}
+
+#[test]
+fn load_config_accepts_the_canonical_config() {
+    let loaded = load_config(&ENGINE, &config_account()).expect("canonical config loads");
+    assert_eq!(loaded, config_state());
+}
+
+#[test]
+fn load_config_rejects_a_wrong_owner() {
+    let mut acc = config_account();
+    acc.account.program_owner = HOST;
+    assert_eq!(
+        load_config(&ENGINE, &acc),
+        Err(EngineError::WrongAccount("config"))
+    );
+}
+
+#[test]
+fn load_config_rejects_a_wrong_tag() {
+    let mut acc = config_account();
+    acc.account.data = (&EngineConfigState {
+        tag: TAG_COLL,
+        ..config_state()
+    })
+        .into();
+    assert_eq!(
+        load_config(&ENGINE, &acc),
+        Err(EngineError::WrongAccount("config"))
+    );
+}
+
+#[test]
+fn load_config_rejects_an_id_that_is_not_the_config_pda() {
+    let mut acc = config_account();
+    acc.account_id = OTHER;
+    assert_eq!(
+        load_config(&ENGINE, &acc),
+        Err(EngineError::WrongAccount("config"))
+    );
+    // A genuine config at another admin's address is also rejected.
+    let mut acc = config_account();
+    acc.account_id = config_pda(&ENGINE, &OTHER, SALT);
+    assert_eq!(
+        load_config(&ENGINE, &acc),
+        Err(EngineError::WrongAccount("config"))
     );
 }

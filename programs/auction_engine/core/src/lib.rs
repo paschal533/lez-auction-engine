@@ -258,4 +258,29 @@ mod tests {
         );
         // Later tasks append one assertion per appended variant (Shared Reference R2 index).
     }
+
+    #[test]
+    fn collateral_and_observe_indices() {
+        assert_eq!(idx(&Instruction::ObserveFeed), 3);
+        let c = args::CollateralArgs::defaults_for_tests();
+        assert_eq!(
+            idx(&Instruction::SetCollateralConfig {
+                oracle_scale: c.oracle_scale,
+                max_oracle_age_ms: c.max_oracle_age_ms,
+                max_conf_bps: c.max_conf_bps,
+                band_lo_bps: c.band_lo_bps,
+                band_hi_bps: c.band_hi_bps,
+                penalty_bps: c.penalty_bps,
+                tip: c.tip,
+                chip_bps: c.chip_bps,
+                reward_cap: c.reward_cap,
+                debt_floor: c.debt_floor,
+                min_bid: c.min_bid,
+                type_cap: c.type_cap,
+                schedule: c.schedule.clone(),
+                admin_paused: c.admin_paused,
+            }),
+            2
+        );
+    }
 }

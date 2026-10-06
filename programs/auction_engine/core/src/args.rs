@@ -210,8 +210,11 @@ impl CollateralArgs {
 }
 
 /// Bound on one admin change of the protocol-token reference price: the new price must lie in
-/// `[old / 2, 2 * old]` (both ends inclusive; ADR-024), so a single transaction cannot swing the
+/// `[old / 2, 2 * old]` (both ends inclusive; plan review ruling I5, recorded in ADR-031, Task 13), so a single transaction cannot swing the
 /// reference that sizes debt and surplus lots. `old` is the stored (non-zero) price.
+///
+/// `EngineParamsArgs::validate` does not call this (init has no old value); `set_engine_params`
+/// MUST call `check_ref_price_step(stored_old, new)`.
 pub fn check_ref_price_step(old: u128, new: u128) -> Result<(), EngineError> {
     if new == 0 {
         return Err(EngineError::ZeroRefPrice);

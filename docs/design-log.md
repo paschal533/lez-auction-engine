@@ -623,12 +623,12 @@ One engine program (one ImageID) serves several `EngineConfig`s (spec §5.4 seed
 **Decision**
 Engine-authority and mint-authority PDAs include the config: `["ENGINE_AUTH", config]`, `["MINT_AUTH", config]`. A host binds exactly one engine config by storing that config's authority id (ADR-026). This is how the engine "identifies the host instance": the host names the config, and the config stores the host program id and `ProtocolParameters` id, re-checked on every hook call path.
 
-The config PDA itself includes its admin: `["CONFIG", admin, salt]` (amends spec §5.4 `["CONFIG", salt]`). With `["CONFIG", salt]` anyone could front-run `init_config` at the address an operator announced and own that config; with the admin in the seed, a config initialised by a different admin with the same salt is a different account (tests `nobody_can_squat_the_admins_config_address`, `rogue_config_with_the_same_salt_cannot_liquidate_the_bound_host`). The admin is therefore immutable.
+The config PDA itself includes its admin: `["CONFIG", admin, salt]` (amends spec §5.4 `["CONFIG", salt]`). With `["CONFIG", salt]` anyone could front-run `init_config` at the address an operator announced and own that config; with the admin in the seed, a config initialised by a different admin with the same salt is a different account (pinned by tests added in Task 8 (`nobody_can_squat_the_admins_config_address`) and Task 16 (`rogue_config_with_the_same_salt_cannot_liquidate_the_bound_host`)). The admin is therefore immutable.
 
 **Bind-time verification.** Before `set_liquidation_engine`, the host admin reads the `EngineConfig` it is about to bind and checks: `admin` is the expected operator, `host_program_id` and `host_protocol_parameters_id` are this host, `token_program_id` is the expected token ImageID, and the parameters (caps, penalty bounds via its `CollateralConfig`, protocol token) are the agreed ones. The runbook (Task 20) and `docs/architecture/hooks.md` carry the step; the SDK (Plan 3) automates it.
 
 **Trade-offs**
-Rotating a host to a new engine config is a host-admin `set_liquidation_engine`. Auctions opened under the old config stay settleable under it (their accounts are seeded by it). Tested by `rogue_config_with_the_same_salt_cannot_liquidate_the_bound_host` and `nobody_can_squat_the_admins_config_address`.
+Rotating a host to a new engine config is a host-admin `set_liquidation_engine`. Auctions opened under the old config stay settleable under it (their accounts are seeded by it). To be pinned by `nobody_can_squat_the_admins_config_address` (Task 8) and `rogue_config_with_the_same_salt_cannot_liquidate_the_bound_host` (Task 16).
 
 **Status**
 Accepted (Plan 2, Task 6)

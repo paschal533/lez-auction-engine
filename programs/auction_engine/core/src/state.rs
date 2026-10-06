@@ -334,6 +334,8 @@ impl Default for AccountingState {
 }
 
 /// `["LIQREC", config, position]`: the per-position auction counter (ADR-004, ADR-020).
+/// `count` is incremented only by auction creation (liquidate); nothing else may bump it
+/// (ADR-020 / S3 ruling).
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct LiquidationRecordState {
     pub tag: [u8; 8],
@@ -483,5 +485,304 @@ impl DebtAuctionState {
             live: a.live,
             ..self.clone()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pda::*;
+    use auction_core::{
+        schedule::SchedulePoint,
+        system::{DebtAuction, SurplusAuction},
+    };
+
+    fn id(b: u8) -> AccountId {
+        AccountId::new([b; 32])
+    }
+
+    fn sys() -> SystemParamsRec {
+        SystemParamsRec {
+            surplus_buffer_target: 1_000,
+            surplus_lot: 500,
+            surplus_delay_ms: 0,
+            surplus_premium_bps: 500,
+            surplus_max_discount_bps: 2_000,
+            debt_lot: 500,
+            debt_initial_discount_bps: 0,
+            debt_growth: vec![SchedulePointRec {
+                elapsed_ms: 0,
+                discount_bps: 0,
+            }],
+            surplus_decay: vec![SchedulePointRec {
+                elapsed_ms: 0,
+                discount_bps: 0,
+            }],
+            max_mint_per_auction: 5_000,
+            min_take: 10,
+            system_ttl_ms: 14_400_000,
+        }
+    }
+
+    fn config() -> EngineConfigState {
+        EngineConfigState {
+            tag: TAG_CONFIG,
+            salt: 9,
+            admin: id(1),
+            host_program_id: [7; 8],
+            host_protocol_parameters_id: id(2),
+            stablecoin_definition_id: id(3),
+            collateral_definition_id: id(4),
+            token_program_id: [8; 8],
+            protocol_token: Some(id(5)),
+            protocol_token_ref_price: 42,
+            protocol_token_oracle_id: None,
+            ref_oracle_max_age_ms: 3_600_000,
+            global_cap: 10,
+            global_reserved: 1,
+            freeze_on_bad_debt: true,
+            bad_debt_freeze_threshold: 600,
+            system: sys(),
+        }
+    }
+
+    fn coll() -> CollateralConfigState {
+        CollateralConfigState {
+            tag: TAG_COLL,
+            config: id(1),
+            collateral_definition_id: id(4),
+            oracle_id: id(6),
+            oracle_scale: 0,
+            max_oracle_age_ms: 3_600_000,
+            max_conf_bps: 100,
+            band_lo_bps: 9_000,
+            band_hi_bps: 11_000,
+            penalty_bps: 1_000,
+            tip: 5,
+            chip_bps: 10,
+            reward_cap: 50,
+            debt_floor: 100,
+            min_bid: 25,
+            type_cap: 5,
+            type_reserved: 0,
+            schedule: vec![SchedulePointRec {
+                elapsed_ms: 0,
+                discount_bps: 200,
+            }],
+            admin_paused: false,
+            paused_since_ms: Some(5),
+            paused_total_ms: 6,
+            last_seen_oracle_ts: Some(7),
+        }
+    }
+
+    fn liqrec() -> LiquidationRecordState {
+        LiquidationRecordState {
+            tag: TAG_LIQREC,
+            position: id(2),
+            count: 3,
+        }
+    }
+    fn surplus() -> SurplusAuctionState {
+        SurplusAuctionState {
+            tag: TAG_SURPLUS,
+            config: id(1),
+            nonce: 2,
+            lot_left: 3,
+            start_ms: 4,
+            live: true,
+            ref_ray: 5,
+        }
+    }
+    fn debt() -> DebtAuctionState {
+        DebtAuctionState {
+            tag: TAG_DEBT,
+            config: id(1),
+            nonce: 2,
+            lot_left: 3,
+            start_amount: 4,
+            start_ms: 5,
+            live: true,
+        }
+    }
+
+    #[test]
+    fn every_state_round_trips_and_rejects_foreign_tags() {
+        let (c, k, a, l, s, d) = (
+            config(),
+            coll(),
+            AccountingState::new(),
+            liqrec(),
+            surplus(),
+            debt(),
+        );
+        let datas = [
+            Data::from(&c),
+            Data::from(&k),
+            Data::from(&a),
+            Data::from(&l),
+            Data::from(&s),
+            Data::from(&d),
+        ];
+        assert_eq!(EngineConfigState::try_from(&datas[0]).unwrap(), c);
+        assert_eq!(CollateralConfigState::try_from(&datas[1]).unwrap(), k);
+        assert_eq!(AccountingState::try_from(&datas[2]).unwrap(), a);
+        assert_eq!(LiquidationRecordState::try_from(&datas[3]).unwrap(), l);
+        assert_eq!(SurplusAuctionState::try_from(&datas[4]).unwrap(), s);
+        assert_eq!(DebtAuctionState::try_from(&datas[5]).unwrap(), d);
+        // A correctly sized buffer with the wrong tag is rejected by the tag check, not only by length.
+        let mut wrong = l.clone();
+        wrong.tag = TAG_DEBT;
+        assert!(LiquidationRecordState::try_from(&Data::from(&wrong)).is_err());
+        let mut wrong = s.clone();
+        wrong.tag = TAG_DEBT;
+        assert!(SurplusAuctionState::try_from(&Data::from(&wrong)).is_err());
+        let mut wrong = d.clone();
+        wrong.tag = TAG_SURPLUS;
+        assert!(DebtAuctionState::try_from(&Data::from(&wrong)).is_err());
+        let mut wrong = c.clone();
+        wrong.tag = TAG_COLL;
+        assert!(EngineConfigState::try_from(&Data::from(&wrong)).is_err());
+        let mut wrong = k.clone();
+        wrong.tag = TAG_CONFIG;
+        assert!(CollateralConfigState::try_from(&Data::from(&wrong)).is_err());
+        let mut wrong = a.clone();
+        wrong.tag = TAG_AUCTION;
+        assert!(AccountingState::try_from(&Data::from(&wrong)).is_err());
+        // Cross-kind decoding fails.
+        assert!(EngineConfigState::try_from(&datas[1]).is_err());
+        assert!(DebtAuctionState::try_from(&datas[4]).is_err());
+    }
+
+    #[test]
+    fn pause_clock_round_trips() {
+        let k = coll();
+        let clock = k.pause_clock();
+        assert_eq!(clock.paused_since_ms, Some(5));
+        assert_eq!(clock.paused_total_ms, 6);
+        assert_eq!(clock.last_seen_oracle_ts, Some(7));
+        let moved = k.with_pause_clock(PauseClock {
+            paused_since_ms: None,
+            paused_total_ms: 60,
+            last_seen_oracle_ts: Some(70),
+        });
+        assert_eq!(moved.paused_since_ms, None);
+        assert_eq!(moved.paused_total_ms, 60);
+        assert_eq!(moved.last_seen_oracle_ts, Some(70));
+        assert_eq!(
+            moved.penalty_bps, k.penalty_bps,
+            "other fields are untouched"
+        );
+        assert_eq!(k.with_pause_clock(clock), k);
+    }
+
+    #[test]
+    fn system_params_rec_converts_and_validates() {
+        let rec = sys();
+        let core = rec.to_core().unwrap();
+        assert_eq!(core.debt_lot, 500);
+        assert_eq!(
+            core.debt_growth.points()[0],
+            SchedulePoint {
+                elapsed_ms: 0,
+                discount_bps: 0
+            }
+        );
+        assert_eq!(SystemParamsRec::from_core(&core), rec);
+        let bad = SystemParamsRec {
+            surplus_lot: 0,
+            ..rec.clone()
+        };
+        assert_eq!(bad.to_core(), Err(EngineError::InvalidConfig));
+        let empty = SystemParamsRec {
+            debt_growth: vec![],
+            ..rec
+        };
+        assert!(empty.to_core().is_err());
+    }
+
+    #[test]
+    fn core_views_round_trip() {
+        let s = surplus();
+        assert_eq!(
+            s.with_core(&SurplusAuction {
+                lot_left: 9,
+                start_ms: 8,
+                live: false
+            })
+            .lot_left,
+            9
+        );
+        assert_eq!(s.with_core(&s.core()), s);
+        let d = debt();
+        assert_eq!(
+            d.with_core(&DebtAuction {
+                lot_left: 1,
+                start_amount: 2,
+                start_ms: 3,
+                live: false
+            })
+            .start_amount,
+            2
+        );
+        assert_eq!(d.with_core(&d.core()), d);
+        let a = AccountingState::new();
+        assert_eq!(AccountingState::with_core(&a, &a.core()), a);
+        let k = coll();
+        assert_eq!(k.collateral_params().unwrap().penalty_bps, 1_000);
+        assert!(k.feed_params().is_ok());
+        let bad = CollateralConfigState {
+            oracle_scale: 2,
+            ..k
+        };
+        assert_eq!(bad.feed_params(), Err(EngineError::InvalidConfig));
+    }
+
+    #[test]
+    fn all_seed_kinds_are_pairwise_distinct() {
+        let literals = [
+            "CONFIG",
+            "COLL",
+            "ACCT",
+            "BUFFER",
+            "LIQREC",
+            "AUCTION",
+            "VAULT",
+            "SURP",
+            "SURPVAULT",
+            "DEBT",
+            "ENGINE_AUTH",
+            "MINT_AUTH",
+            "UNUSED",
+        ];
+        for (i, a) in literals.iter().enumerate() {
+            for b in &literals[i + 1..] {
+                assert_ne!(seed_from_str(a), seed_from_str(b), "{a} vs {b}");
+            }
+        }
+        // Derived ids of kinds that take the same single account input must differ too.
+        let (e, p) = ([0xE1; 8], id(9));
+        let ids = [
+            accounting_pda(&e, &p),
+            buffer_pda(&e, &p),
+            vault_pda(&e, &p),
+            surplus_vault_pda(&e, &p),
+            engine_authority_pda(&e, &p),
+            mint_authority_pda(&e, &p),
+        ];
+        for (i, a) in ids.iter().enumerate() {
+            for b in &ids[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+        // And the (config, u64) kinds.
+        let n = [
+            surplus_auction_pda(&e, &p, 1),
+            debt_auction_pda(&e, &p, 1),
+            unused_slot_pda(&e, &p, 1),
+        ];
+        assert_ne!(n[0], n[1]);
+        assert_ne!(n[0], n[2]);
+        assert_ne!(n[1], n[2]);
     }
 }

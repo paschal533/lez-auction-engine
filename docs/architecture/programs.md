@@ -3,8 +3,8 @@
 ## Layout
 
 - `programs/auction_engine/core` (`auction_engine_core`): shared, guest-safe types. Instruction enum, borsh account states, PDA seed functions, `EngineError`, argument parsing and validation. Depends on `auction_core` (pure math) and `lee_core`; used by the guest, the host-side handlers, tests and the Plan 3 SDK.
-- `programs/auction_engine` (later tasks): handlers that take `lee_core` accounts and return post-states plus chained calls; pure Rust, unit-testable without a zkVM.
-- `programs/auction_engine/methods` (later tasks): the risc0 guest (one `#[instruction]` function per `Instruction` variant, in enum order) and the host build crate that exposes `AUCTION_ENGINE_ELF` / `AUCTION_ENGINE_ID`.
+- `programs/auction_engine` (planned, Task 8): handlers that take `lee_core` accounts and return post-states plus chained calls; pure Rust, unit-testable without a zkVM.
+- `programs/auction_engine/methods` (planned, Task 8): the risc0 guest (one `#[instruction]` function per `Instruction` variant, in enum order) and the host build crate that exposes `AUCTION_ENGINE_ELF` / `AUCTION_ENGINE_ID`.
 
 ## Accounts and seeds
 
@@ -72,7 +72,7 @@ Code names and numbers (`EngineError::code()`); the guest panics with `Program e
 
 ## Argument encoding
 
-Arguments use spel-encodable types only (ADR-030): bps as `u32` (≤ 10_000; collateral `band_hi_bps` ≤ 20_000), schedules as `Vec<u32>` of interleaved `(elapsed_ms, bps)` pairs (1–8 points; discounts ≤ 3000 bps). `args::EngineParamsArgs::validate` and `args::CollateralArgs::validate` convert them to `auction_core` parameter structs and enforce the config-time rules (ADR-024). `args::check_ref_price_step(old, new)` enforces that one admin change of the protocol-token reference price stays within `[old / 2, 2 * old]` (inclusive; `RefPriceStepTooLarge`).
+Arguments use spel-encodable types only (ADR-030): bps as `u32` (≤ 10_000; collateral `band_hi_bps` ≤ 20_000), schedules as `Vec<u32>` of interleaved `(elapsed_ms, bps)` pairs (1–8 points; discounts ≤ 3000 bps). `args::EngineParamsArgs::validate` and `args::CollateralArgs::validate` convert them to `auction_core` parameter structs and enforce the config-time rules (ADR-024). `args::check_ref_price_step(old, new)` enforces that one admin change of the protocol-token reference price stays within `[old / 2, 2 * old]` (inclusive; `RefPriceStepTooLarge`; plan review ruling I5, recorded in ADR-031, Task 13). `EngineParamsArgs::validate` does not call it (init has no old value); `set_engine_params` must call `check_ref_price_step(stored_old, new)`.
 
 ## Interfaces for Plan 3 (SDK, CLI, CI)
 
@@ -82,6 +82,6 @@ Arguments use spel-encodable types only (ADR-030): bps as `u32` (≤ 10_000; col
 - IDLs: `idl/auction_engine-idl.json`, `idl/stablecoin-idl.json` (regenerated with `tools/idl-gen` by every task that changes a guest).
 - Errors: `EngineError::code()`; the guest message is `Program error [6000+code]: <Name>`.
 - Program-id verification (I4): before building ANY transaction for a config, the SDK/CLI reads its `EngineConfig` and refuses unless `host_program_id` and `token_program_id` equal the expected ImageIDs in `DEPLOYMENTS.md` (and `admin` is the expected operator): the engine chains to those stored ids with the user's signer flags.
-- Bid account choice (ADR-029): list `accounting` (`bid_with_settlement`) whenever `coin_in_max >= remaining_target` or the quoted fill would empty the lot within the quote's slippage margin.
+- Bid account choice (ADR-029, added in Task 11): list `accounting` (`bid_with_settlement`) whenever `coin_in_max >= remaining_target` or the quoted fill would empty the lot within the quote's slippage margin.
 - Optional slots (ADR-030): pass `unused_slot_pda(config, 0|1)` when the reference oracle / protocol token is not configured.
 - Signers that sign more than one stablecoin-program transaction must be `wallet auth-transfer init`-ed first (ADR-018).

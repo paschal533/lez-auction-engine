@@ -23,3 +23,9 @@ Engine-only hooks require both the immediate `caller_program_id == engine_progra
 ## IDL path in the upstream PR
 
 `hook_instructions_share_enum_and_idl_index` looks for the IDL at `idl/stablecoin-idl.json` (this repo), then `artifacts/stablecoin-idl.json` (upstream). The upstream PR must regenerate `artifacts/stablecoin-idl.json` with the three hook instructions. `assert_engine_call` also rejects a stored zero engine program id defensively (the setter already refuses to store one).
+
+## `liquidate_position`
+
+Checks, in order: Variant C guard; `ProtocolParameters`, accumulator and redemption-price state at their PDAs; clock is `CLOCK_01`; the host oracle is the configured one, not future-dated, and no older than `maximum_oracle_price_age_milliseconds`; the position is initialised, owned by this program and at `compute_position_pda(owner, nonce)` from its own stored fields; debt > 0; `0 < cover <= normalized_debt`, `0 < seize <= collateral`; the proportionality bound `seize <= min(C, ceil(C·cover/N·1.25))` in U512 (`MAX_PENALTY_BPS = 2500`); the vault is the position's PDA vault, holds the collateral definition and at least `collateral_amount`; the custody holding is initialised, owned by the vault's token program and of the collateral definition; the redemption price projects to non-zero; and the position is **not** collateralised at `minimum_collateralization_ratio` (the same exact U512 comparison as `withdraw_collateral`, via `checks::is_position_collateralized`).
+
+Effects: full seizure zeroes the position and moves the whole vault balance (donations included) to custody; partial seizure (milestone M1) subtracts both amounts and moves exactly `collateral_to_seize`, leaving donations for the owner's next `deposit_collateral`. The position account is never released (LEZ cannot release accounts); its owner may `close_position` it once the vault is empty. Allowed while frozen.

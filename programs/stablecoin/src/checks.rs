@@ -60,12 +60,30 @@ pub fn assert_position_is_collateralized(
     current_redemption_price: U512,
     minimum_collateralization_ratio: u128,
 ) {
+    assert!(
+        is_position_collateralized(
+            position,
+            current_accumulator,
+            current_redemption_price,
+            minimum_collateralization_ratio,
+        ),
+        "Position is undercollateralized"
+    );
+}
+
+/// Boolean form of [`assert_position_is_collateralized`], same exact `U512` comparison
+/// (used by `liquidation_hooks::liquidate_position`, which requires the negation).
+#[must_use]
+pub fn is_position_collateralized(
+    position: &Position,
+    current_accumulator: U512,
+    current_redemption_price: U512,
+    minimum_collateralization_ratio: u128,
+) -> bool {
     if position.normalized_debt_amount == 0 {
-        return;
+        return true;
     }
-
     let one = U512::from(FIXED_POINT_ONE);
-
     // No division anywhere: `/ FIXED_POINT_ONE` on the debt side is carried as an
     // extra `× FIXED_POINT_ONE` on the collateral side, keeping the check exact.
     // `U512` holds this product outright — `u128::MAX × FIXED_POINT_ONE^3` is
@@ -75,11 +93,7 @@ pub fn assert_position_is_collateralized(
         .saturating_mul(current_accumulator)
         .saturating_mul(current_redemption_price)
         .saturating_mul(U512::from(minimum_collateralization_ratio));
-
-    assert!(
-        collateral_value >= required_collateral_value,
-        "Position is undercollateralized"
-    );
+    collateral_value >= required_collateral_value
 }
 
 // --- Sane-band constants per spec §8 -----------------------------------------

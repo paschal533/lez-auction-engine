@@ -733,14 +733,49 @@ mod stablecoin {
         Ok(spel_framework::SpelOutput::execute(post_states, chained_calls))
     }
 
-    /// Implemented in the next patch (liquidate_position).
+    /// Seize collateral into the engine's custody holding (lez-auction-engine hook; host fn
+    /// `stablecoin_program::liquidation_hooks::liquidate_position`). Engine-only. Allowed while frozen.
+    ///
+    /// # Errors
+    /// Returns the host program's panic-converted error if any precondition fails.
     #[instruction]
+    #[allow(clippy::too_many_arguments, reason = "ten account inputs mirror the host function's ABI")]
     pub fn liquidate_position(
+        ctx: ProgramContext,
+        #[account(signer)]
+        engine_authority: AccountWithMetadata,
+        liquidation_engine_state: AccountWithMetadata,
+        #[account(mut)]
+        position: AccountWithMetadata,
+        #[account(mut)]
+        vault: AccountWithMetadata,
+        #[account(mut)]
+        custody: AccountWithMetadata,
+        stability_fee_accumulator: AccountWithMetadata,
+        redemption_price_state: AccountWithMetadata,
+        market_price_oracle: AccountWithMetadata,
+        protocol_parameters: AccountWithMetadata,
+        clock: AccountWithMetadata,
         collateral_to_seize: u128,
         normalized_debt_to_cover: u128,
     ) -> SpelResult {
-        let _ = (collateral_to_seize, normalized_debt_to_cover);
-        panic!("liquidate_position is not implemented yet")
+        let (post_states, chained_calls) = stablecoin_program::liquidation_hooks::liquidate_position(
+            engine_authority,
+            liquidation_engine_state,
+            position,
+            vault,
+            custody,
+            stability_fee_accumulator,
+            redemption_price_state,
+            market_price_oracle,
+            protocol_parameters,
+            clock,
+            ctx.self_program_id,
+            ctx.caller_program_id,
+            collateral_to_seize,
+            normalized_debt_to_cover,
+        );
+        Ok(spel_framework::SpelOutput::execute(post_states, chained_calls))
     }
 
     /// Freeze new debt on the engine's behalf (lez-auction-engine hook; host fn

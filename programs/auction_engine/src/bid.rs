@@ -84,6 +84,9 @@ pub fn bid(
         &pda::vault_pda(&program_id, &a.auction.account_id),
         "auction_vault",
     )?;
+    if a.bidder_collateral_holding.account_id == a.auction_vault.account_id {
+        return Err(EngineError::WrongAccount("bidder_collateral_holding"));
+    }
     let vault_balance = fungible_balance(&a.auction_vault, &token, &cfg.collateral_definition_id)?;
     if vault_balance < fill.collateral_out {
         return Err(EngineError::VaultBelowBook);
@@ -168,10 +171,16 @@ pub fn bid(
         vec![pda::vault_seed(&a.auction.account_id)],
     ));
 
+    // Only a chain end changes the config (reservation release); every other bid leaves it as is.
+    let config_post = if end.is_some() {
+        write(&a.config, &cfg)
+    } else {
+        echo(&a.config)
+    };
     let mut post = vec![
         echo(&a.bidder_stable_holding),
         echo(&a.bidder_collateral_holding),
-        write(&a.config, &cfg),
+        config_post,
         write(&a.coll_config, &coll),
         write(&a.auction, &AuctionState::from_core(&st, &next)),
         echo(&a.auction_vault),

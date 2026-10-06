@@ -875,6 +875,167 @@
           "type": "u128"
         }
       ]
+    },
+    {
+      "name": "settle_empty",
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "coll_config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "accounting",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "ACCT"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "auction",
+          "writable": true,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claim_leftover",
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "owner_collateral_holding",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "auction",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "auction_vault",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "VAULT"
+              },
+              {
+                "kind": "account",
+                "path": "auction"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "settle_debt",
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "accounting",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "ACCT"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "BUFFER"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stablecoin_definition",
+          "writable": true,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u128"
+        }
+      ]
     }
   ],
   "instruction_type": "auction_engine_core::Instruction"

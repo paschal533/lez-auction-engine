@@ -246,4 +246,44 @@ mod auction_engine {
         };
         finish(engine::bid::bid(ctx.self_program_id, a, coin_in_max, min_collateral_out))
     }
+
+    #[instruction]
+    pub fn settle_empty(
+        ctx: ProgramContext,
+        #[account(signer)] caller: AccountWithMetadata,
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(mut)] coll_config: AccountWithMetadata,
+        #[account(mut, pda = [literal("ACCT"), account("config")])] accounting: AccountWithMetadata,
+        #[account(mut)] auction: AccountWithMetadata,
+    ) -> SpelResult {
+        let a = engine::settle::SettleEmptyAccounts { caller, config, coll_config, accounting, auction };
+        finish(engine::settle::settle_empty(ctx.self_program_id, a))
+    }
+
+    #[instruction]
+    pub fn claim_leftover(
+        ctx: ProgramContext,
+        #[account(signer)] owner: AccountWithMetadata,
+        #[account(mut)] owner_collateral_holding: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut)] auction: AccountWithMetadata,
+        #[account(mut, pda = [literal("VAULT"), account("auction")])] auction_vault: AccountWithMetadata,
+    ) -> SpelResult {
+        let a = engine::settle::ClaimLeftoverAccounts { owner, owner_collateral_holding, config, auction, auction_vault };
+        finish(engine::settle::claim_leftover(ctx.self_program_id, a))
+    }
+
+    #[instruction]
+    pub fn settle_debt(
+        ctx: ProgramContext,
+        #[account(signer)] caller: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut, pda = [literal("ACCT"), account("config")])] accounting: AccountWithMetadata,
+        #[account(mut, pda = [literal("BUFFER"), account("config")])] buffer: AccountWithMetadata,
+        #[account(mut)] stablecoin_definition: AccountWithMetadata,
+        amount: u128,
+    ) -> SpelResult {
+        let a = engine::settle::SettleDebtAccounts { caller, config, accounting, buffer, stablecoin_definition };
+        finish(engine::settle::settle_debt(ctx.self_program_id, a, amount))
+    }
 }

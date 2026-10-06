@@ -870,3 +870,72 @@ pub fn underwater_world() -> (World, AccountId) {
     w.bidder(k::BIDDER_STABLE, k::BIDDER_COLL, 1_000_000);
     (w, pos)
 }
+
+// ---- settle_empty, claim_leftover, settle_debt (Task 12) ----
+
+impl World {
+    pub fn settle_empty(&mut self, pos: AccountId) -> Result<(), LeeError> {
+        self.engine(
+            vec![
+                id(k::CALLER),
+                config(),
+                coll_config(),
+                accounting(),
+                auction(pos, 0),
+            ],
+            &[k::CALLER],
+            Ix::SettleEmpty,
+        )
+    }
+
+    pub fn claim_leftover(
+        &mut self,
+        signer: u8,
+        holding: u8,
+        pos: AccountId,
+    ) -> Result<(), LeeError> {
+        self.claim_leftover_signed(signer, holding, pos, &[signer])
+    }
+
+    /// `claim_leftover` with an explicit signer list (a fresh recipient holding must sign too).
+    pub fn claim_leftover_signed(
+        &mut self,
+        signer: u8,
+        holding: u8,
+        pos: AccountId,
+        signers: &[u8],
+    ) -> Result<(), LeeError> {
+        self.engine(
+            vec![
+                id(signer),
+                id(holding),
+                config(),
+                auction(pos, 0),
+                auction_vault(pos, 0),
+            ],
+            signers,
+            Ix::ClaimLeftover,
+        )
+    }
+
+    pub fn settle_debt(&mut self, amount: u128) -> Result<(), LeeError> {
+        self.engine(
+            vec![
+                id(k::CALLER),
+                config(),
+                accounting(),
+                buffer(),
+                stable_def(),
+            ],
+            &[k::CALLER],
+            Ix::SettleDebt { amount },
+        )
+    }
+
+    /// A third party raises `to`'s balance (stablecoin donation).
+    pub fn donate_stable(&mut self, to: AccountId, amount: u128) {
+        self.fund_stable(k::DONOR_STABLE, amount);
+        self.transfer_tokens(k::DONOR_STABLE, to, amount)
+            .expect("donation");
+    }
+}

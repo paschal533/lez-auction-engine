@@ -603,3 +603,127 @@ fn releasing_more_than_is_reserved_is_a_math_error() {
     b.config = meta(cfg_id(), engine_owned((&g).into()), false);
     assert_eq!(rejected(run(b, TARGET, 0)), EngineError::Math);
 }
+
+#[test]
+fn the_bidder_collateral_holding_cannot_be_the_auction_vault() {
+    let mut a = fixture();
+    a.bidder_collateral_holding =
+        holding(vault_pda(&ENGINE, &auction_id()), COLLATERAL, LOT, false);
+    assert_eq!(
+        rejected(run(a, 100_000, 0)),
+        EngineError::WrongAccount("bidder_collateral_holding")
+    );
+    let mut settling_a = settling();
+    settling_a.bidder_collateral_holding =
+        holding(vault_pda(&ENGINE, &auction_id()), COLLATERAL, LOT, false);
+    assert_eq!(
+        rejected(run(settling_a, TARGET, 0)),
+        EngineError::WrongAccount("bidder_collateral_holding")
+    );
+}
+
+#[test]
+fn a_bid_without_chain_end_echoes_the_config_account() {
+    for a in [fixture(), settling()] {
+        let before = a.config.account.clone();
+        let (post, _) = run(a, 100_000, 0).expect("non-final bid");
+        assert_eq!(post[P_CONFIG].account(), &before, "config post == pre");
+    }
+}
+
+#[test]
+fn the_final_fill_exception_pays_one_unit_and_settles_once() {
+    // Config/price-dependent, bounded at 1 collateral unit per auction (ADR-024). With one unit worth
+    // 196 coin (R = 0.005, discount 2%) and chost = 110, a first bid can leave remaining = 150 in
+    // [chost, 196): no later bid floors to a unit, but the target-reaching one is paid exactly 1.
+    let low = ONE / 200;
+    let mut first = settling();
+    first.redemption_price_state = rps_with(low, ONE, NOW);
+    first.oracle = oracle_with(ORACLE, low, NOW, 0);
+    let (post1, calls1) = run(first, TARGET - 150, 0).expect("partial bid leaves 150");
+    let out1 = 3_366; // floor(659_850 x 0.005 / 0.98)
+    let a1 = decode_auction(&post1[P_AUCTION]);
+    assert_eq!(
+        (
+            a1.debt_raised,
+            a1.penalty_raised,
+            a1.collateral_left,
+            a1.settled
+        ),
+        (DEBT, 59_850, LOT - out1, false)
+    );
+    assert_eq!(calls1.len(), 3);
+
+    let mut second = settling();
+    second.redemption_price_state = rps_with(low, ONE, NOW);
+    second.oracle = oracle_with(ORACLE, low, NOW, 0);
+    second.config = meta(cfg_id(), post1[P_CONFIG].account().clone(), false);
+    second.coll_config = meta(
+        second.coll_config.account_id,
+        post1[P_COLL].account().clone(),
+        false,
+    );
+    second.auction = meta(auction_id(), post1[P_AUCTION].account().clone(), false);
+    second.bidder_stable_holding = holding(BIDDER_STABLE, STABLE, 1_000_000 - (TARGET - 150), true);
+    second.bidder_collateral_holding = holding(BIDDER_COLL, COLLATERAL, out1, false);
+    second.auction_vault = holding(
+        vault_pda(&ENGINE, &auction_id()),
+        COLLATERAL,
+        LOT - out1,
+        false,
+    );
+    let vault_pre = second.auction_vault.clone();
+    let stable_pre = second.bidder_stable_holding.clone();
+    let coll_pre = second.bidder_collateral_holding.clone();
+    let buffer = second.buffer.clone();
+    let (post2, calls2) = run(second, u128::MAX, 0).expect("final fill");
+
+    // floor(150 x 0.005 / 0.98) = 0, so the exception pays exactly one unit for the remaining 150.
+    let a2 = decode_auction(&post2[P_AUCTION]);
+    assert!(a2.settled);
+    assert_eq!(
+        (
+            a2.collateral_left,
+            a2.collateral_sold,
+            a2.leftover_claimable
+        ),
+        (LOT - out1 - 1, out1 + 1, LOT - out1 - 1)
+    );
+    assert_eq!((a2.debt_raised, a2.penalty_raised), (DEBT, 60_000));
+    assert_eq!(
+        calls2,
+        vec![
+            token_calls::transfer(
+                TOKEN,
+                token_calls::with_balance(&stable_pre, STABLE, 340_150),
+                buffer,
+                150,
+                vec![],
+            ),
+            token_calls::transfer(
+                TOKEN,
+                token_calls::authorized(&vault_pre),
+                coll_pre,
+                1,
+                vec![vault_seed(&auction_id())],
+            ),
+        ]
+    );
+    let acc = decode_accounting(&post2[P_ACCOUNTING]);
+    assert_eq!(
+        (
+            acc.total_debt_burned,
+            acc.total_penalty_collected,
+            acc.unbacked_debt,
+            acc.total_shortfall_booked
+        ),
+        (DEBT, 60_000, 0, 0),
+        "folded exactly once at the final fill"
+    );
+    assert_eq!(decode_coll(&post2[P_COLL]).type_reserved, 0);
+    assert_eq!(decode_config(&post2[P_CONFIG]).global_reserved, 0);
+
+    let mut replay = settling();
+    replay.auction = meta(auction_id(), post2[P_AUCTION].account().clone(), false);
+    assert_eq!(rejected(run(replay, 100, 0)), EngineError::NotAuctioning);
+}

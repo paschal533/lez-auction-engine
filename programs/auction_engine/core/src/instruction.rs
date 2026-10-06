@@ -90,7 +90,13 @@ pub enum Instruction {
         coin_in_max: u128,
         min_collateral_out: u128,
     },
-    // Tasks 12–15 append the remaining variants here, in Shared Reference R2 order
-    // (settle_empty = 7 … check_solvency = 16). Each appending task also appends the guest
+    /// Accounts: caller(s), config(m), coll_config(m), accounting(m), auction(m). Settles a lot-0 auction.
+    SettleEmpty,
+    /// Accounts: owner(s), owner_collateral_holding(m), config, auction(m), auction_vault(m).
+    ClaimLeftover,
+    /// Accounts: caller(s), config, accounting(m), buffer(m), stablecoin_definition(m).
+    SettleDebt { amount: u128 },
+    // Tasks 13–15 append the remaining variants here, in Shared Reference R2 order
+    // (start_surplus_auction = 10 … check_solvency = 16). Each appending task also appends the guest
     // function and an index assertion to `instruction_indices_follow_reference_order`.
 }

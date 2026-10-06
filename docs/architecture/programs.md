@@ -125,3 +125,17 @@ Debt first (ADR-010): a fill of `charged` coin splits into `debt_part` (burned f
 5. The bidder's stablecoin holding must sign; a fresh bidder collateral holding must sign too (`RecipientMustSign`), a holding of the wrong definition fails with `WrongDefinition`. `AuctionState.keeper` is identity only and is never a payment recipient.
 
 Interfaces for Plan 3: use `bid_with_settlement` whenever `coin_in_max >= remaining_target` or the quoted fill is within the slippage margin of emptying the lot; otherwise `bid`. If a plain `bid` turns final in flight it reverts with `ChainEndAccountsMissing`; re-quote and resend with the chain-end account.
+
+The final-fill exception is config/price-dependent and bounded at 1 collateral unit per auction. It needs a remaining target `r` with `chost <= r < (1 - d) / P` coin, so one collateral unit must be worth more than `chost` coin (a high collateral price in coin terms); with the default test config (`chost` 110, price 0.5) it cannot occur, with a low collateral-per-coin price it can. It is pinned at engine level by `bid_tests::the_final_fill_exception_pays_one_unit_and_settles_once` (price 0.005, a prior partial bid leaves 150) as well as in `auction_core`.
+
+A `bid` that does not end the auction echoes the config account unchanged (only a chain end writes it, to release the reservation); the bidder's collateral holding must not be the auction vault (`WrongAccount("bidder_collateral_holding")`).
+
+## Settlement paths
+
+An auction ends in exactly one of two chain-end paths: the `bid_with_settlement` that reaches the target or empties the lot, or `settle_empty` for an auction whose lot is already 0 (the keeper reward consumed the whole seizure, so no bid can succeed). Both call `Accounting::record_settled` exactly once, book the shortfall, and release `reserved_amount` from `CollateralConfig.type_reserved` and `EngineConfig.global_reserved`; the persisted `settled = true` makes every later `bid` / `settle_empty` fail `NotAuctioning` (ADR-024).
+
+- `settle_empty` (permissionless, signer required): requires `Auctioning` and `collateral_left == 0`, otherwise `NotAuctioning`. Engine only, no chained call.
+- `claim_leftover` (owner only): the signer must be the position owner recorded in the `Auction` (`NotOwner`). It pays `leftover_claimable - leftover_claimed` once (second claim: `NothingToClaim`) by sweeping the whole auction-vault balance to the owner's collateral holding, so a donation made after settlement is paid out with it (ADR-033); the vault balance is checked with `>=` the claim (`VaultBelowBook`). A fresh recipient holding must sign (`RecipientMustSign`) and must not be the vault. Two executions.
+- `settle_debt(amount)` (permissionless): burns `min(amount, buffer ACTUAL balance, unbacked_debt - debt_on_auction)` from the engine-PDA buffer, signed by the buffer's seed `["BUFFER", config]` (the S7 prerequisite "burn from an engine-PDA-held holding", test `settle_debt_uses_actual_buffer_balance`). The debt a live debt auction sells (`debt_on_auction`, ADR-024 reservation) is never settled from the buffer, `settle_debt(u128::MAX)` burns only what exists (`settle_debt_max_amount`), and donations to the buffer raise what can be burned. Nothing to burn is a successful no-op with no chained call. Two executions.
+
+`settle::implicit_settle(acc, buffer_balance)` (`settle_debt(u128::MAX)` on the actual balance) and `settle::buffer_burn(...)` (the seeded `Token::Burn`, `None` for 0) are shared with the system-auction instructions of Tasks 13-15.

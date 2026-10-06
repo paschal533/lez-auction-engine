@@ -290,6 +290,13 @@ mod tests {
     }
 
     #[test]
+    fn settle_indices() {
+        assert_eq!(idx(&Instruction::SettleEmpty), 7);
+        assert_eq!(idx(&Instruction::ClaimLeftover), 8);
+        assert_eq!(idx(&Instruction::SettleDebt { amount: 0 }), 9);
+    }
+
+    #[test]
     fn bid_indices() {
         assert_eq!(
             idx(&Instruction::Bid {

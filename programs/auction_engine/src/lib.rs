@@ -15,6 +15,9 @@ mod collateral_tests;
 pub mod feed;
 pub mod liquidate;
 pub mod observe;
+pub mod settle;
+#[cfg(test)]
+mod settle_tests;
 pub mod token_calls;
 
 use auction_engine_core::EngineError;

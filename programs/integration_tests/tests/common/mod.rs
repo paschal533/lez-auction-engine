@@ -1,4 +1,4 @@
-//! World harness: the real token and stablecoin guests (Task 8 adds the auction_engine) in an in-process V03State
+//! World harness: the real token and stablecoin guests (and the auction_engine) in an in-process V03State
 //! (risc0 dev mode). Host bootstrap uses the real `InitializeProgram`; positions use the real
 //! `OpenPosition` + `GenerateDebt`. Fixture accounts are force-inserted like the upstream tests.
 #![allow(dead_code)]
@@ -127,7 +127,11 @@ impl World {
             injected_stable: 0,
         };
         w.seed_clock();
-        for elf in [token_methods::TOKEN_ELF, stablecoin_methods::STABLECOIN_ELF] {
+        for elf in [
+            token_methods::TOKEN_ELF,
+            stablecoin_methods::STABLECOIN_ELF,
+            auction_engine_methods::AUCTION_ENGINE_ELF,
+        ] {
             w.deploy(elf);
         }
         for n in [
@@ -450,5 +454,153 @@ impl World {
                 engine_authority_id,
             },
         )
+    }
+}
+
+// ---- engine part (Task 8) ----
+use auction_engine_core::{
+    args::EngineParamsArgs,
+    pda::{self, SLOT_PROTOCOL_TOKEN, SLOT_REF_ORACLE},
+    Instruction as Ix,
+};
+
+pub const SALT: u64 = 1;
+
+pub fn engine_program() -> ProgramId {
+    auction_engine_methods::AUCTION_ENGINE_ID
+}
+pub fn config() -> AccountId {
+    pda::config_pda(&engine_program(), &id(k::ENGINE_ADMIN), SALT)
+}
+pub fn coll_config() -> AccountId {
+    pda::coll_config_pda(&engine_program(), &config(), &collateral_def())
+}
+pub fn accounting() -> AccountId {
+    pda::accounting_pda(&engine_program(), &config())
+}
+pub fn buffer() -> AccountId {
+    pda::buffer_pda(&engine_program(), &config())
+}
+pub fn engine_authority() -> AccountId {
+    pda::engine_authority_pda(&engine_program(), &config())
+}
+pub fn mint_authority() -> AccountId {
+    pda::mint_authority_pda(&engine_program(), &config())
+}
+pub fn unused(slot: u64) -> AccountId {
+    pda::unused_slot_pda(&engine_program(), &config(), slot)
+}
+pub fn record(pos: AccountId) -> AccountId {
+    pda::liqrec_pda(&engine_program(), &config(), &pos)
+}
+pub fn auction(pos: AccountId, nonce: u64) -> AccountId {
+    pda::auction_pda(&engine_program(), &config(), &pos, nonce)
+}
+pub fn auction_vault(pos: AccountId, nonce: u64) -> AccountId {
+    pda::vault_pda(&engine_program(), &auction(pos, nonce))
+}
+
+pub fn init_config_ix(salt: u64, p: &EngineParamsArgs) -> Ix {
+    Ix::InitConfig {
+        salt,
+        global_cap: p.global_cap,
+        freeze_on_bad_debt: p.freeze_on_bad_debt,
+        bad_debt_freeze_threshold: p.bad_debt_freeze_threshold,
+        protocol_token_enabled: p.protocol_token_enabled,
+        protocol_token_ref_price: p.protocol_token_ref_price,
+        ref_oracle_enabled: p.ref_oracle_enabled,
+        ref_oracle_max_age_ms: p.ref_oracle_max_age_ms,
+        surplus_buffer_target: p.surplus_buffer_target,
+        surplus_lot: p.surplus_lot,
+        surplus_delay_ms: p.surplus_delay_ms,
+        surplus_premium_bps: p.surplus_premium_bps,
+        surplus_max_discount_bps: p.surplus_max_discount_bps,
+        debt_lot: p.debt_lot,
+        debt_initial_discount_bps: p.debt_initial_discount_bps,
+        debt_growth: p.debt_growth.clone(),
+        surplus_decay: p.surplus_decay.clone(),
+        max_mint_per_auction: p.max_mint_per_auction,
+        min_take: p.min_take,
+        system_ttl_ms: p.system_ttl_ms,
+    }
+}
+
+pub fn set_engine_params_ix(p: &EngineParamsArgs) -> Ix {
+    Ix::SetEngineParams {
+        global_cap: p.global_cap,
+        freeze_on_bad_debt: p.freeze_on_bad_debt,
+        bad_debt_freeze_threshold: p.bad_debt_freeze_threshold,
+        protocol_token_enabled: p.protocol_token_enabled,
+        protocol_token_ref_price: p.protocol_token_ref_price,
+        ref_oracle_enabled: p.ref_oracle_enabled,
+        ref_oracle_max_age_ms: p.ref_oracle_max_age_ms,
+        surplus_buffer_target: p.surplus_buffer_target,
+        surplus_lot: p.surplus_lot,
+        surplus_delay_ms: p.surplus_delay_ms,
+        surplus_premium_bps: p.surplus_premium_bps,
+        surplus_max_discount_bps: p.surplus_max_discount_bps,
+        debt_lot: p.debt_lot,
+        debt_initial_discount_bps: p.debt_initial_discount_bps,
+        debt_growth: p.debt_growth.clone(),
+        surplus_decay: p.surplus_decay.clone(),
+        max_mint_per_auction: p.max_mint_per_auction,
+        min_take: p.min_take,
+        system_ttl_ms: p.system_ttl_ms,
+    }
+}
+
+pub fn slot_account(slot: u64, enabled: bool) -> AccountId {
+    match (slot, enabled) {
+        (SLOT_PROTOCOL_TOKEN, true) => protocol_token_def(),
+        (SLOT_REF_ORACLE, true) => ref_oracle(),
+        _ => unused(slot),
+    }
+}
+
+impl World {
+    pub fn engine(
+        &mut self,
+        accounts: Vec<AccountId>,
+        signers: &[u8],
+        ix: Ix,
+    ) -> Result<(), LeeError> {
+        self.submit(engine_program(), accounts, signers, ix)
+    }
+
+    pub fn init_engine_config(&mut self, p: &EngineParamsArgs) -> Result<(), LeeError> {
+        self.engine(
+            vec![
+                id(k::ENGINE_ADMIN),
+                config(),
+                accounting(),
+                buffer(),
+                protocol_parameters(),
+                stable_def(),
+                slot_account(SLOT_PROTOCOL_TOKEN, p.protocol_token_enabled),
+                slot_account(SLOT_REF_ORACLE, p.ref_oracle_enabled),
+            ],
+            &[k::ENGINE_ADMIN],
+            init_config_ix(SALT, p),
+        )
+    }
+
+    pub fn set_engine_params(&mut self, signer: u8, p: &EngineParamsArgs) -> Result<(), LeeError> {
+        self.engine(
+            vec![
+                id(signer),
+                config(),
+                accounting(),
+                coll_config(),
+                slot_account(SLOT_PROTOCOL_TOKEN, p.protocol_token_enabled),
+                slot_account(SLOT_REF_ORACLE, p.ref_oracle_enabled),
+            ],
+            &[signer],
+            set_engine_params_ix(p),
+        )
+    }
+
+    /// Host admin binds `config()`'s engine authority (ADR-026/027).
+    pub fn bind_engine(&mut self) -> Result<(), LeeError> {
+        self.bind_engine_to(engine_program(), engine_authority())
     }
 }

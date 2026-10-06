@@ -1,0 +1,16 @@
+[package]
+name = "auction_engine_program"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+auction_core = { path = "../../crates/auction_core" }
+auction_engine_core = { path = "core" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4", features = ["host"] }
+clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4" }
+stablecoin_core = { path = "../stablecoin/core" }
+token_core = { path = "../token/core" }
+twap_oracle_core = { path = "../twap_oracle/core" }
+alloy-primitives = { version = "1", default-features = false }
+borsh = { version = "1.5", features = ["derive"] }

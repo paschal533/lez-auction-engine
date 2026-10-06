@@ -89,3 +89,10 @@ Arguments use spel-encodable types only (ADR-030): bps as `u32` (≤ 10_000; col
 ## Test harness
 
 `programs/integration_tests` (package `engine_integration_tests`) runs the real token, stablecoin and (from Task 8) auction_engine guests in an in-process `V03State` (risc0 dev mode). `World::new` bootstraps the host with the real `InitializeProgram` (stability fee exactly 1.0 per ms so debt stays exact, min CR 1.5, redemption price 0.5); positions use the real `OpenPosition` + `GenerateDebt`; fixture accounts are force-inserted like the upstream tests; signers are owned by a placeholder program so they can sign repeatedly (S1 problem 6).
+
+## Handler conventions
+
+- Handlers live in `programs/auction_engine/src/` and take `(program_id, <Name>Accounts, args…)`; they return `EngineResult` = post-states for every input account in order plus chained calls. The guest only converts arguments and maps `EngineError` to `SpelError::Custom(code)`.
+- Engine accounts are loaded through `accounts::load_*` (owner = engine, 8-byte tag, PDA re-derived from stored fields). Holdings through `fungible_balance` (token program and definition) or `check_recipient` (initialised with the definition, or fresh and signed).
+- Chained token calls are built by `token_calls`; a later call in the same transaction carries the simulated post-state of an earlier one, and only the call that attaches a PDA's seed marks it authorised (Shared Reference R3).
+- `init_config` is permissionless: the signer becomes that config's admin, the config PDA is `["CONFIG", admin, salt]`, and a host trusts a config only after its admin verifies and binds that config's engine authority (ADR-026/027). The host program id comes from the `ProtocolParameters` owner and the token program from the stablecoin definition owner; both are fixed at `init_config` and clients must verify them against `DEPLOYMENTS.md` (I4).

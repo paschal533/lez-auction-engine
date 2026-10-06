@@ -2,6 +2,8 @@
 members = [
     "crates/auction_core",
     "programs/auction_engine/core",
+    "programs/auction_engine",
+    "programs/auction_engine/methods",
     "programs/token/core",
     "programs/token",
     "programs/token/methods",
@@ -17,6 +19,7 @@ exclude = [
     "spikes",
     "programs/token/methods/guest",
     "programs/stablecoin/methods/guest",
+    "programs/auction_engine/methods/guest",
 ]
 resolver = "2"
 

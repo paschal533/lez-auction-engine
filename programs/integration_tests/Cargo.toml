@@ -17,3 +17,6 @@ token_core = { workspace = true }
 twap_oracle_core = { workspace = true }
 token-methods = { path = "../token/methods" }
 stablecoin-methods = { path = "../stablecoin/methods" }
+auction_core = { workspace = true }
+auction_engine_core = { workspace = true }
+auction-engine-methods = { path = "../auction_engine/methods" }

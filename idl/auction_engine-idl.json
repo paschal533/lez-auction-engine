@@ -1,0 +1,309 @@
+{
+  "version": "0.1.0",
+  "name": "auction_engine",
+  "instructions": [
+    {
+      "name": "init_config",
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "CONFIG"
+              },
+              {
+                "kind": "account",
+                "path": "admin"
+              },
+              {
+                "kind": "arg",
+                "path": "salt"
+              }
+            ]
+          }
+        },
+        {
+          "name": "accounting",
+          "writable": true,
+          "signer": false,
+          "init": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "ACCT"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "BUFFER"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "protocol_parameters",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "stablecoin_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "protocol_token_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "ref_oracle",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "salt",
+          "type": "u64"
+        },
+        {
+          "name": "global_cap",
+          "type": "u128"
+        },
+        {
+          "name": "freeze_on_bad_debt",
+          "type": "bool"
+        },
+        {
+          "name": "bad_debt_freeze_threshold",
+          "type": "u128"
+        },
+        {
+          "name": "protocol_token_enabled",
+          "type": "bool"
+        },
+        {
+          "name": "protocol_token_ref_price",
+          "type": "u128"
+        },
+        {
+          "name": "ref_oracle_enabled",
+          "type": "bool"
+        },
+        {
+          "name": "ref_oracle_max_age_ms",
+          "type": "u64"
+        },
+        {
+          "name": "surplus_buffer_target",
+          "type": "u128"
+        },
+        {
+          "name": "surplus_lot",
+          "type": "u128"
+        },
+        {
+          "name": "surplus_delay_ms",
+          "type": "u64"
+        },
+        {
+          "name": "surplus_premium_bps",
+          "type": "u32"
+        },
+        {
+          "name": "surplus_max_discount_bps",
+          "type": "u32"
+        },
+        {
+          "name": "debt_lot",
+          "type": "u128"
+        },
+        {
+          "name": "debt_initial_discount_bps",
+          "type": "u32"
+        },
+        {
+          "name": "debt_growth",
+          "type": {
+            "vec": "u32"
+          }
+        },
+        {
+          "name": "surplus_decay",
+          "type": {
+            "vec": "u32"
+          }
+        },
+        {
+          "name": "max_mint_per_auction",
+          "type": "u128"
+        },
+        {
+          "name": "min_take",
+          "type": "u128"
+        },
+        {
+          "name": "system_ttl_ms",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_engine_params",
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "accounting",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "coll_config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "protocol_token_definition",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "ref_oracle",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "global_cap",
+          "type": "u128"
+        },
+        {
+          "name": "freeze_on_bad_debt",
+          "type": "bool"
+        },
+        {
+          "name": "bad_debt_freeze_threshold",
+          "type": "u128"
+        },
+        {
+          "name": "protocol_token_enabled",
+          "type": "bool"
+        },
+        {
+          "name": "protocol_token_ref_price",
+          "type": "u128"
+        },
+        {
+          "name": "ref_oracle_enabled",
+          "type": "bool"
+        },
+        {
+          "name": "ref_oracle_max_age_ms",
+          "type": "u64"
+        },
+        {
+          "name": "surplus_buffer_target",
+          "type": "u128"
+        },
+        {
+          "name": "surplus_lot",
+          "type": "u128"
+        },
+        {
+          "name": "surplus_delay_ms",
+          "type": "u64"
+        },
+        {
+          "name": "surplus_premium_bps",
+          "type": "u32"
+        },
+        {
+          "name": "surplus_max_discount_bps",
+          "type": "u32"
+        },
+        {
+          "name": "debt_lot",
+          "type": "u128"
+        },
+        {
+          "name": "debt_initial_discount_bps",
+          "type": "u32"
+        },
+        {
+          "name": "debt_growth",
+          "type": {
+            "vec": "u32"
+          }
+        },
+        {
+          "name": "surplus_decay",
+          "type": {
+            "vec": "u32"
+          }
+        },
+        {
+          "name": "max_mint_per_auction",
+          "type": "u128"
+        },
+        {
+          "name": "min_take",
+          "type": "u128"
+        },
+        {
+          "name": "system_ttl_ms",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "instruction_type": "auction_engine_core::Instruction"
+}

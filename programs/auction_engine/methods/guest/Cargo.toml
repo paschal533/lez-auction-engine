@@ -1,0 +1,23 @@
+[package]
+name = "auction-engine-guest"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[profile.release]
+debug = 0
+strip = "symbols"
+
+[[bin]]
+name = "auction_engine"
+path = "src/bin/auction_engine.rs"
+
+[dependencies]
+spel-framework = { git = "https://github.com/logos-co/spel.git", rev = "1ef0500f8fc8ce3ddf95523726ae159db83f744f", package = "spel-framework" }
+nssa_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4", package = "lee_core" }
+risc0-zkvm = { version = "=3.0.5", default-features = false }
+auction_engine_program = { path = "../.." }
+auction_engine_core = { path = "../../core" }
+serde = { version = "1.0", features = ["derive"] }
+borsh = "1.5"

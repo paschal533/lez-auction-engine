@@ -8,7 +8,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.0
         with: { components: "rustfmt, clippy" }
       # Vendored crates keep upstream formatting (`cargo +nightly fmt` per the lez-programs Makefile); our crates are listed explicitly.
-      - run: cargo fmt -p auction_core -p auction_engine_core -p engine_integration_tests -- --check
+      - run: cargo fmt -p auction_core -p auction_engine_core -p auction_engine_program -p engine_integration_tests -- --check
       - run: cargo clippy --locked -p auction_core --all-targets -- -D warnings
       - run: cargo test --locked -p auction_core
       - run: PROPTEST_CASES=2000 cargo test --locked -p auction_core --test invariants --test s5_pause_onset

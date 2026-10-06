@@ -661,6 +661,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "auction-engine-methods"
+version = "0.1.0"
+dependencies = [
+ "risc0-build",
+ "risc0-zkvm",
+]
+
+[[package]]
 name = "auction_core"
 version = "0.1.0"
 dependencies = [
@@ -678,6 +686,21 @@ dependencies = [
  "risc0-zkvm",
  "serde",
  "spel-framework",
+]
+
+[[package]]
+name = "auction_engine_program"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "auction_core",
+ "auction_engine_core",
+ "borsh",
+ "clock_core",
+ "lee_core",
+ "stablecoin_core",
+ "token_core",
+ "twap_oracle_core",
 ]
 
 [[package]]
@@ -1921,6 +1944,9 @@ dependencies = [
 name = "engine_integration_tests"
 version = "0.1.0"
 dependencies = [
+ "auction-engine-methods",
+ "auction_core",
+ "auction_engine_core",
  "clock_core",
  "lee",
  "lee_core",

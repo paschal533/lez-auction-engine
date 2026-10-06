@@ -680,3 +680,42 @@ An observation costs a transaction; the residual (unobserved publishes, a re-sta
 
 **Status**
 Accepted (Plan 2, Task 9)
+
+---
+
+## ADR-029: Two Bid Instructions; a Bid That Turns Final Without `Accounting` Reverts
+
+**Context**
+ADR-023 (S6) updates `Accounting` only at chain end, and its consequence 6 asks Plan 2 to decide what happens when a bid signed without the chain-end accounts turns out to end the auction (price and `t_eff` move between quote and inclusion). In this design the reservation release writes `CollateralConfig` and `EngineConfig`, which every bid already lists (pause observation and validation), so `Accounting` is the only chain-end-only account.
+
+**Options**
+- (A) Revert with a distinct error so the client re-quotes with the account.
+- (B) A permissionless `finalize` that applies chain-end effects later (an extra "settled, not finalized" state).
+- (C) Always list `Accounting` (gives up the S6 saving).
+
+**Decision**
+(A), as two instructions sharing one handler: `bid` (no `Accounting`; reverts `ChainEndAccountsMissing` if the fill ends the auction) and `bid_with_settlement` (lists `Accounting`; any fill). Spec §5.5/§5.6 require chain-end effects "in the same transaction" and "exactly once"; (B) would let `unbacked_debt` lag a settled shortfall, which `check_solvency` and `start_debt_auction` read, and adds a state. Rest-account (`Vec<AccountWithMetadata>`) optional lists exist in the SPEL macro but were never exercised in the spikes; two fixed lists use only confirmed features and keep the IDL simple. Clients (Plan 3) use `bid_with_settlement` whenever `coin_in_max >= remaining_target` or the quoted fill is within the slippage margin of emptying the lot. If most bids end up listing `Accounting`, revisit S6 (Plan 3 `CYCLES.md`).
+
+**Trade-offs**
+A racing bid can revert and need a re-quote; nothing is applied when it does (test `bid_that_turns_final_without_accounting_reverts`).
+
+**R3 deviation (M8).** Spec §5.4 lists a non-final bid's writes as its auction, vault, buffer and the bidder's holdings. Here every bid also writes `CollateralConfig` (the type-level pause clock observed before `t_eff`, spec §5.7) and lists `EngineConfig` (echoed unchanged unless the bid settles). Both are per-instance shared state by design; no other auction's data changes (test `r3_a_bid_touches_only_its_own_auction`).
+
+**Status**
+Accepted (Plan 2, Task 11)
+
+---
+
+## ADR-033: Sweep Rules for Engine-Held Holdings
+
+**Context**
+Anyone can raise any holding's balance (spec §3.2); spec §5.13 invariant 2 says terminal sweeps take the whole balance.
+
+**Decision**
+A fill that empties the lot transfers the whole auction-vault balance to the bidder; `claim_leftover` transfers the whole vault balance to the owner; `settle_debt` burns from the buffer's actual balance; `close_surplus_auction` returns the whole surplus-vault balance to the buffer. `settle_empty` (lot 0) moves nothing: any donation into such a vault stays there (the donor's loss, no protocol effect). Balances are only ever compared with `>=`.
+
+**Trade-offs**
+Donations go to whoever the sweep pays; they never change a booked number.
+
+**Status**
+Accepted (Plan 2, Task 11)

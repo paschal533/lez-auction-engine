@@ -288,4 +288,22 @@ mod tests {
     fn liquidate_index() {
         assert_eq!(idx(&Instruction::Liquidate { nonce: 0 }), 4);
     }
+
+    #[test]
+    fn bid_indices() {
+        assert_eq!(
+            idx(&Instruction::Bid {
+                coin_in_max: 0,
+                min_collateral_out: 0
+            }),
+            5
+        );
+        assert_eq!(
+            idx(&Instruction::BidWithSettlement {
+                coin_in_max: 0,
+                min_collateral_out: 0
+            }),
+            6
+        );
+    }
 }

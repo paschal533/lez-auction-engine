@@ -2,7 +2,10 @@ mod common;
 
 use auction_engine_core::{
     args::CollateralArgs,
-    state::{AuctionState, CollateralConfigState, EngineConfigState, LiquidationRecordState},
+    state::{
+        AuctionState, CollateralConfigState, EngineConfigState, LiquidationRecordState,
+        SchedulePointRec,
+    },
     Instruction as Ix,
 };
 use common::*;
@@ -42,6 +45,22 @@ fn liquidate_happy_path() {
         (a.owner, a.keeper, a.settled, a.start_ms),
         (id(k::OWNER), id(k::KEEPER), false, w.now)
     );
+    // Snapshot of the collateral type's pause history and schedule at open (never re-read later).
+    assert_eq!(
+        (a.type_paused_total_at_start, a.schedule.clone()),
+        (
+            coll(&w).paused_total_ms,
+            CollateralArgs::defaults_for_tests()
+                .schedule
+                .chunks(2)
+                .map(|p| SchedulePointRec {
+                    elapsed_ms: u64::from(p[0]),
+                    discount_bps: u16::try_from(p[1]).unwrap(),
+                })
+                .collect::<Vec<_>>()
+        )
+    );
+    assert_eq!(a.type_paused_total_at_start, 0);
     let p: Position = w.read(pos);
     assert_eq!((p.collateral_amount, p.normalized_debt_amount), (0, 0));
     assert_eq!(w.balance(host_vault(pos)), 0);
@@ -384,7 +403,11 @@ fn unsigned_keeper_is_rejected() {
     let pos = w.unsafe_position();
     w.holding(k::KEEPER_COLL, collateral_def(), 0);
     let accounts = w.liquidate_accounts(pos, 0, id(k::KEEPER_COLL));
-    assert!(w.engine(accounts, &[], Ix::Liquidate { nonce: 0 }).is_err());
+    // An otherwise-valid signer signs the transaction; the keeper account itself does not.
+    assert_err(
+        w.engine(accounts, &[k::CALLER], Ix::Liquidate { nonce: 0 }),
+        "must be a signer",
+    );
 }
 
 #[test]

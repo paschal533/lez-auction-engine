@@ -195,4 +195,55 @@ mod auction_engine {
         };
         finish(engine::liquidate::liquidate(ctx.self_program_id, a, nonce))
     }
+
+    #[instruction]
+    #[allow(clippy::too_many_arguments, reason = "eleven accounts (Shared Reference R2)")]
+    pub fn bid(
+        ctx: ProgramContext,
+        #[account(mut, signer)] bidder_stable_holding: AccountWithMetadata,
+        #[account(mut)] bidder_collateral_holding: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut)] coll_config: AccountWithMetadata,
+        #[account(mut)] auction: AccountWithMetadata,
+        #[account(mut, pda = [literal("VAULT"), account("auction")])] auction_vault: AccountWithMetadata,
+        #[account(mut, pda = [literal("BUFFER"), account("config")])] buffer: AccountWithMetadata,
+        #[account(mut)] stablecoin_definition: AccountWithMetadata,
+        redemption_price_state: AccountWithMetadata,
+        oracle: AccountWithMetadata,
+        clock: AccountWithMetadata,
+        coin_in_max: u128,
+        min_collateral_out: u128,
+    ) -> SpelResult {
+        let a = engine::bid::BidAccounts {
+            bidder_stable_holding, bidder_collateral_holding, config, coll_config, auction, auction_vault,
+            buffer, stablecoin_definition, redemption_price_state, oracle, clock, accounting: None,
+        };
+        finish(engine::bid::bid(ctx.self_program_id, a, coin_in_max, min_collateral_out))
+    }
+
+    #[instruction]
+    #[allow(clippy::too_many_arguments, reason = "twelve accounts (Shared Reference R2)")]
+    pub fn bid_with_settlement(
+        ctx: ProgramContext,
+        #[account(mut, signer)] bidder_stable_holding: AccountWithMetadata,
+        #[account(mut)] bidder_collateral_holding: AccountWithMetadata,
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(mut)] coll_config: AccountWithMetadata,
+        #[account(mut)] auction: AccountWithMetadata,
+        #[account(mut, pda = [literal("VAULT"), account("auction")])] auction_vault: AccountWithMetadata,
+        #[account(mut, pda = [literal("BUFFER"), account("config")])] buffer: AccountWithMetadata,
+        #[account(mut)] stablecoin_definition: AccountWithMetadata,
+        redemption_price_state: AccountWithMetadata,
+        oracle: AccountWithMetadata,
+        clock: AccountWithMetadata,
+        #[account(mut, pda = [literal("ACCT"), account("config")])] accounting: AccountWithMetadata,
+        coin_in_max: u128,
+        min_collateral_out: u128,
+    ) -> SpelResult {
+        let a = engine::bid::BidAccounts {
+            bidder_stable_holding, bidder_collateral_holding, config, coll_config, auction, auction_vault,
+            buffer, stablecoin_definition, redemption_price_state, oracle, clock, accounting: Some(accounting),
+        };
+        finish(engine::bid::bid(ctx.self_program_id, a, coin_in_max, min_collateral_out))
+    }
 }

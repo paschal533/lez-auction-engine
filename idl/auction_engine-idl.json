@@ -647,6 +647,234 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "bid",
+      "accounts": [
+        {
+          "name": "bidder_stable_holding",
+          "writable": true,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "bidder_collateral_holding",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "coll_config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "auction",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "auction_vault",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "VAULT"
+              },
+              {
+                "kind": "account",
+                "path": "auction"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "BUFFER"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stablecoin_definition",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "redemption_price_state",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "oracle",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "coin_in_max",
+          "type": "u128"
+        },
+        {
+          "name": "min_collateral_out",
+          "type": "u128"
+        }
+      ]
+    },
+    {
+      "name": "bid_with_settlement",
+      "accounts": [
+        {
+          "name": "bidder_stable_holding",
+          "writable": true,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "bidder_collateral_holding",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "coll_config",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "auction",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "auction_vault",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "VAULT"
+              },
+              {
+                "kind": "account",
+                "path": "auction"
+              }
+            ]
+          }
+        },
+        {
+          "name": "buffer",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "BUFFER"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        },
+        {
+          "name": "stablecoin_definition",
+          "writable": true,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "redemption_price_state",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "oracle",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "clock",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "accounting",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "ACCT"
+              },
+              {
+                "kind": "account",
+                "path": "config"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "coin_in_max",
+          "type": "u128"
+        },
+        {
+          "name": "min_collateral_out",
+          "type": "u128"
+        }
+      ]
     }
   ],
   "instruction_type": "auction_engine_core::Instruction"

@@ -7,6 +7,9 @@ pub mod accounts;
 pub mod admin;
 #[cfg(test)]
 mod admin_tests;
+pub mod bid;
+#[cfg(test)]
+mod bid_tests;
 #[cfg(test)]
 mod collateral_tests;
 pub mod feed;

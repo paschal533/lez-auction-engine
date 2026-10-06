@@ -78,7 +78,19 @@ pub enum Instruction {
     /// auction(i,m), auction_vault(m), engine_authority, liquidation_engine_state, host_vault(m),
     /// collateral_definition, stability_fee_accumulator, redemption_price_state, oracle, protocol_parameters, clock.
     Liquidate { nonce: u64 },
-    // Tasks 11–15 append the remaining variants here, in Shared Reference R2 order
-    // (bid = 5 … check_solvency = 16). Each appending task also appends the guest
+    /// Accounts: bidder_stable_holding(s,m), bidder_collateral_holding(m), config, coll_config(m), auction(m),
+    /// auction_vault(m), buffer(m), stablecoin_definition(m), redemption_price_state, oracle, clock.
+    /// Reverts with `ChainEndAccountsMissing` if the fill would end the auction (ADR-029).
+    Bid {
+        coin_in_max: u128,
+        min_collateral_out: u128,
+    },
+    /// Accounts: as `Bid`, then accounting(m). May end the auction (chain-end effects applied once).
+    BidWithSettlement {
+        coin_in_max: u128,
+        min_collateral_out: u128,
+    },
+    // Tasks 12–15 append the remaining variants here, in Shared Reference R2 order
+    // (settle_empty = 7 … check_solvency = 16). Each appending task also appends the guest
     // function and an index assertion to `instruction_indices_follow_reference_order`.
 }

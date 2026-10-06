@@ -767,3 +767,106 @@ impl World {
         )
     }
 }
+
+// ---- bid (Task 11) ----
+
+impl World {
+    /// Funds `stable` with stablecoin and makes sure `coll` exists as an empty collateral holding.
+    pub fn bidder(&mut self, stable: u8, coll: u8, amount: u128) {
+        self.fund_stable(stable, amount);
+        if self.state.get_account_by_id(id(coll)) == Account::default() {
+            self.holding(coll, collateral_def(), 0);
+        }
+    }
+
+    pub fn bid_accounts(
+        &self,
+        pos: AccountId,
+        nonce: u64,
+        stable: u8,
+        coll: u8,
+        with_accounting: bool,
+    ) -> Vec<AccountId> {
+        let mut v = vec![
+            id(stable),
+            id(coll),
+            config(),
+            coll_config(),
+            auction(pos, nonce),
+            auction_vault(pos, nonce),
+            buffer(),
+            stable_def(),
+            redemption_state(),
+            oracle(),
+            CLOCK_01_PROGRAM_ACCOUNT_ID,
+        ];
+        if with_accounting {
+            v.push(accounting());
+        }
+        v
+    }
+
+    /// `bid` by the default bidder (no Accounting account; must not end the auction).
+    pub fn bid(
+        &mut self,
+        pos: AccountId,
+        coin_in_max: u128,
+        min_out: u128,
+    ) -> Result<(), LeeError> {
+        let accounts = self.bid_accounts(pos, 0, k::BIDDER_STABLE, k::BIDDER_COLL, false);
+        self.engine(
+            accounts,
+            &[k::BIDDER_STABLE],
+            Ix::Bid {
+                coin_in_max,
+                min_collateral_out: min_out,
+            },
+        )
+    }
+
+    /// `bid_with_settlement` by the default bidder (lists Accounting; may end the auction).
+    pub fn bid_settle(
+        &mut self,
+        pos: AccountId,
+        coin_in_max: u128,
+        min_out: u128,
+    ) -> Result<(), LeeError> {
+        let accounts = self.bid_accounts(pos, 0, k::BIDDER_STABLE, k::BIDDER_COLL, true);
+        self.engine(
+            accounts,
+            &[k::BIDDER_STABLE],
+            Ix::BidWithSettlement {
+                coin_in_max,
+                min_collateral_out: min_out,
+            },
+        )
+    }
+}
+
+/// Engine configured, the standard unsafe position liquidated (nonce 0), bidder funded with 1_000_000.
+pub fn liquidated_world() -> (World, AccountId) {
+    let mut w = World::with_engine();
+    let pos = w.unsafe_position();
+    w.liquidate(pos, 0).expect("liquidate");
+    w.bidder(k::BIDDER_STABLE, k::BIDDER_COLL, 1_000_000);
+    (w, pos)
+}
+
+/// Underwater variant: position 500_000 / 600_000 opened at R = 0.5, then R re-anchored to 2.0
+/// (oracle 2.0). Reward 50 coin = 100 collateral, lot 499_900; the lot binds at 244_951 coin.
+pub fn underwater_world() -> (World, AccountId) {
+    let mut w = World::with_engine();
+    let pos = w.open_position(
+        k::OWNER,
+        k::OWNER_COLL,
+        k::OWNER_STABLE,
+        0,
+        LIQ_COLLATERAL,
+        LIQ_DEBT,
+    );
+    w.set_redemption_price(2 * ONE);
+    w.set_oracle(2 * ONE, w.now);
+    w.liquidate(pos, 0).expect("liquidate");
+    w.bidder(k::BIDDER_STABLE, k::BIDDER_COLL, 1_000_000);
+    (w, pos)
+}

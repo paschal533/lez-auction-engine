@@ -29,15 +29,15 @@ use crate::{
     EngineResult,
 };
 
-const NOW: u64 = 1_700_000_000_000;
-const R: u128 = ONE / 2;
-const MAX_AGE: u64 = 3_600_000;
+pub(crate) const NOW: u64 = 1_700_000_000_000;
+pub(crate) const R: u128 = ONE / 2;
+pub(crate) const MAX_AGE: u64 = 3_600_000;
 
-fn cfg_id() -> AccountId {
+pub(crate) fn cfg_id() -> AccountId {
     config_pda(&ENGINE, &ADMIN, SALT)
 }
 
-fn clock_at(now: u64) -> AccountWithMetadata {
+pub(crate) fn clock_at(now: u64) -> AccountWithMetadata {
     let data = ClockAccountData {
         block_id: 1,
         timestamp: now,
@@ -54,7 +54,7 @@ fn clock_at(now: u64) -> AccountWithMetadata {
     )
 }
 
-fn rps_with(price: u128, rate: u128, last_updated_at: u64) -> AccountWithMetadata {
+pub(crate) fn rps_with(price: u128, rate: u128, last_updated_at: u64) -> AccountWithMetadata {
     let state = RedemptionPriceState {
         redemption_price_at_last_update: price,
         redemption_rate_per_millisecond: rate,
@@ -72,11 +72,11 @@ fn rps_with(price: u128, rate: u128, last_updated_at: u64) -> AccountWithMetadat
     )
 }
 
-fn rps() -> AccountWithMetadata {
+pub(crate) fn rps() -> AccountWithMetadata {
     rps_with(R, ONE, NOW)
 }
 
-fn oracle_with(
+pub(crate) fn oracle_with(
     id: AccountId,
     price: u128,
     timestamp: u64,
@@ -101,11 +101,11 @@ fn oracle_with(
     )
 }
 
-fn oracle_fresh() -> AccountWithMetadata {
+pub(crate) fn oracle_fresh() -> AccountWithMetadata {
     oracle_with(ORACLE, R, NOW, 0)
 }
 
-fn engine_owned(data: Data) -> Account {
+pub(crate) fn engine_owned(data: Data) -> Account {
     Account {
         program_owner: ENGINE,
         data,
@@ -113,7 +113,7 @@ fn engine_owned(data: Data) -> Account {
     }
 }
 
-fn config_account() -> AccountWithMetadata {
+pub(crate) fn config_account() -> AccountWithMetadata {
     meta(cfg_id(), engine_owned((&config_state()).into()), false)
 }
 

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/auction_core",
+    "programs/auction_engine/core",
     "programs/token/core",
     "programs/token",
     "programs/token/methods",
@@ -25,6 +26,8 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4", features = ["host"] }
 lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4", features = ["test-utils"] }
+auction_core = { path = "crates/auction_core" }
+auction_engine_core = { path = "programs/auction_engine/core" }
 token_core = { path = "programs/token/core" }
 token_program = { path = "programs/token" }
 twap_oracle_core = { path = "programs/twap_oracle/core" }

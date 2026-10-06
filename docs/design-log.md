@@ -612,3 +612,39 @@ Rotation is a single admin step (like `set_admin`). A wrong pair simply makes th
 Accepted (Plan 2, Task 4)
 
 **Amendment (Task 5 review).** Spec §5.10 and ADR-016 round the proportional seize bound `min(C, C·cover/N·(1e4 + MAX_PENALTY_BPS)/1e4)` up. That lets every call take at least one collateral unit regardless of `cover` (C = 1000, N = 2,000,000, cover = 1 gives a bound of 1 against a fair share of 0.000625), so repeated tiny partial liquidations could drain a position while clearing about 0.05% of its debt. This contradicts the spec's own "never more than its share plus the maximum penalty" and the global rule that paid-out amounts round down (the owner's collateral is paid out). The bound now rounds down. Full seizure is unaffected: `floor(1.25·C) >= C`, capped at `C`. A full-collateral, partial-debt seizure can leave dust debt on a zero-collateral position; that is the engine's concern.
+
+---
+
+## ADR-027: Engine PDAs Are Seeded by the Engine Configuration
+
+**Context**
+One engine program (one ImageID) serves several `EngineConfig`s (spec §5.4 seeds them `["CONFIG", salt]`), one per host instance. `init_config` is permissionless by design (whoever signs becomes that config's admin). If the engine authority were a single program-wide PDA (`["ENGINE_AUTH"]`, as in spike S2), a rogue config created against host A's `ProtocolParameters` could call `liquidate_position` on A's positions with its own penalty and keeper reward, and A's Variant C guard would accept it (right caller program, authorised PDA). The same holds for the protocol-token mint authority.
+
+**Decision**
+Engine-authority and mint-authority PDAs include the config: `["ENGINE_AUTH", config]`, `["MINT_AUTH", config]`. A host binds exactly one engine config by storing that config's authority id (ADR-026). This is how the engine "identifies the host instance": the host names the config, and the config stores the host program id and `ProtocolParameters` id, re-checked on every hook call path.
+
+The config PDA itself includes its admin: `["CONFIG", admin, salt]` (amends spec §5.4 `["CONFIG", salt]`). With `["CONFIG", salt]` anyone could front-run `init_config` at the address an operator announced and own that config; with the admin in the seed, a config initialised by a different admin with the same salt is a different account (tests `nobody_can_squat_the_admins_config_address`, `rogue_config_with_the_same_salt_cannot_liquidate_the_bound_host`). The admin is therefore immutable.
+
+**Bind-time verification.** Before `set_liquidation_engine`, the host admin reads the `EngineConfig` it is about to bind and checks: `admin` is the expected operator, `host_program_id` and `host_protocol_parameters_id` are this host, `token_program_id` is the expected token ImageID, and the parameters (caps, penalty bounds via its `CollateralConfig`, protocol token) are the agreed ones. The runbook (Task 20) and `docs/architecture/hooks.md` carry the step; the SDK (Plan 3) automates it.
+
+**Trade-offs**
+Rotating a host to a new engine config is a host-admin `set_liquidation_engine`. Auctions opened under the old config stay settleable under it (their accounts are seeded by it). Tested by `rogue_config_with_the_same_salt_cannot_liquidate_the_bound_host` and `nobody_can_squat_the_admins_config_address`.
+
+**Status**
+Accepted (Plan 2, Task 6)
+
+---
+
+## ADR-030: Spel-Encodable Arguments and Optional-Account Slots
+
+**Context**
+spel-cli encodes only `bool`, `u8`, `u32`, `u64`, `u128`, `string`, `account_id`, `program_id`, byte arrays, some `Vec`s and `Option` (`spel-cli/src/serialize.rs:122-139`); no `u16`, no `i128` (ADR-018), no nested structs. LEZ needs every account at signing time and rejects duplicate account ids (`validated_state_diff/mod.rs:72-75`), so an "optional" account cannot be omitted or repeated.
+
+**Decision**
+Instruction arguments use only `bool`, `u8`, `u32`, `u64`, `u128`, `Vec<u32>`; bps travel as `u32` (range-checked to ≤ 10_000, band hi to ≤ 20_000); schedules as interleaved `(elapsed_ms, bps)` `u32` pairs, so a schedule point's elapsed time is at most `u32::MAX` ms (about 49.7 days), far beyond any schedule. The host program id is read from the `ProtocolParameters` account owner, not passed. Optional accounts (protocol-token reference oracle, protocol-token definition) occupy fixed slots; when not configured the caller passes the never-initialised PDA `["UNUSED", config, slot]`, and the engine asserts that exact id, so a caller can never substitute an account that changes a decision (e.g. force a freeze in `check_solvency`).
+
+**Trade-offs**
+Instruction structs are wide and flat. The slot convention must be followed by the SDK (Plan 3).
+
+**Status**
+Accepted (Plan 2, Task 6)

@@ -669,6 +669,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "auction_engine_core"
+version = "0.1.0"
+dependencies = [
+ "auction_core",
+ "borsh",
+ "lee_core",
+ "risc0-zkvm",
+ "serde",
+ "spel-framework",
+]
+
+[[package]]
 name = "authenticated_transfer_core"
 version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?tag=v0.2.4#47eba256479f6f785acbd138834340703cd03401"
@@ -1546,7 +1558,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -1950,7 +1962,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2706,7 +2718,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -5644,7 +5656,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -5682,9 +5694,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.5",
+ "socket2 0.5.10",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6370,7 +6382,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6847,6 +6859,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "spel-framework"
+version = "0.6.0"
+source = "git+https://github.com/logos-co/spel.git?rev=1ef0500f8fc8ce3ddf95523726ae159db83f744f#1ef0500f8fc8ce3ddf95523726ae159db83f744f"
+dependencies = [
+ "borsh",
+ "lee_core",
+ "serde_json",
+ "spel-framework-core",
+ "spel-framework-macros",
+]
+
+[[package]]
 name = "spel-framework-core"
 version = "0.6.0"
 source = "git+https://github.com/logos-co/spel.git?rev=1ef0500f8fc8ce3ddf95523726ae159db83f744f#1ef0500f8fc8ce3ddf95523726ae159db83f744f"
@@ -7147,7 +7171,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

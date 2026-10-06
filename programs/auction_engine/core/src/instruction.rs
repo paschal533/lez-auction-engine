@@ -1,0 +1,60 @@
+//! The engine instruction enum. Variant order == guest function order == IDL order (spel-cli
+//! encodes by IDL position; the guest decodes by enum index). Never reorder; only append, in
+//! Shared Reference R2 order.
+//! Account lists: Shared Reference R2 / `docs/architecture/programs.md`.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Instruction {
+    /// Accounts: admin(s), config(i), accounting(i), buffer, protocol_parameters, stablecoin_definition,
+    /// protocol_token_definition [slot 1], ref_oracle [slot 0].
+    InitConfig {
+        salt: u64,
+        global_cap: u128,
+        freeze_on_bad_debt: bool,
+        bad_debt_freeze_threshold: u128,
+        protocol_token_enabled: bool,
+        protocol_token_ref_price: u128,
+        ref_oracle_enabled: bool,
+        ref_oracle_max_age_ms: u64,
+        surplus_buffer_target: u128,
+        surplus_lot: u128,
+        surplus_delay_ms: u64,
+        surplus_premium_bps: u32,
+        surplus_max_discount_bps: u32,
+        debt_lot: u128,
+        debt_initial_discount_bps: u32,
+        debt_growth: Vec<u32>,
+        surplus_decay: Vec<u32>,
+        max_mint_per_auction: u128,
+        min_take: u128,
+        system_ttl_ms: u64,
+    },
+    /// Accounts: admin(s), config, accounting, coll_config (read, may be uninitialised), protocol_token_definition
+    /// [slot 1], ref_oracle [slot 0].
+    SetEngineParams {
+        global_cap: u128,
+        freeze_on_bad_debt: bool,
+        bad_debt_freeze_threshold: u128,
+        protocol_token_enabled: bool,
+        protocol_token_ref_price: u128,
+        ref_oracle_enabled: bool,
+        ref_oracle_max_age_ms: u64,
+        surplus_buffer_target: u128,
+        surplus_lot: u128,
+        surplus_delay_ms: u64,
+        surplus_premium_bps: u32,
+        surplus_max_discount_bps: u32,
+        debt_lot: u128,
+        debt_initial_discount_bps: u32,
+        debt_growth: Vec<u32>,
+        surplus_decay: Vec<u32>,
+        max_mint_per_auction: u128,
+        min_take: u128,
+        system_ttl_ms: u64,
+    },
+    // Tasks 9–15 append the remaining variants here, in Shared Reference R2 order
+    // (set_collateral_config = 2 … check_solvency = 16). Each appending task also appends the guest
+    // function and an index assertion to `instruction_indices_follow_reference_order`.
+}

@@ -32,3 +32,7 @@ Every later commit touching `programs/stablecoin/` (except commits whose subject
 ## Upstream suite baseline
 
 `scripts/wsl-cargo.sh test -p stablecoin_core -p stablecoin_program -p token_program -p integration_tests`: 410 passed, 0 failed at the vendor commit (stablecoin_core 66, stablecoin_program 264, token_program 63, integration_tests `tests/stablecoin.rs` 17, doc-tests/lib 0). Every hook task re-runs it and must keep 0 failed.
+
+## IDL location in the upstream PR
+
+The hook order test (`stablecoin_core` `hook_order_tests`) reads `idl/stablecoin-idl.json` in this repo and falls back to `artifacts/stablecoin-idl.json` (upstream layout). The upstream PR must regenerate `artifacts/stablecoin-idl.json` with the hook instructions, or the test panics. When `idl/upstream/stablecoin-idl.json` exists the test also pins instructions 0-18 to it.

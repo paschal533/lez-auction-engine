@@ -752,15 +752,45 @@ mod instruction_tests {
 
 #[cfg(test)]
 mod hook_order_tests {
-    //! Spec §5.10 / §3.2: spel-cli encodes by IDL position, the guest decodes by enum index, so the
-    //! appended hooks must sit at the same index in both. Upstream: point IDL_PATH at
-    //! `../../../../artifacts/stablecoin-idl.json`.
+    //! Spec 5.10 / 3.2: spel-cli encodes by IDL position, the guest decodes by enum index, so the
+    //! appended hooks must sit at the same index in both. The IDL is read from `idl/` (this repo) or,
+    //! upstream, from `artifacts/` (the upstream PR must regenerate `artifacts/stablecoin-idl.json`
+    //! with the hook instructions).
     use super::*;
 
-    const IDL_PATH: &str = concat!(
+    const IDL_CANDIDATES: [&str; 2] = [
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../idl/stablecoin-idl.json"
+        ),
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../artifacts/stablecoin-idl.json"
+        ),
+    ];
+    const PRISTINE_IDL: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../idl/stablecoin-idl.json"
+        "/../../../idl/upstream/stablecoin-idl.json"
     );
+
+    fn instruction_names(path: &str) -> Vec<String> {
+        let idl: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("IDL file"))
+                .expect("IDL json");
+        idl["instructions"]
+            .as_array()
+            .expect("instructions array")
+            .iter()
+            .map(|i| i["name"].as_str().expect("name").to_owned())
+            .collect()
+    }
+
+    fn idl_path() -> &'static str {
+        IDL_CANDIDATES
+            .into_iter()
+            .find(|p| std::path::Path::new(p).exists())
+            .unwrap_or_else(|| panic!("stablecoin IDL not found in any of {IDL_CANDIDATES:?}"))
+    }
 
     fn enum_index(instruction: &Instruction) -> u32 {
         risc0_zkvm::serde::to_vec(instruction).expect("instruction serializes")[0]
@@ -768,15 +798,14 @@ mod hook_order_tests {
 
     #[test]
     fn hook_instructions_share_enum_and_idl_index() {
-        let idl: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(IDL_PATH).expect("IDL file"))
-                .expect("IDL json");
-        let names: Vec<String> = idl["instructions"]
-            .as_array()
-            .expect("instructions array")
-            .iter()
-            .map(|i| i["name"].as_str().expect("name").to_owned())
-            .collect();
+        let names = instruction_names(idl_path());
+        if std::path::Path::new(PRISTINE_IDL).exists() {
+            assert_eq!(
+                names[..19],
+                instruction_names(PRISTINE_IDL)[..],
+                "upstream instructions 0-18 must keep their IDL positions"
+            );
+        }
         let hooks = [
             (
                 "set_liquidation_engine",

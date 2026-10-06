@@ -19,3 +19,7 @@ Engine-only hooks require both the immediate `caller_program_id == engine_progra
 ## Freeze semantics
 
 `engine_freeze_new_debt` only sets `is_frozen`. Only the freeze authority's existing `unfreeze` clears it. The host freeze also blocks `open_position` and `withdraw_collateral` (`freeze.rs`), which is broader than F4's "pause new debt generation"; the upstream PR asks whether a narrower flag is preferred.
+
+## IDL path in the upstream PR
+
+`hook_instructions_share_enum_and_idl_index` looks for the IDL at `idl/stablecoin-idl.json` (this repo), then `artifacts/stablecoin-idl.json` (upstream). The upstream PR must regenerate `artifacts/stablecoin-idl.json` with the three hook instructions. `assert_engine_call` also rejects a stored zero engine program id defensively (the setter already refuses to store one).

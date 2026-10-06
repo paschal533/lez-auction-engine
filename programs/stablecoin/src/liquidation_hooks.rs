@@ -2,9 +2,9 @@
 //!
 //! Authentication is Variant C (lez-auction-engine ADR-019): the immediate `caller_program_id`
 //! must be the bound engine program AND the bound engine-authority PDA must be authorised.
-//! `caller_program_id` alone would accept any program the engine chained to with a forwarded
-//! authorisation only if the engine misbehaved; the PDA alone is launderable because lee keeps an
-//! authorised account authorised down the call chain (`validated_state_diff/mod.rs:262-290`).
+//! `caller_program_id` alone trusts every engine code path; the authority PDA alone is launderable
+//! because lee propagates authorisation down the chain (ADR-019,
+//! `validated_state_diff/mod.rs:262-290`).
 
 use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
@@ -54,6 +54,10 @@ pub fn assert_engine_call(
     engine_authority: &AccountWithMetadata,
     state: &LiquidationEngineState,
 ) {
+    assert_ne!(
+        state.engine_program_id, DEFAULT_PROGRAM_ID,
+        "Bound engine program id must be non-zero"
+    );
     assert_eq!(
         caller_program_id, state.engine_program_id,
         "Caller program is not the liquidation engine"
@@ -328,7 +332,60 @@ mod tests {
             ENGINE,
         );
         assert!(calls.is_empty());
-        assert!(decode_params(&post[2]).is_frozen);
+        let input = ProtocolParameters::try_from(
+            &protocol_parameters_account(ParameterOverrides::default())
+                .account
+                .data,
+        )
+        .unwrap();
+        assert!(!input.is_frozen);
+        assert_eq!(
+            decode_params(&post[2]),
+            ProtocolParameters {
+                is_frozen: true,
+                ..input
+            }
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Bound engine program id must be non-zero")]
+    fn guard_rejects_state_with_zero_engine_program() {
+        let state = LiquidationEngineState {
+            engine_program_id: DEFAULT_PROGRAM_ID,
+            engine_authority_id: engine_authority_id(),
+        };
+        assert_engine_call(DEFAULT_PROGRAM_ID, &engine_authority(true), &state);
+    }
+
+    #[test]
+    #[should_panic(expected = "does not match expected PDA derivation")]
+    fn bind_to_wrong_state_account_rejected() {
+        set_liquidation_engine(
+            signer(admin_id()),
+            protocol_parameters_account(ParameterOverrides::default()),
+            protocol_parameters_account(ParameterOverrides::default()),
+            STABLECOIN_PROGRAM_ID,
+            DEFAULT_PROGRAM_ID,
+            ENGINE,
+            engine_authority_id(),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must be owned by the stablecoin program")]
+    fn bind_over_foreign_owned_state_rejected() {
+        let mut foreign = engine_state();
+        foreign.account.program_owner = IMPOSTOR;
+        set_liquidation_engine(
+            signer(admin_id()),
+            protocol_parameters_account(ParameterOverrides::default()),
+            foreign,
+            STABLECOIN_PROGRAM_ID,
+            DEFAULT_PROGRAM_ID,
+            ENGINE,
+            engine_authority_id(),
+        );
     }
 
     #[test]

@@ -41,6 +41,9 @@ pub mod update_redemption_rate;
 /// Withdraw collateral from an existing position back to a user-controlled holding.
 pub mod withdraw_collateral;
 
+/// Liquidation-engine hooks: engine binding, liquidate_position, engine_freeze_new_debt.
+pub mod liquidation_hooks;
+
 #[cfg(test)]
 mod test_support;
 

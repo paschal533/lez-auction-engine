@@ -729,9 +729,96 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "set_liquidation_engine",
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "protocol_parameters",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "liquidation_engine_state",
+          "writable": true,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "engine_program_id",
+          "type": "program_id"
+        },
+        {
+          "name": "engine_authority_id",
+          "type": "account_id"
+        }
+      ]
+    },
+    {
+      "name": "liquidate_position",
+      "accounts": [],
+      "args": [
+        {
+          "name": "collateral_to_seize",
+          "type": "u128"
+        },
+        {
+          "name": "normalized_debt_to_cover",
+          "type": "u128"
+        }
+      ]
+    },
+    {
+      "name": "engine_freeze_new_debt",
+      "accounts": [
+        {
+          "name": "engine_authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        },
+        {
+          "name": "liquidation_engine_state",
+          "writable": false,
+          "signer": false,
+          "init": false
+        },
+        {
+          "name": "protocol_parameters",
+          "writable": true,
+          "signer": false,
+          "init": false
+        }
+      ],
+      "args": []
     }
   ],
   "accounts": [
+    {
+      "name": "LiquidationEngineState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "engine_program_id",
+            "type": "program_id"
+          },
+          {
+            "name": "engine_authority_id",
+            "type": "account_id"
+          }
+        ]
+      }
+    },
     {
       "name": "ProtocolParameters",
       "type": {

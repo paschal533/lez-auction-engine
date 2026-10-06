@@ -2,6 +2,8 @@
 
 pub mod controller;
 
+pub mod liquidation_engine_state;
+
 pub mod math;
 
 pub mod protocol_parameters;
@@ -15,6 +17,10 @@ pub use controller::{run_controller_tick, ControllerOutput, INTEGRAL_CLAMP, RATE
 use lee_core::{
     account::{AccountId, AccountWithMetadata, Data},
     program::{PdaSeed, ProgramId},
+};
+pub use liquidation_engine_state::{
+    compute_liquidation_engine_state_pda, compute_liquidation_engine_state_pda_seed,
+    LiquidationEngineState,
 };
 pub use protocol_parameters::{
     compute_protocol_parameters_pda, compute_protocol_parameters_pda_seed, ProtocolParameters,
@@ -373,6 +379,42 @@ pub enum Instruction {
         /// Amount of stablecoin debt to repay (also the amount burned from the user's holding).
         amount: u128,
     },
+    /// Bind the liquidation engine allowed to call [`Instruction::LiquidatePosition`] and
+    /// [`Instruction::EngineFreezeNewDebt`] (lez-auction-engine hook). Admin-only and top-level only:
+    /// `caller_program_id` must be zero, so an authorised admin PDA cannot be laundered through
+    /// another program. Rotation overwrites the binding.
+    ///
+    /// Required accounts (3), in order:
+    /// 1. `admin` — authorized; must equal `ProtocolParameters.admin_account_id`.
+    /// 2. `protocol_parameters` — initialized, read-only; at its canonical PDA.
+    /// 3. `liquidation_engine_state` — at `compute_liquidation_engine_state_pda(self_program_id)`;
+    ///    claimed on first use.
+    SetLiquidationEngine {
+        /// Engine program id (non-zero); compared with the hook's immediate caller.
+        engine_program_id: ProgramId,
+        /// Engine authority PDA (non-zero); must be authorised in every hook call.
+        engine_authority_id: AccountId,
+    },
+    /// Seize collateral from an unsafe position into the engine's custody holding
+    /// (lez-auction-engine hook; see `liquidation_hooks::liquidate_position`). Engine-only
+    /// (Variant C). Allowed while frozen.
+    ///
+    /// Required accounts (10), in order: `engine_authority` (authorized), `liquidation_engine_state`,
+    /// `position` (writable), `vault` (writable), `custody` (writable, initialized collateral
+    /// holding), `stability_fee_accumulator`, `redemption_price_state`, `market_price_oracle`,
+    /// `protocol_parameters`, `clock`.
+    LiquidatePosition {
+        /// `0 < x <= Position.collateral_amount`, and at most the proportional bound.
+        collateral_to_seize: u128,
+        /// `0 < x <= Position.normalized_debt_amount`.
+        normalized_debt_to_cover: u128,
+    },
+    /// Set `ProtocolParameters.is_frozen` (lez-auction-engine hook). Engine-only (Variant C). It can
+    /// only freeze; unfreezing stays with the freeze authority's [`Instruction::Unfreeze`].
+    ///
+    /// Required accounts (3), in order: `engine_authority` (authorized), `liquidation_engine_state`,
+    /// `protocol_parameters` (writable).
+    EngineFreezeNewDebt,
 }
 
 /// Persistent state held by a Stablecoin [`Position`] account.
@@ -705,5 +747,61 @@ mod instruction_tests {
             }
             _ => panic!("decoded into wrong variant"),
         }
+    }
+}
+
+#[cfg(test)]
+mod hook_order_tests {
+    //! Spec §5.10 / §3.2: spel-cli encodes by IDL position, the guest decodes by enum index, so the
+    //! appended hooks must sit at the same index in both. Upstream: point IDL_PATH at
+    //! `../../../../artifacts/stablecoin-idl.json`.
+    use super::*;
+
+    const IDL_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../idl/stablecoin-idl.json"
+    );
+
+    fn enum_index(instruction: &Instruction) -> u32 {
+        risc0_zkvm::serde::to_vec(instruction).expect("instruction serializes")[0]
+    }
+
+    #[test]
+    fn hook_instructions_share_enum_and_idl_index() {
+        let idl: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(IDL_PATH).expect("IDL file"))
+                .expect("IDL json");
+        let names: Vec<String> = idl["instructions"]
+            .as_array()
+            .expect("instructions array")
+            .iter()
+            .map(|i| i["name"].as_str().expect("name").to_owned())
+            .collect();
+        let hooks = [
+            (
+                "set_liquidation_engine",
+                Instruction::SetLiquidationEngine {
+                    engine_program_id: [1; 8],
+                    engine_authority_id: AccountId::new([2; 32]),
+                },
+            ),
+            (
+                "liquidate_position",
+                Instruction::LiquidatePosition {
+                    collateral_to_seize: 1,
+                    normalized_debt_to_cover: 1,
+                },
+            ),
+            ("engine_freeze_new_debt", Instruction::EngineFreezeNewDebt),
+        ];
+        for (expected, (name, instruction)) in (19u32..).zip(hooks.iter()) {
+            assert_eq!(enum_index(instruction), expected, "{name}: enum index");
+            assert_eq!(
+                names.iter().position(|n| n == name),
+                Some(usize::try_from(expected).expect("fits")),
+                "{name}: IDL index"
+            );
+        }
+        assert_eq!(names.len(), 22, "no other instruction was added or removed");
     }
 }

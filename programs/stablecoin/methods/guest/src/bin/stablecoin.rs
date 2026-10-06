@@ -704,4 +704,68 @@ mod stablecoin {
         ))
     }
 
+    /// Bind the liquidation engine (lez-auction-engine hook; host fn
+    /// `stablecoin_program::liquidation_hooks::set_liquidation_engine`). Admin-only, top-level only.
+    ///
+    /// # Errors
+    /// Returns the host program's panic-converted error if any precondition fails.
+    #[instruction]
+    pub fn set_liquidation_engine(
+        ctx: ProgramContext,
+        #[account(signer)]
+        admin: AccountWithMetadata,
+        protocol_parameters: AccountWithMetadata,
+        #[account(mut)]
+        liquidation_engine_state: AccountWithMetadata,
+        engine_program_id: nssa_core::program::ProgramId,
+        engine_authority_id: nssa_core::account::AccountId,
+    ) -> SpelResult {
+        let (post_states, chained_calls) =
+            stablecoin_program::liquidation_hooks::set_liquidation_engine(
+                admin,
+                protocol_parameters,
+                liquidation_engine_state,
+                ctx.self_program_id,
+                ctx.caller_program_id,
+                engine_program_id,
+                engine_authority_id,
+            );
+        Ok(spel_framework::SpelOutput::execute(post_states, chained_calls))
+    }
+
+    /// Implemented in the next patch (liquidate_position).
+    #[instruction]
+    pub fn liquidate_position(
+        collateral_to_seize: u128,
+        normalized_debt_to_cover: u128,
+    ) -> SpelResult {
+        let _ = (collateral_to_seize, normalized_debt_to_cover);
+        panic!("liquidate_position is not implemented yet")
+    }
+
+    /// Freeze new debt on the engine's behalf (lez-auction-engine hook; host fn
+    /// `stablecoin_program::liquidation_hooks::engine_freeze_new_debt`). Engine-only.
+    ///
+    /// # Errors
+    /// Returns the host program's panic-converted error if any precondition fails.
+    #[instruction]
+    pub fn engine_freeze_new_debt(
+        ctx: ProgramContext,
+        #[account(signer)]
+        engine_authority: AccountWithMetadata,
+        liquidation_engine_state: AccountWithMetadata,
+        #[account(mut)]
+        protocol_parameters: AccountWithMetadata,
+    ) -> SpelResult {
+        let (post_states, chained_calls) =
+            stablecoin_program::liquidation_hooks::engine_freeze_new_debt(
+                engine_authority,
+                liquidation_engine_state,
+                protocol_parameters,
+                ctx.self_program_id,
+                ctx.caller_program_id,
+            );
+        Ok(spel_framework::SpelOutput::execute(post_states, chained_calls))
+    }
+
 }

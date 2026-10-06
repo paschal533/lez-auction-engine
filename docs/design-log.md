@@ -587,3 +587,24 @@ Builds, IDE and tests see one tree, and the series is reproducible from history.
 
 **Status**
 Accepted (Plan 2, Task 3)
+
+---
+
+## ADR-026: Hook Binding and Authentication
+
+**Context**
+ADR-019 chose Variant C and left open how the host stores the engine and how the upstream laundering note (admin/freeze checks are plain `is_authorized`) is handled. Spec §5.10 names `LiquidationEngineState { engine_authority_id }`.
+
+**Options**
+- (A) Store only the authority id; derive nothing else.
+- (B) Store `engine_program_id` and `engine_authority_id` explicitly; the admin binds both.
+- (C) Store the program id and derive the authority from the engine's seed convention.
+
+**Decision**
+(B). Variant C needs the program id (immediate caller) and the authority (authorised PDA); storing both keeps the host ignorant of the engine's seed scheme. `set_liquidation_engine` rejects zero ids (SPEL reports a zero caller for top-level calls, ADR-019) and requires `caller_program_id == 0`, so the binding cannot be changed through a program in which an admin PDA was authorised. The existing admin and freeze instructions are left unchanged (upstream suite unchanged); the upstream PR documents that their authorities must remain user keys.
+
+**Trade-offs**
+Rotation is a single admin step (like `set_admin`). A wrong pair simply makes the hooks unusable until rebound. The binding names one engine configuration per host instance (ADR-027).
+
+**Status**
+Accepted (Plan 2, Task 4)

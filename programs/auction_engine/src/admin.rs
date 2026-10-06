@@ -240,6 +240,10 @@ pub struct SetCollateralConfigAccounts {
 /// Creates or updates the `CollateralConfig`. Schedule changes affect only new auctions (each
 /// auction snapshots its schedule). `admin_paused` changes the pause clock in this transaction, so
 /// an admin pause starts and ends exactly at its transaction's clock (spec §5.7).
+///
+/// Changing `max_oracle_age_ms` or `oracle_scale` while auctions are live retroactively shifts the
+/// derived pause history (policy (b) derives the stale onset from the oracle timestamp and the
+/// current max age). Admin-only, and it only freezes discount (owner-favouring), never moves funds.
 pub fn set_collateral_config(
     program_id: ProgramId,
     a: SetCollateralConfigAccounts,

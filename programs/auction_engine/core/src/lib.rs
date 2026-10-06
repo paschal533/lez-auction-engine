@@ -283,4 +283,9 @@ mod tests {
             2
         );
     }
+
+    #[test]
+    fn liquidate_index() {
+        assert_eq!(idx(&Instruction::Liquidate { nonce: 0 }), 4);
+    }
 }

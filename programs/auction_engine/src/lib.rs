@@ -10,6 +10,7 @@ mod admin_tests;
 #[cfg(test)]
 mod collateral_tests;
 pub mod feed;
+pub mod liquidate;
 pub mod observe;
 pub mod token_calls;
 

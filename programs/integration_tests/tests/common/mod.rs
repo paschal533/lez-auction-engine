@@ -676,3 +676,94 @@ impl World {
         w
     }
 }
+
+// ---- liquidate (Task 10) ----
+
+/// Standard unsafe position (Task 10): 500_000 collateral, 600_000 debt at R = 0.5 (safe at min CR 1.5,
+/// unsafe at 2.0). Penalty 10% → target 660_000; reward min(5 + 600, 50, 60_000) = 50 coin = 25 collateral.
+pub const LIQ_COLLATERAL: u128 = 500_000;
+pub const LIQ_DEBT: u128 = 600_000;
+pub const LIQ_TARGET: u128 = 660_000;
+pub const LIQ_REWARD: u128 = 25;
+pub const LIQ_LOT: u128 = LIQ_COLLATERAL - LIQ_REWARD;
+
+impl World {
+    pub fn unsafe_position(&mut self) -> AccountId {
+        let pos = self.open_position(
+            k::OWNER,
+            k::OWNER_COLL,
+            k::OWNER_STABLE,
+            0,
+            LIQ_COLLATERAL,
+            LIQ_DEBT,
+        );
+        self.set_min_cr(2 * ONE);
+        pos
+    }
+
+    /// A second, smaller position (100_000 collateral, 120_000 debt → target 132_000); open it BEFORE
+    /// `set_min_cr(2 * ONE)`.
+    pub fn open_small_position(&mut self) -> AccountId {
+        self.open_position(
+            k::OWNER2,
+            k::OWNER2_COLL,
+            k::OWNER2_STABLE,
+            0,
+            100_000,
+            120_000,
+        )
+    }
+
+    pub fn liquidate_accounts(
+        &self,
+        pos: AccountId,
+        nonce: u64,
+        keeper_holding: AccountId,
+    ) -> Vec<AccountId> {
+        vec![
+            id(k::KEEPER),
+            keeper_holding,
+            config(),
+            coll_config(),
+            pos,
+            record(pos),
+            auction(pos, nonce),
+            auction_vault(pos, nonce),
+            engine_authority(),
+            les(),
+            host_vault(pos),
+            collateral_def(),
+            accumulator(),
+            redemption_state(),
+            oracle(),
+            protocol_parameters(),
+            CLOCK_01_PROGRAM_ACCOUNT_ID,
+        ]
+    }
+
+    /// Liquidates with the keeper's initialised collateral holding `id(k::KEEPER_COLL)`.
+    pub fn liquidate(&mut self, pos: AccountId, nonce: u64) -> Result<(), LeeError> {
+        if self.state.get_account_by_id(id(k::KEEPER_COLL)) == Account::default() {
+            self.holding(k::KEEPER_COLL, collateral_def(), 0);
+        }
+        let accounts = self.liquidate_accounts(pos, nonce, id(k::KEEPER_COLL));
+        self.engine(accounts, &[k::KEEPER], Ix::Liquidate { nonce })
+    }
+
+    /// A plain `Token::Transfer` signed by holding `id(from)` (donations in tests).
+    pub fn transfer_tokens(
+        &mut self,
+        from: u8,
+        to: AccountId,
+        amount: u128,
+    ) -> Result<(), LeeError> {
+        self.submit(
+            token_program(),
+            vec![id(from), to],
+            &[from],
+            token_core::Instruction::Transfer {
+                amount_to_transfer: amount,
+            },
+        )
+    }
+}

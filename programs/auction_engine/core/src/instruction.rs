@@ -74,7 +74,11 @@ pub enum Instruction {
     },
     /// Accounts: caller(s), config, coll_config(m), redemption_price_state, oracle, clock.
     ObserveFeed,
-    // Tasks 10–15 append the remaining variants here, in Shared Reference R2 order
-    // (set_collateral_config = 2 … check_solvency = 16). Each appending task also appends the guest
+    /// Accounts: keeper(s), keeper_collateral_holding(m), config(m), coll_config(m), position(m), record(m),
+    /// auction(i,m), auction_vault(m), engine_authority, liquidation_engine_state, host_vault(m),
+    /// collateral_definition, stability_fee_accumulator, redemption_price_state, oracle, protocol_parameters, clock.
+    Liquidate { nonce: u64 },
+    // Tasks 11–15 append the remaining variants here, in Shared Reference R2 order
+    // (bid = 5 … check_solvency = 16). Each appending task also appends the guest
     // function and an index assertion to `instruction_indices_follow_reference_order`.
 }

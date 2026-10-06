@@ -163,4 +163,36 @@ mod auction_engine {
         let a = engine::observe::ObserveFeedAccounts { caller, config, coll_config, redemption_price_state, oracle, clock };
         finish(engine::observe::observe_feed(ctx.self_program_id, a))
     }
+
+    #[instruction]
+    #[allow(clippy::too_many_arguments, reason = "seventeen accounts (Shared Reference R2)")]
+    pub fn liquidate(
+        ctx: ProgramContext,
+        #[account(signer)] keeper: AccountWithMetadata,
+        #[account(mut)] keeper_collateral_holding: AccountWithMetadata,
+        #[account(mut)] config: AccountWithMetadata,
+        #[account(mut)] coll_config: AccountWithMetadata,
+        #[account(mut)] position: AccountWithMetadata,
+        #[account(mut, pda = [literal("LIQREC"), account("config"), account("position")])] record: AccountWithMetadata,
+        #[account(init, pda = [literal("AUCTION"), account("config"), account("position"), arg("nonce")])]
+        auction: AccountWithMetadata,
+        #[account(mut, pda = [literal("VAULT"), account("auction")])] auction_vault: AccountWithMetadata,
+        #[account(pda = [literal("ENGINE_AUTH"), account("config")])] engine_authority: AccountWithMetadata,
+        liquidation_engine_state: AccountWithMetadata,
+        #[account(mut)] host_vault: AccountWithMetadata,
+        collateral_definition: AccountWithMetadata,
+        stability_fee_accumulator: AccountWithMetadata,
+        redemption_price_state: AccountWithMetadata,
+        oracle: AccountWithMetadata,
+        protocol_parameters: AccountWithMetadata,
+        clock: AccountWithMetadata,
+        nonce: u64,
+    ) -> SpelResult {
+        let a = engine::liquidate::LiquidateAccounts {
+            keeper, keeper_collateral_holding, config, coll_config, position, record, auction, auction_vault,
+            engine_authority, liquidation_engine_state, host_vault, collateral_definition,
+            stability_fee_accumulator, redemption_price_state, oracle, protocol_parameters, clock,
+        };
+        finish(engine::liquidate::liquidate(ctx.self_program_id, a, nonce))
+    }
 }

@@ -7,7 +7,7 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 **Plan 1 complete: core + spikes.**
 
 - `crates/auction_core`: collateral, surplus and debt logic with property tests, a differential model in Python, and Kani proof harnesses.
-- Spikes S1 to S7 are recorded, with decisions in the design log (ADR-018 to ADR-023): toolchain and multi-instance build (S1), host authentication of the engine (S2), arg-seeded PDAs created on first use (S3), piecewise-linear discount kept (S4), pause-onset policy (S5), `Accounting` updated at chain end (S6), protocol token minted from an engine PDA (S7).
+- Spikes S1 to S7 are recorded, with decisions in the design log: toolchain and multi-instance build (S1, ADR-018), host authentication of the engine (S2, ADR-019), arg-seeded PDAs created on first use (S3, ADR-020), protocol token minted from an engine PDA (S7, ADR-021), piecewise-linear discount kept (S4, ADR-022), `Accounting` updated at chain end (S6, ADR-023). The S5 pause-onset policy is ADR-007 (amended).
 - Next: Plan 2 (programs), Plan 3 (SDK, CLI, CI and real proofs), Plan 4 (thin GUI).
 
 ## Run the tests

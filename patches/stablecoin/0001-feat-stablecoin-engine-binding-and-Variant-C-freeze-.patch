@@ -1,0 +1,711 @@
+From 8130d95f0c507a25d49fed36fe7ab3b52d8a54f3 Mon Sep 17 00:00:00 2001
+From: paschal533 <okwuosahpaschal@gmail.com>
+Date: Tue, 6 Oct 2026 13:54:37 +0100
+Subject: [PATCH] feat(stablecoin): engine binding and Variant C freeze hook,
+ appended at enum/IDL 19-21; ADR-026
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ programs/stablecoin/core/src/lib.rs           |  98 +++++
+ .../core/src/liquidation_engine_state.rs      |  62 +++
+ .../methods/guest/src/bin/stablecoin.rs       |  64 +++
+ programs/stablecoin/src/lib.rs                |   3 +
+ programs/stablecoin/src/liquidation_hooks.rs  | 403 ++++++++++++++++++
+ 5 files changed, 630 insertions(+)
+ create mode 100644 programs/stablecoin/core/src/liquidation_engine_state.rs
+ create mode 100644 programs/stablecoin/src/liquidation_hooks.rs
+
+diff --git a/programs/stablecoin/core/src/lib.rs b/programs/stablecoin/core/src/lib.rs
+index b63d912..cf2fb22 100644
+--- a/programs/stablecoin/core/src/lib.rs
++++ b/programs/stablecoin/core/src/lib.rs
+@@ -2,6 +2,8 @@
+ 
+ pub mod controller;
+ 
++pub mod liquidation_engine_state;
++
+ pub mod math;
+ 
+ pub mod protocol_parameters;
+@@ -16,6 +18,10 @@ use lee_core::{
+     account::{AccountId, AccountWithMetadata, Data},
+     program::{PdaSeed, ProgramId},
+ };
++pub use liquidation_engine_state::{
++    compute_liquidation_engine_state_pda, compute_liquidation_engine_state_pda_seed,
++    LiquidationEngineState,
++};
+ pub use protocol_parameters::{
+     compute_protocol_parameters_pda, compute_protocol_parameters_pda_seed, ProtocolParameters,
+ };
+@@ -373,6 +379,42 @@ pub enum Instruction {
+         /// Amount of stablecoin debt to repay (also the amount burned from the user's holding).
+         amount: u128,
+     },
++    /// Bind the liquidation engine allowed to call [`Instruction::LiquidatePosition`] and
++    /// [`Instruction::EngineFreezeNewDebt`] (lez-auction-engine hook). Admin-only and top-level only:
++    /// `caller_program_id` must be zero, so an authorised admin PDA cannot be laundered through
++    /// another program. Rotation overwrites the binding.
++    ///
++    /// Required accounts (3), in order:
++    /// 1. `admin` — authorized; must equal `ProtocolParameters.admin_account_id`.
++    /// 2. `protocol_parameters` — initialized, read-only; at its canonical PDA.
++    /// 3. `liquidation_engine_state` — at `compute_liquidation_engine_state_pda(self_program_id)`;
++    ///    claimed on first use.
++    SetLiquidationEngine {
++        /// Engine program id (non-zero); compared with the hook's immediate caller.
++        engine_program_id: ProgramId,
++        /// Engine authority PDA (non-zero); must be authorised in every hook call.
++        engine_authority_id: AccountId,
++    },
++    /// Seize collateral from an unsafe position into the engine's custody holding
++    /// (lez-auction-engine hook; see `liquidation_hooks::liquidate_position`). Engine-only
++    /// (Variant C). Allowed while frozen.
++    ///
++    /// Required accounts (10), in order: `engine_authority` (authorized), `liquidation_engine_state`,
++    /// `position` (writable), `vault` (writable), `custody` (writable, initialized collateral
++    /// holding), `stability_fee_accumulator`, `redemption_price_state`, `market_price_oracle`,
++    /// `protocol_parameters`, `clock`.
++    LiquidatePosition {
++        /// `0 < x <= Position.collateral_amount`, and at most the proportional bound.
++        collateral_to_seize: u128,
++        /// `0 < x <= Position.normalized_debt_amount`.
++        normalized_debt_to_cover: u128,
++    },
++    /// Set `ProtocolParameters.is_frozen` (lez-auction-engine hook). Engine-only (Variant C). It can
++    /// only freeze; unfreezing stays with the freeze authority's [`Instruction::Unfreeze`].
++    ///
++    /// Required accounts (3), in order: `engine_authority` (authorized), `liquidation_engine_state`,
++    /// `protocol_parameters` (writable).
++    EngineFreezeNewDebt,
+ }
+ 
+ /// Persistent state held by a Stablecoin [`Position`] account.
+@@ -707,3 +749,59 @@ mod instruction_tests {
+         }
+     }
+ }
++
++#[cfg(test)]
++mod hook_order_tests {
++    //! Spec §5.10 / §3.2: spel-cli encodes by IDL position, the guest decodes by enum index, so the
++    //! appended hooks must sit at the same index in both. Upstream: point IDL_PATH at
++    //! `../../../../artifacts/stablecoin-idl.json`.
++    use super::*;
++
++    const IDL_PATH: &str = concat!(
++        env!("CARGO_MANIFEST_DIR"),
++        "/../../../idl/stablecoin-idl.json"
++    );
++
++    fn enum_index(instruction: &Instruction) -> u32 {
++        risc0_zkvm::serde::to_vec(instruction).expect("instruction serializes")[0]
++    }
++
++    #[test]
++    fn hook_instructions_share_enum_and_idl_index() {
++        let idl: serde_json::Value =
++            serde_json::from_str(&std::fs::read_to_string(IDL_PATH).expect("IDL file"))
++                .expect("IDL json");
++        let names: Vec<String> = idl["instructions"]
++            .as_array()
++            .expect("instructions array")
++            .iter()
++            .map(|i| i["name"].as_str().expect("name").to_owned())
++            .collect();
++        let hooks = [
++            (
++                "set_liquidation_engine",
++                Instruction::SetLiquidationEngine {
++                    engine_program_id: [1; 8],
++                    engine_authority_id: AccountId::new([2; 32]),
++                },
++            ),
++            (
++                "liquidate_position",
++                Instruction::LiquidatePosition {
++                    collateral_to_seize: 1,
++                    normalized_debt_to_cover: 1,
++                },
++            ),
++            ("engine_freeze_new_debt", Instruction::EngineFreezeNewDebt),
++        ];
++        for (expected, (name, instruction)) in (19u32..).zip(hooks.iter()) {
++            assert_eq!(enum_index(instruction), expected, "{name}: enum index");
++            assert_eq!(
++                names.iter().position(|n| n == name),
++                Some(usize::try_from(expected).expect("fits")),
++                "{name}: IDL index"
++            );
++        }
++        assert_eq!(names.len(), 22, "no other instruction was added or removed");
++    }
++}
+diff --git a/programs/stablecoin/core/src/liquidation_engine_state.rs b/programs/stablecoin/core/src/liquidation_engine_state.rs
+new file mode 100644
+index 0000000..d19d85e
+--- /dev/null
++++ b/programs/stablecoin/core/src/liquidation_engine_state.rs
+@@ -0,0 +1,62 @@
++//! Binding between this stablecoin instance and its liquidation engine (lez-auction-engine hooks).
++//!
++//! Read by `liquidate_position` and `engine_freeze_new_debt` to authenticate the engine with both
++//! the immediate caller program id and an authorised engine PDA (lez-auction-engine ADR-019, Variant C).
++
++use borsh::{BorshDeserialize, BorshSerialize};
++use lee_core::{
++    account::{AccountId, Data},
++    program::{PdaSeed, ProgramId},
++};
++use serde::{Deserialize, Serialize};
++use spel_framework_macros::account_type;
++
++/// PDA seed domain for the single-instance [`LiquidationEngineState`] account.
++const LIQUIDATION_ENGINE_STATE_PDA_DOMAIN: &[u8; 32] = b"STABLECOIN__LIQUIDATION_ENGINE__";
++
++/// The engine allowed to call the engine-only hooks.
++#[account_type]
++#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
++pub struct LiquidationEngineState {
++    /// Must equal the hook's immediate `caller_program_id`.
++    pub engine_program_id: ProgramId,
++    /// Engine PDA that must be authorised in the hook call.
++    pub engine_authority_id: AccountId,
++}
++
++impl TryFrom<&Data> for LiquidationEngineState {
++    type Error = std::io::Error;
++
++    fn try_from(data: &Data) -> Result<Self, Self::Error> {
++        Self::try_from_slice(data.as_ref())
++    }
++}
++
++impl From<&LiquidationEngineState> for Data {
++    fn from(state: &LiquidationEngineState) -> Self {
++        let len = borsh::object_length(state).expect("LiquidationEngineState length must be known");
++        let mut buf = Vec::with_capacity(len);
++        BorshSerialize::serialize(state, &mut buf)
++            .expect("LiquidationEngineState serialization should not fail");
++        Self::try_from(buf).expect("LiquidationEngineState encoded data should fit into Data")
++    }
++}
++
++/// PDA seed for [`LiquidationEngineState`] (single instance per stablecoin program id).
++#[must_use]
++pub fn compute_liquidation_engine_state_pda_seed() -> PdaSeed {
++    use risc0_zkvm::sha::{Impl, Sha256 as _};
++
++    let mut out = [0u8; 32];
++    out.copy_from_slice(Impl::hash_bytes(LIQUIDATION_ENGINE_STATE_PDA_DOMAIN).as_bytes());
++    PdaSeed::new(out)
++}
++
++/// Account id of the [`LiquidationEngineState`] PDA under `stablecoin_program_id`.
++#[must_use]
++pub fn compute_liquidation_engine_state_pda(stablecoin_program_id: ProgramId) -> AccountId {
++    AccountId::for_public_pda(
++        &stablecoin_program_id,
++        &compute_liquidation_engine_state_pda_seed(),
++    )
++}
+diff --git a/programs/stablecoin/methods/guest/src/bin/stablecoin.rs b/programs/stablecoin/methods/guest/src/bin/stablecoin.rs
+index 0d35a4b..12a06b2 100644
+--- a/programs/stablecoin/methods/guest/src/bin/stablecoin.rs
++++ b/programs/stablecoin/methods/guest/src/bin/stablecoin.rs
+@@ -704,4 +704,68 @@ mod stablecoin {
+         ))
+     }
+ 
++    /// Bind the liquidation engine (lez-auction-engine hook; host fn
++    /// `stablecoin_program::liquidation_hooks::set_liquidation_engine`). Admin-only, top-level only.
++    ///
++    /// # Errors
++    /// Returns the host program's panic-converted error if any precondition fails.
++    #[instruction]
++    pub fn set_liquidation_engine(
++        ctx: ProgramContext,
++        #[account(signer)]
++        admin: AccountWithMetadata,
++        protocol_parameters: AccountWithMetadata,
++        #[account(mut)]
++        liquidation_engine_state: AccountWithMetadata,
++        engine_program_id: nssa_core::program::ProgramId,
++        engine_authority_id: nssa_core::account::AccountId,
++    ) -> SpelResult {
++        let (post_states, chained_calls) =
++            stablecoin_program::liquidation_hooks::set_liquidation_engine(
++                admin,
++                protocol_parameters,
++                liquidation_engine_state,
++                ctx.self_program_id,
++                ctx.caller_program_id,
++                engine_program_id,
++                engine_authority_id,
++            );
++        Ok(spel_framework::SpelOutput::execute(post_states, chained_calls))
++    }
++
++    /// Implemented in the next patch (liquidate_position).
++    #[instruction]
++    pub fn liquidate_position(
++        collateral_to_seize: u128,
++        normalized_debt_to_cover: u128,
++    ) -> SpelResult {
++        let _ = (collateral_to_seize, normalized_debt_to_cover);
++        panic!("liquidate_position is not implemented yet")
++    }
++
++    /// Freeze new debt on the engine's behalf (lez-auction-engine hook; host fn
++    /// `stablecoin_program::liquidation_hooks::engine_freeze_new_debt`). Engine-only.
++    ///
++    /// # Errors
++    /// Returns the host program's panic-converted error if any precondition fails.
++    #[instruction]
++    pub fn engine_freeze_new_debt(
++        ctx: ProgramContext,
++        #[account(signer)]
++        engine_authority: AccountWithMetadata,
++        liquidation_engine_state: AccountWithMetadata,
++        #[account(mut)]
++        protocol_parameters: AccountWithMetadata,
++    ) -> SpelResult {
++        let (post_states, chained_calls) =
++            stablecoin_program::liquidation_hooks::engine_freeze_new_debt(
++                engine_authority,
++                liquidation_engine_state,
++                protocol_parameters,
++                ctx.self_program_id,
++                ctx.caller_program_id,
++            );
++        Ok(spel_framework::SpelOutput::execute(post_states, chained_calls))
++    }
++
+ }
+diff --git a/programs/stablecoin/src/lib.rs b/programs/stablecoin/src/lib.rs
+index 9ca0ca1..14b076c 100644
+--- a/programs/stablecoin/src/lib.rs
++++ b/programs/stablecoin/src/lib.rs
+@@ -41,6 +41,9 @@ pub mod update_redemption_rate;
+ /// Withdraw collateral from an existing position back to a user-controlled holding.
+ pub mod withdraw_collateral;
+ 
++/// Liquidation-engine hooks: engine binding, liquidate_position, engine_freeze_new_debt.
++pub mod liquidation_hooks;
++
+ #[cfg(test)]
+ mod test_support;
+ 
+diff --git a/programs/stablecoin/src/liquidation_hooks.rs b/programs/stablecoin/src/liquidation_hooks.rs
+new file mode 100644
+index 0000000..fbc41c3
+--- /dev/null
++++ b/programs/stablecoin/src/liquidation_hooks.rs
+@@ -0,0 +1,403 @@
++//! Liquidation-engine hooks appended by lez-auction-engine (offered upstream).
++//!
++//! Authentication is Variant C (lez-auction-engine ADR-019): the immediate `caller_program_id`
++//! must be the bound engine program AND the bound engine-authority PDA must be authorised.
++//! `caller_program_id` alone would accept any program the engine chained to with a forwarded
++//! authorisation only if the engine misbehaved; the PDA alone is launderable because lee keeps an
++//! authorised account authorised down the call chain (`validated_state_diff/mod.rs:262-290`).
++
++use lee_core::{
++    account::{Account, AccountId, AccountWithMetadata, Data},
++    program::{AccountPostState, ChainedCall, Claim, ProgramId, DEFAULT_PROGRAM_ID},
++};
++use stablecoin_core::{
++    compute_liquidation_engine_state_pda, compute_liquidation_engine_state_pda_seed,
++    compute_protocol_parameters_pda, LiquidationEngineState, ProtocolParameters,
++};
++
++/// Host bound on the engine's liquidation penalty, used by the proportionality check.
++pub const MAX_PENALTY_BPS: u128 = 2_500;
++
++fn load_parameters(
++    protocol_parameters: &AccountWithMetadata,
++    program_id: ProgramId,
++) -> ProtocolParameters {
++    ProtocolParameters::try_from(&crate::checks::decode_global(
++        protocol_parameters,
++        compute_protocol_parameters_pda(program_id),
++        program_id,
++        "ProtocolParameters",
++    ))
++    .expect("ProtocolParameters must decode")
++}
++
++pub(crate) fn load_engine_state(
++    state: &AccountWithMetadata,
++    program_id: ProgramId,
++) -> LiquidationEngineState {
++    LiquidationEngineState::try_from(&crate::checks::decode_global(
++        state,
++        compute_liquidation_engine_state_pda(program_id),
++        program_id,
++        "LiquidationEngineState",
++    ))
++    .expect("LiquidationEngineState must decode")
++}
++
++/// Variant C guard shared by both engine-only hooks.
++///
++/// # Panics
++/// If the immediate caller is not the bound engine program, the authority account is not the
++/// bound engine authority, or it is not authorised in this call.
++pub fn assert_engine_call(
++    caller_program_id: ProgramId,
++    engine_authority: &AccountWithMetadata,
++    state: &LiquidationEngineState,
++) {
++    assert_eq!(
++        caller_program_id, state.engine_program_id,
++        "Caller program is not the liquidation engine"
++    );
++    assert_eq!(
++        engine_authority.account_id, state.engine_authority_id,
++        "Engine authority account is not the bound engine authority"
++    );
++    assert!(
++        engine_authority.is_authorized,
++        "Engine authority authorization is missing"
++    );
++}
++
++/// Bind (or rotate) the liquidation engine. Admin-only, top-level only.
++///
++/// # Panics
++/// Not a top-level call; admin not authorised or not the stored admin; zero engine program id or
++/// zero authority id; `liquidation_engine_state` not at its PDA or owned by another program.
++#[allow(
++    clippy::too_many_arguments,
++    reason = "three accounts plus context and two arguments mirror the guest ABI"
++)]
++pub fn set_liquidation_engine(
++    admin: AccountWithMetadata,
++    protocol_parameters: AccountWithMetadata,
++    liquidation_engine_state: AccountWithMetadata,
++    stablecoin_program_id: ProgramId,
++    caller_program_id: ProgramId,
++    engine_program_id: ProgramId,
++    engine_authority_id: AccountId,
++) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
++    assert_eq!(
++        caller_program_id, DEFAULT_PROGRAM_ID,
++        "set_liquidation_engine must be a top-level call"
++    );
++    let parameters = load_parameters(&protocol_parameters, stablecoin_program_id);
++    crate::checks::assert_admin_authorized(&admin, &parameters);
++    assert_ne!(
++        engine_program_id, DEFAULT_PROGRAM_ID,
++        "Engine program id must be non-zero"
++    );
++    assert_ne!(
++        engine_authority_id,
++        AccountId::new([0; 32]),
++        "Engine authority id must be non-zero"
++    );
++    assert_eq!(
++        liquidation_engine_state.account_id,
++        compute_liquidation_engine_state_pda(stablecoin_program_id),
++        "LiquidationEngineState account ID does not match expected PDA derivation"
++    );
++    let is_new = liquidation_engine_state.account == Account::default();
++    if !is_new {
++        assert_eq!(
++            liquidation_engine_state.account.program_owner, stablecoin_program_id,
++            "LiquidationEngineState account must be owned by the stablecoin program"
++        );
++    }
++    let mut state_post = liquidation_engine_state.account;
++    state_post.data = Data::from(&LiquidationEngineState {
++        engine_program_id,
++        engine_authority_id,
++    });
++    let state_post = if is_new {
++        AccountPostState::new_claimed(
++            state_post,
++            Claim::Pda(compute_liquidation_engine_state_pda_seed()),
++        )
++    } else {
++        AccountPostState::new(state_post)
++    };
++    (
++        vec![
++            AccountPostState::new(admin.account),
++            AccountPostState::new(protocol_parameters.account),
++            state_post,
++        ],
++        vec![],
++    )
++}
++
++/// Set `ProtocolParameters.is_frozen` on the engine's behalf (F4 "pause new debt generation").
++///
++/// # Panics
++/// The Variant C guard fails, or a global does not validate.
++pub fn engine_freeze_new_debt(
++    engine_authority: AccountWithMetadata,
++    liquidation_engine_state: AccountWithMetadata,
++    protocol_parameters: AccountWithMetadata,
++    stablecoin_program_id: ProgramId,
++    caller_program_id: ProgramId,
++) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
++    let state = load_engine_state(&liquidation_engine_state, stablecoin_program_id);
++    assert_engine_call(caller_program_id, &engine_authority, &state);
++    let mut parameters = load_parameters(&protocol_parameters, stablecoin_program_id);
++    parameters.is_frozen = true;
++    let mut parameters_post = protocol_parameters.account;
++    parameters_post.data = Data::from(&parameters);
++    (
++        vec![
++            AccountPostState::new(engine_authority.account),
++            AccountPostState::new(liquidation_engine_state.account),
++            AccountPostState::new(parameters_post),
++        ],
++        vec![],
++    )
++}
++
++#[cfg(test)]
++#[allow(
++    clippy::panic,
++    clippy::unwrap_used,
++    clippy::arithmetic_side_effects,
++    clippy::indexing_slicing,
++    reason = "test fixtures build accounts from constants, index fixed-size outputs and assert panics via #[should_panic]"
++)]
++mod tests {
++    use lee_core::{
++        account::{Account, AccountId, AccountWithMetadata, Data, Nonce},
++        program::{ProgramId, DEFAULT_PROGRAM_ID},
++    };
++    use stablecoin_core::{
++        compute_liquidation_engine_state_pda, LiquidationEngineState, ProtocolParameters,
++    };
++
++    use super::*;
++    use crate::test_support::*;
++
++    pub(super) const ENGINE: ProgramId = [0xE1; 8];
++    pub(super) const IMPOSTOR: ProgramId = [0xBA; 8];
++
++    pub(super) fn engine_authority_id() -> AccountId {
++        AccountId::new([0xEA; 32])
++    }
++    pub(super) fn signer(id: AccountId) -> AccountWithMetadata {
++        AccountWithMetadata {
++            account: Account::default(),
++            is_authorized: true,
++            account_id: id,
++        }
++    }
++    pub(super) fn engine_authority(authorized: bool) -> AccountWithMetadata {
++        AccountWithMetadata {
++            account: Account::default(),
++            is_authorized: authorized,
++            account_id: engine_authority_id(),
++        }
++    }
++    pub(super) fn engine_state() -> AccountWithMetadata {
++        AccountWithMetadata {
++            account: Account {
++                program_owner: STABLECOIN_PROGRAM_ID,
++                balance: 0,
++                data: Data::from(&LiquidationEngineState {
++                    engine_program_id: ENGINE,
++                    engine_authority_id: engine_authority_id(),
++                }),
++                nonce: Nonce(0),
++            },
++            is_authorized: false,
++            account_id: compute_liquidation_engine_state_pda(STABLECOIN_PROGRAM_ID),
++        }
++    }
++    fn unbound_state() -> AccountWithMetadata {
++        uninitialized(compute_liquidation_engine_state_pda(STABLECOIN_PROGRAM_ID))
++    }
++    fn decode_params(post: &lee_core::program::AccountPostState) -> ProtocolParameters {
++        ProtocolParameters::try_from(&post.account().data).unwrap()
++    }
++
++    #[test]
++    fn admin_binds_engine_on_first_use() {
++        let (post, calls) = set_liquidation_engine(
++            signer(admin_id()),
++            protocol_parameters_account(ParameterOverrides::default()),
++            unbound_state(),
++            STABLECOIN_PROGRAM_ID,
++            DEFAULT_PROGRAM_ID,
++            ENGINE,
++            engine_authority_id(),
++        );
++        assert!(calls.is_empty());
++        let state = LiquidationEngineState::try_from(&post[2].account().data).unwrap();
++        assert_eq!(state.engine_program_id, ENGINE);
++        assert_eq!(state.engine_authority_id, engine_authority_id());
++        assert!(
++            post[2].required_claim().is_some(),
++            "first bind claims the PDA"
++        );
++    }
++
++    #[test]
++    fn admin_can_rotate_the_binding() {
++        let (post, _) = set_liquidation_engine(
++            signer(admin_id()),
++            protocol_parameters_account(ParameterOverrides::default()),
++            engine_state(),
++            STABLECOIN_PROGRAM_ID,
++            DEFAULT_PROGRAM_ID,
++            [0xE2; 8],
++            AccountId::new([0xEB; 32]),
++        );
++        let state = LiquidationEngineState::try_from(&post[2].account().data).unwrap();
++        assert_eq!(state.engine_program_id, [0xE2; 8]);
++        assert!(post[2].required_claim().is_none());
++    }
++
++    #[test]
++    #[should_panic(expected = "set_liquidation_engine must be a top-level call")]
++    fn bind_through_another_program_is_rejected() {
++        set_liquidation_engine(
++            signer(admin_id()),
++            protocol_parameters_account(ParameterOverrides::default()),
++            unbound_state(),
++            STABLECOIN_PROGRAM_ID,
++            IMPOSTOR,
++            ENGINE,
++            engine_authority_id(),
++        );
++    }
++
++    #[test]
++    #[should_panic(expected = "Signer is not the protocol's admin")]
++    fn non_admin_cannot_bind() {
++        set_liquidation_engine(
++            signer(caller_id()),
++            protocol_parameters_account(ParameterOverrides::default()),
++            unbound_state(),
++            STABLECOIN_PROGRAM_ID,
++            DEFAULT_PROGRAM_ID,
++            ENGINE,
++            engine_authority_id(),
++        );
++    }
++
++    #[test]
++    #[should_panic(expected = "Engine program id must be non-zero")]
++    fn zero_engine_program_id_rejected() {
++        set_liquidation_engine(
++            signer(admin_id()),
++            protocol_parameters_account(ParameterOverrides::default()),
++            unbound_state(),
++            STABLECOIN_PROGRAM_ID,
++            DEFAULT_PROGRAM_ID,
++            DEFAULT_PROGRAM_ID,
++            engine_authority_id(),
++        );
++    }
++
++    #[test]
++    #[should_panic(expected = "Engine authority id must be non-zero")]
++    fn zero_engine_authority_rejected() {
++        set_liquidation_engine(
++            signer(admin_id()),
++            protocol_parameters_account(ParameterOverrides::default()),
++            unbound_state(),
++            STABLECOIN_PROGRAM_ID,
++            DEFAULT_PROGRAM_ID,
++            ENGINE,
++            AccountId::new([0; 32]),
++        );
++    }
++
++    #[test]
++    fn engine_freeze_sets_is_frozen() {
++        let (post, calls) = engine_freeze_new_debt(
++            engine_authority(true),
++            engine_state(),
++            protocol_parameters_account(ParameterOverrides::default()),
++            STABLECOIN_PROGRAM_ID,
++            ENGINE,
++        );
++        assert!(calls.is_empty());
++        assert!(decode_params(&post[2]).is_frozen);
++    }
++
++    #[test]
++    #[should_panic(expected = "Caller program is not the liquidation engine")]
++    fn freeze_from_impostor_program_rejected() {
++        engine_freeze_new_debt(
++            engine_authority(true),
++            engine_state(),
++            protocol_parameters_account(ParameterOverrides::default()),
++            STABLECOIN_PROGRAM_ID,
++            IMPOSTOR,
++        );
++    }
++
++    #[test]
++    #[should_panic(expected = "Caller program is not the liquidation engine")]
++    fn freeze_top_level_rejected() {
++        engine_freeze_new_debt(
++            engine_authority(true),
++            engine_state(),
++            protocol_parameters_account(ParameterOverrides::default()),
++            STABLECOIN_PROGRAM_ID,
++            DEFAULT_PROGRAM_ID,
++        );
++    }
++
++    #[test]
++    #[should_panic(expected = "Engine authority authorization is missing")]
++    fn freeze_without_authority_rejected() {
++        engine_freeze_new_debt(
++            engine_authority(false),
++            engine_state(),
++            protocol_parameters_account(ParameterOverrides::default()),
++            STABLECOIN_PROGRAM_ID,
++            ENGINE,
++        );
++    }
++
++    #[test]
++    #[should_panic(expected = "Engine authority account is not the bound engine authority")]
++    fn freeze_with_authorised_but_wrong_authority_rejected() {
++        engine_freeze_new_debt(
++            signer(AccountId::new([0xEB; 32])),
++            engine_state(),
++            protocol_parameters_account(ParameterOverrides::default()),
++            STABLECOIN_PROGRAM_ID,
++            ENGINE,
++        );
++    }
++
++    #[test]
++    #[should_panic(expected = "LiquidationEngineState account must be initialized")]
++    fn freeze_with_no_binding_rejected() {
++        engine_freeze_new_debt(
++            engine_authority(true),
++            unbound_state(),
++            protocol_parameters_account(ParameterOverrides::default()),
++            STABLECOIN_PROGRAM_ID,
++            ENGINE,
++        );
++    }
++
++    #[test]
++    #[should_panic(expected = "Signer is not the protocol's freeze authority")]
++    fn only_freeze_authority_can_unfreeze() {
++        let frozen = protocol_parameters_account(ParameterOverrides {
++            is_frozen: true,
++            ..ParameterOverrides::default()
++        });
++        crate::freeze::unfreeze(engine_authority(true), frozen, STABLECOIN_PROGRAM_ID);
++    }
++}
+-- 
+2.50.1.windows.1
+

@@ -1,0 +1,4 @@
+# Controller ruling (Plan 2): WSL builds and shell scripts break on CRLF; the repo lives on C: with autocrlf.
+* text=auto eol=lf
+*.png binary
+*.bin binary

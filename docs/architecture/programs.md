@@ -85,3 +85,7 @@ Arguments use spel-encodable types only (ADR-030): bps as `u32` (≤ 10_000; col
 - Bid account choice (ADR-029, added in Task 11): list `accounting` (`bid_with_settlement`) whenever `coin_in_max >= remaining_target` or the quoted fill would empty the lot within the quote's slippage margin.
 - Optional slots (ADR-030): pass `unused_slot_pda(config, 0|1)` when the reference oracle / protocol token is not configured.
 - Signers that sign more than one stablecoin-program transaction must be `wallet auth-transfer init`-ed first (ADR-018).
+
+## Test harness
+
+`programs/integration_tests` (package `engine_integration_tests`) runs the real token, stablecoin and (from Task 8) auction_engine guests in an in-process `V03State` (risc0 dev mode). `World::new` bootstraps the host with the real `InitializeProgram` (stability fee exactly 1.0 per ms so debt stays exact, min CR 1.5, redemption price 0.5); positions use the real `OpenPosition` + `GenerateDebt`; fixture accounts are force-inserted like the upstream tests; signers are owned by a placeholder program so they can sign repeatedly (S1 problem 6).

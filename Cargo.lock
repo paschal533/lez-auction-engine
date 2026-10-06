@@ -1918,6 +1918,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_integration_tests"
+version = "0.1.0"
+dependencies = [
+ "clock_core",
+ "lee",
+ "lee_core",
+ "risc0-zkvm",
+ "serde",
+ "serde_json",
+ "stablecoin-methods",
+ "stablecoin_core",
+ "token-methods",
+ "token_core",
+ "twap_oracle_core",
+]
+
+[[package]]
 name = "enum-as-inner"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

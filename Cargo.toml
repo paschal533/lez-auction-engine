@@ -10,6 +10,7 @@ members = [
     "programs/stablecoin",
     "programs/stablecoin/methods",
     "programs/upstream_integration_tests",
+    "programs/integration_tests",
     "tools/idl-gen",
 ]
 exclude = [

@@ -1,0 +1,2773 @@
+#![allow(
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::unwrap_used,
+    reason = "tests deliberately panic on bad state via assert!/#[should_panic] and index fixed-size vectors"
+)]
+
+use lee_core::{
+    account::{Account, AccountId, AccountWithMetadata, Data, Nonce},
+    program::{ChainedCall, Claim, ProgramId},
+};
+use stablecoin_core::{
+    compute_position_pda, compute_position_pda_seed, compute_position_vault_pda,
+    compute_position_vault_pda_seed, compute_protocol_parameters_pda, math::FIXED_POINT_ONE,
+    Position, ProtocolParameters,
+};
+use token_core::{TokenDefinition, TokenHolding};
+
+use crate::test_support::clock_account;
+
+const STABLECOIN_PROGRAM_ID: ProgramId = [3u32; 8];
+const TOKEN_PROGRAM_ID: ProgramId = [2u32; 8];
+const TEST_POSITION_NONCE: u64 = 0;
+/// Unix milliseconds, matching the `CLOCK_01` account the guest passes in.
+const NOW: u64 = 1_700_000_000_000;
+
+fn owner_id() -> AccountId {
+    AccountId::new([0x10u8; 32])
+}
+
+fn collateral_definition_id() -> AccountId {
+    AccountId::new([0x20u8; 32])
+}
+
+fn user_holding_id() -> AccountId {
+    AccountId::new([0x30u8; 32])
+}
+
+fn token_holding_account(
+    account_id: AccountId,
+    definition_id: AccountId,
+    balance: u128,
+) -> AccountWithMetadata {
+    AccountWithMetadata {
+        account: Account {
+            program_owner: TOKEN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&TokenHolding::Fungible {
+                definition_id,
+                balance,
+            }),
+            nonce: Nonce(0),
+        },
+        is_authorized: false,
+        account_id,
+    }
+}
+
+fn position_id() -> AccountId {
+    compute_position_pda(STABLECOIN_PROGRAM_ID, owner_id(), TEST_POSITION_NONCE)
+}
+
+fn vault_id() -> AccountId {
+    compute_position_vault_pda(STABLECOIN_PROGRAM_ID, position_id())
+}
+
+fn protocol_parameters_id() -> AccountId {
+    compute_protocol_parameters_pda(STABLECOIN_PROGRAM_ID)
+}
+
+fn protocol_parameters_account(is_frozen: bool) -> AccountWithMetadata {
+    protocol_parameters_account_for(collateral_definition_id(), is_frozen)
+}
+
+/// The default fixture pins a 1.5x ratio; the projection tests need 1.1x.
+fn protocol_parameters_account_with_ratio(ratio: u128) -> AccountWithMetadata {
+    let mut account = protocol_parameters_account(false);
+    let mut parameters =
+        ProtocolParameters::try_from(&account.account.data).expect("valid ProtocolParameters");
+    parameters.minimum_collateralization_ratio = ratio;
+    account.account.data = Data::from(&parameters);
+    account
+}
+
+fn protocol_parameters_account_for(
+    collateral_definition_id: AccountId,
+    is_frozen: bool,
+) -> AccountWithMetadata {
+    AccountWithMetadata {
+        account: Account {
+            program_owner: STABLECOIN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&ProtocolParameters {
+                admin_account_id: AccountId::new([0xA0u8; 32]),
+                freeze_authority_account_id: AccountId::new([0xFEu8; 32]),
+                stablecoin_definition_id: stablecoin_definition_id(),
+                collateral_definition_id,
+                market_price_oracle_id: crate::test_support::oracle_id(),
+                stability_fee_per_millisecond: FIXED_POINT_ONE,
+                controller_proportional_gain: 0,
+                controller_integral_gain: 0,
+                minimum_collateralization_ratio: FIXED_POINT_ONE * 3 / 2,
+                minimum_milliseconds_between_rate_updates: 1,
+                maximum_oracle_price_age_milliseconds: 86_400_000,
+                is_frozen,
+            }),
+            nonce: Nonce(0),
+        },
+        is_authorized: false,
+        account_id: protocol_parameters_id(),
+    }
+}
+
+fn owner_account() -> AccountWithMetadata {
+    AccountWithMetadata {
+        account: Account::default(),
+        is_authorized: true,
+        account_id: owner_id(),
+    }
+}
+
+fn collateral_definition_account() -> AccountWithMetadata {
+    AccountWithMetadata {
+        account: Account {
+            program_owner: TOKEN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&TokenDefinition::Fungible {
+                name: "SNT".to_owned(),
+                total_supply: 1_000_000,
+                metadata_id: None,
+                authority: None,
+            }),
+            nonce: Nonce(0),
+        },
+        is_authorized: false,
+        account_id: collateral_definition_id(),
+    }
+}
+
+fn user_holding_account(balance: u128) -> AccountWithMetadata {
+    let mut account = token_holding_account(user_holding_id(), collateral_definition_id(), balance);
+    account.is_authorized = true;
+    account
+}
+
+fn uninit_position_account() -> AccountWithMetadata {
+    AccountWithMetadata {
+        account: Account::default(),
+        is_authorized: false,
+        account_id: position_id(),
+    }
+}
+
+fn uninit_vault_account() -> AccountWithMetadata {
+    AccountWithMetadata {
+        account: Account::default(),
+        is_authorized: false,
+        account_id: vault_id(),
+    }
+}
+
+fn destination_holding_id() -> AccountId {
+    AccountId::new([0x40u8; 32])
+}
+
+fn init_position_account(
+    collateral_amount: u128,
+    normalized_debt_amount: u128,
+) -> AccountWithMetadata {
+    AccountWithMetadata {
+        account: Account {
+            program_owner: STABLECOIN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&Position {
+                owner_account_id: owner_id(),
+                position_nonce: TEST_POSITION_NONCE,
+                vault_account_id: vault_id(),
+                collateral_amount,
+                normalized_debt_amount,
+                opened_at: 0,
+            }),
+            nonce: Nonce(0),
+        },
+        is_authorized: false,
+        account_id: position_id(),
+    }
+}
+
+fn init_vault_account() -> AccountWithMetadata {
+    vault_account_with(0)
+}
+
+/// A vault holding `balance` collateral. On chain the vault balance and
+/// `Position.collateral_amount` move together, so fixtures should agree too.
+fn vault_account_with(balance: u128) -> AccountWithMetadata {
+    token_holding_account(vault_id(), collateral_definition_id(), balance)
+}
+
+fn destination_holding_account() -> AccountWithMetadata {
+    token_holding_account(destination_holding_id(), collateral_definition_id(), 0)
+}
+
+fn stablecoin_definition_id() -> AccountId {
+    AccountId::new([0x50u8; 32])
+}
+
+fn user_stablecoin_holding_id() -> AccountId {
+    AccountId::new([0x60u8; 32])
+}
+
+fn stablecoin_definition_account() -> AccountWithMetadata {
+    AccountWithMetadata {
+        account: Account {
+            program_owner: TOKEN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&TokenDefinition::Fungible {
+                name: "DAI".to_owned(),
+                total_supply: 1_000_000,
+                metadata_id: None,
+                authority: None,
+            }),
+            nonce: Nonce(0),
+        },
+        is_authorized: false,
+        account_id: stablecoin_definition_id(),
+    }
+}
+
+fn user_stablecoin_holding_account(balance: u128) -> AccountWithMetadata {
+    let mut account = token_holding_account(
+        user_stablecoin_holding_id(),
+        stablecoin_definition_id(),
+        balance,
+    );
+    account.is_authorized = true;
+    account
+}
+
+#[test]
+fn open_position_claims_pda_and_emits_chained_calls() {
+    let collateral_amount: u128 = 500;
+    let (post_states, chained_calls) = crate::open_position::open_position(
+        owner_account(),
+        uninit_position_account(),
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        collateral_definition_account(),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        collateral_amount,
+    );
+
+    assert_eq!(post_states.len(), 7);
+
+    // Position is PDA-claimed and carries the encoded Position state.
+    let position_post = &post_states[1];
+    assert_eq!(
+        position_post.required_claim(),
+        Some(Claim::Pda(compute_position_pda_seed(
+            owner_id(),
+            TEST_POSITION_NONCE
+        )))
+    );
+    let position = Position::try_from(&position_post.account().data).expect("valid Position");
+    assert_eq!(
+        position,
+        Position {
+            owner_account_id: owner_id(),
+            position_nonce: TEST_POSITION_NONCE,
+            vault_account_id: vault_id(),
+            collateral_amount,
+            normalized_debt_amount: 0,
+            opened_at: NOW,
+        }
+    );
+    // The runtime sets the program_owner on the claimed account after validating Claim::Pda.
+    assert_eq!(position_post.account().program_owner, ProgramId::default());
+
+    assert_eq!(chained_calls.len(), 2);
+
+    let mut vault_authorized = uninit_vault_account();
+    vault_authorized.is_authorized = true;
+    let expected_initialize = ChainedCall::new(
+        TOKEN_PROGRAM_ID,
+        vec![collateral_definition_account(), vault_authorized],
+        &token_core::Instruction::InitializeAccount,
+    )
+    .with_pda_seeds(vec![compute_position_vault_pda_seed(position_id())]);
+    assert_eq!(chained_calls[0], expected_initialize);
+
+    let post_init_vault = AccountWithMetadata {
+        account: Account {
+            program_owner: TOKEN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&TokenHolding::Fungible {
+                definition_id: collateral_definition_id(),
+                balance: 0,
+            }),
+            nonce: Nonce(0),
+        },
+        is_authorized: false,
+        account_id: vault_id(),
+    };
+    let expected_transfer = ChainedCall::new(
+        TOKEN_PROGRAM_ID,
+        vec![user_holding_account(1_000), post_init_vault],
+        &token_core::Instruction::Transfer {
+            amount_to_transfer: collateral_amount,
+        },
+    );
+    assert_eq!(chained_calls[1], expected_transfer);
+}
+
+#[test]
+#[should_panic(expected = "Owner authorization is missing")]
+fn open_position_requires_owner_authorization() {
+    let mut owner = owner_account();
+    owner.is_authorized = false;
+
+    crate::open_position::open_position(
+        owner,
+        uninit_position_account(),
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        collateral_definition_account(),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+}
+
+#[test]
+#[should_panic(expected = "User collateral holding authorization is missing")]
+fn open_position_requires_user_holding_authorization() {
+    let mut holding = user_holding_account(1_000);
+    holding.is_authorized = false;
+
+    crate::open_position::open_position(
+        owner_account(),
+        uninit_position_account(),
+        uninit_vault_account(),
+        holding,
+        collateral_definition_account(),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position account must be uninitialized")]
+fn open_position_rejects_initialized_position() {
+    let position = AccountWithMetadata {
+        account: Account {
+            program_owner: STABLECOIN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&Position {
+                owner_account_id: owner_id(),
+                position_nonce: TEST_POSITION_NONCE,
+                vault_account_id: vault_id(),
+                collateral_amount: 1,
+                normalized_debt_amount: 0,
+                opened_at: 0,
+            }),
+            nonce: Nonce(0),
+        },
+        is_authorized: false,
+        account_id: position_id(),
+    };
+
+    crate::open_position::open_position(
+        owner_account(),
+        position,
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        collateral_definition_account(),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position vault account must be uninitialized")]
+fn open_position_rejects_initialized_vault() {
+    let vault = AccountWithMetadata {
+        account: Account {
+            program_owner: TOKEN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&TokenHolding::Fungible {
+                definition_id: collateral_definition_id(),
+                balance: 0,
+            }),
+            nonce: Nonce(0),
+        },
+        is_authorized: false,
+        account_id: vault_id(),
+    };
+
+    crate::open_position::open_position(
+        owner_account(),
+        uninit_position_account(),
+        vault,
+        user_holding_account(1_000),
+        collateral_definition_account(),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position account ID does not match expected derivation")]
+fn open_position_rejects_wrong_position_address() {
+    let bad_position = AccountWithMetadata {
+        account: Account::default(),
+        is_authorized: false,
+        account_id: AccountId::new([0xFFu8; 32]),
+    };
+
+    crate::open_position::open_position(
+        owner_account(),
+        bad_position,
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        collateral_definition_account(),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position vault account ID does not match expected derivation")]
+fn open_position_rejects_wrong_vault_address() {
+    let bad_vault = AccountWithMetadata {
+        account: Account::default(),
+        is_authorized: false,
+        account_id: AccountId::new([0xEEu8; 32]),
+    };
+
+    crate::open_position::open_position(
+        owner_account(),
+        uninit_position_account(),
+        bad_vault,
+        user_holding_account(1_000),
+        collateral_definition_account(),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+}
+
+#[test]
+#[should_panic(expected = "User collateral holding does not match the collateral definition")]
+fn open_position_rejects_mismatched_token_definition() {
+    let other_definition = AccountWithMetadata {
+        account: Account {
+            program_owner: TOKEN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&TokenDefinition::Fungible {
+                name: "OTHER".to_owned(),
+                total_supply: 1,
+                metadata_id: None,
+                authority: None,
+            }),
+            nonce: Nonce(0),
+        },
+        is_authorized: false,
+        account_id: AccountId::new([0x21u8; 32]),
+    };
+
+    crate::open_position::open_position(
+        owner_account(),
+        uninit_position_account(),
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        other_definition,
+        // Bind the protocol to the definition under test so the check being
+        // exercised here is the user-holding mismatch, not the params gate.
+        protocol_parameters_account_for(AccountId::new([0x21u8; 32]), false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "Collateral definition is not owned by the user collateral holding's Token Program"
+)]
+fn open_position_rejects_definition_with_wrong_token_program() {
+    let mut definition = collateral_definition_account();
+    definition.account.program_owner = [9u32; 8];
+
+    crate::open_position::open_position(
+        owner_account(),
+        uninit_position_account(),
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        definition,
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+}
+
+#[test]
+#[should_panic(expected = "ProtocolParameters account ID does not match expected PDA derivation")]
+fn open_position_rejects_protocol_parameters_at_wrong_address() {
+    // Owned by the stablecoin program and decodes fine, but is not the canonical
+    // PDA — accepting it would let a caller substitute the global config.
+    let mut parameters = protocol_parameters_account(false);
+    parameters.account_id = AccountId::new([0xC0u8; 32]);
+
+    crate::open_position::open_position(
+        owner_account(),
+        uninit_position_account(),
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        collateral_definition_account(),
+        parameters,
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Protocol is frozen")]
+fn open_position_rejects_frozen_protocol() {
+    crate::open_position::open_position(
+        owner_account(),
+        uninit_position_account(),
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        collateral_definition_account(),
+        protocol_parameters_account(true),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+}
+
+#[test]
+#[should_panic(expected = "ProtocolParameters account must be initialized")]
+fn open_position_rejects_uninitialized_protocol_parameters() {
+    crate::open_position::open_position(
+        owner_account(),
+        uninit_position_account(),
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        collateral_definition_account(),
+        AccountWithMetadata {
+            account: Account::default(),
+            is_authorized: false,
+            account_id: protocol_parameters_id(),
+        },
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Collateral definition does not match")]
+fn open_position_rejects_collateral_definition_not_bound_at_init() {
+    // The protocol was bootstrapped against a different collateral definition, so
+    // the one the caller passed must be refused even though it is internally
+    // consistent with the user's holding.
+    crate::open_position::open_position(
+        owner_account(),
+        uninit_position_account(),
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        collateral_definition_account(),
+        protocol_parameters_account_for(AccountId::new([0x99u8; 32]), false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+}
+
+#[test]
+fn open_position_stamps_opened_at_from_the_clock() {
+    let (post_states, _) = crate::open_position::open_position(
+        owner_account(),
+        uninit_position_account(),
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        collateral_definition_account(),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.opened_at, NOW);
+}
+
+#[test]
+fn open_position_echoes_protocol_parameters_and_clock_unchanged() {
+    let parameters = protocol_parameters_account(false);
+    let clock = clock_account(NOW);
+    let (post_states, _) = crate::open_position::open_position(
+        owner_account(),
+        uninit_position_account(),
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        collateral_definition_account(),
+        parameters.clone(),
+        clock.clone(),
+        STABLECOIN_PROGRAM_ID,
+        TEST_POSITION_NONCE,
+        500,
+    );
+
+    assert_eq!(post_states.len(), 7);
+    assert_eq!(*post_states[5].account(), parameters.account);
+    assert_eq!(*post_states[6].account(), clock.account);
+}
+
+// --- deposit_collateral (spec §10.5) ---
+
+const DEPOSIT_AMOUNT: u128 = 250;
+
+fn deposit(
+    owner: AccountWithMetadata,
+    position: AccountWithMetadata,
+    vault: AccountWithMetadata,
+    holding: AccountWithMetadata,
+    parameters: AccountWithMetadata,
+    amount: u128,
+) -> (Vec<lee_core::program::AccountPostState>, Vec<ChainedCall>) {
+    crate::deposit_collateral::deposit_collateral(
+        owner,
+        position,
+        vault,
+        holding,
+        parameters,
+        STABLECOIN_PROGRAM_ID,
+        amount,
+    )
+}
+
+#[test]
+fn deposit_collateral_adds_to_position_and_emits_transfer() {
+    let starting_collateral = 500;
+    let (post_states, chained_calls) = deposit(
+        owner_account(),
+        init_position_account(starting_collateral, 0),
+        vault_account_with(starting_collateral),
+        user_holding_account(1_000),
+        protocol_parameters_account(false),
+        DEPOSIT_AMOUNT,
+    );
+
+    assert_eq!(post_states.len(), 5);
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(
+        position.collateral_amount,
+        starting_collateral + DEPOSIT_AMOUNT
+    );
+    // Everything except the collateral is untouched.
+    assert_eq!(position.normalized_debt_amount, 0);
+    assert_eq!(position.owner_account_id, owner_id());
+    assert_eq!(position.vault_account_id, vault_id());
+
+    assert_eq!(chained_calls.len(), 1);
+    let expected = ChainedCall::new(
+        TOKEN_PROGRAM_ID,
+        vec![
+            user_holding_account(1_000),
+            vault_account_with(starting_collateral),
+        ],
+        &token_core::Instruction::Transfer {
+            amount_to_transfer: DEPOSIT_AMOUNT,
+        },
+    );
+    assert_eq!(chained_calls[0], expected);
+}
+
+#[test]
+fn deposit_collateral_works_when_frozen() {
+    // Opposite of open_position: a deposit only improves collateralization, so
+    // spec §7 keeps it available while frozen.
+    let (post_states, chained_calls) = deposit(
+        owner_account(),
+        init_position_account(500, 0),
+        vault_account_with(500),
+        user_holding_account(1_000),
+        protocol_parameters_account(true),
+        DEPOSIT_AMOUNT,
+    );
+
+    assert_eq!(post_states.len(), 5);
+    assert_eq!(chained_calls.len(), 1);
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.collateral_amount, 500 + DEPOSIT_AMOUNT);
+}
+
+#[test]
+fn deposit_collateral_allows_zero_amount() {
+    let (post_states, chained_calls) = deposit(
+        owner_account(),
+        init_position_account(500, 0),
+        vault_account_with(500),
+        user_holding_account(1_000),
+        protocol_parameters_account(false),
+        0,
+    );
+
+    assert_eq!(post_states.len(), 5);
+    assert_eq!(chained_calls.len(), 1);
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.collateral_amount, 500);
+}
+
+#[test]
+fn deposit_collateral_leaves_debt_untouched() {
+    // Deposits never touch normalized_debt_amount — accrual is a read-side
+    // projection, so no accumulator is consulted here.
+    let (post_states, _) = deposit(
+        owner_account(),
+        init_position_account(500, 42),
+        vault_account_with(500),
+        user_holding_account(1_000),
+        protocol_parameters_account(false),
+        DEPOSIT_AMOUNT,
+    );
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.normalized_debt_amount, 42);
+    assert_eq!(position.collateral_amount, 500 + DEPOSIT_AMOUNT);
+}
+
+#[test]
+#[should_panic(expected = "Owner authorization is missing")]
+fn deposit_collateral_requires_owner_authorization() {
+    let mut owner = owner_account();
+    owner.is_authorized = false;
+    deposit(
+        owner,
+        init_position_account(500, 0),
+        vault_account_with(500),
+        user_holding_account(1_000),
+        protocol_parameters_account(false),
+        DEPOSIT_AMOUNT,
+    );
+}
+
+#[test]
+#[should_panic(expected = "User collateral holding authorization is missing")]
+fn deposit_collateral_requires_user_holding_authorization() {
+    let mut holding = user_holding_account(1_000);
+    holding.is_authorized = false;
+    deposit(
+        owner_account(),
+        init_position_account(500, 0),
+        init_vault_account(),
+        holding,
+        protocol_parameters_account(false),
+        DEPOSIT_AMOUNT,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position account must be initialized")]
+fn deposit_collateral_rejects_uninitialized_position() {
+    deposit(
+        owner_account(),
+        uninit_position_account(),
+        init_vault_account(),
+        user_holding_account(1_000),
+        protocol_parameters_account(false),
+        DEPOSIT_AMOUNT,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position is not owned by this stablecoin program")]
+fn deposit_collateral_rejects_position_owned_by_other_program() {
+    let mut position = init_position_account(500, 0);
+    position.account.program_owner = [9u32; 8];
+    deposit(
+        owner_account(),
+        position,
+        init_vault_account(),
+        user_holding_account(1_000),
+        protocol_parameters_account(false),
+        DEPOSIT_AMOUNT,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position account ID does not match expected derivation")]
+fn deposit_collateral_rejects_wrong_position_address() {
+    let mut position = init_position_account(500, 0);
+    position.account_id = AccountId::new([0x77u8; 32]);
+    deposit(
+        owner_account(),
+        position,
+        init_vault_account(),
+        user_holding_account(1_000),
+        protocol_parameters_account(false),
+        DEPOSIT_AMOUNT,
+    );
+}
+
+#[test]
+#[should_panic(expected = "ProtocolParameters account must be initialized")]
+fn deposit_collateral_rejects_uninitialized_protocol_parameters() {
+    deposit(
+        owner_account(),
+        init_position_account(500, 0),
+        vault_account_with(500),
+        user_holding_account(1_000),
+        AccountWithMetadata {
+            account: Account::default(),
+            is_authorized: false,
+            account_id: protocol_parameters_id(),
+        },
+        DEPOSIT_AMOUNT,
+    );
+}
+
+#[test]
+#[should_panic(expected = "ProtocolParameters account ID does not match expected PDA derivation")]
+fn deposit_collateral_rejects_protocol_parameters_at_wrong_address() {
+    let mut parameters = protocol_parameters_account(false);
+    parameters.account_id = AccountId::new([0xC0u8; 32]);
+    deposit(
+        owner_account(),
+        init_position_account(500, 0),
+        vault_account_with(500),
+        user_holding_account(1_000),
+        parameters,
+        DEPOSIT_AMOUNT,
+    );
+}
+
+#[test]
+fn deposit_collateral_reconciles_a_donated_vault_balance() {
+    // `Token::Transfer` only needs the sender's authorization, so anyone can
+    // donate straight into the vault. Recording `position + amount` would leave
+    // the position permanently short of the vault and strand the difference.
+    let donated_vault = token_holding_account(vault_id(), collateral_definition_id(), 501);
+    let (post_states, _) = deposit(
+        owner_account(),
+        init_position_account(500, 0),
+        donated_vault,
+        user_holding_account(1_000),
+        protocol_parameters_account(false),
+        100,
+    );
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    // The chained transfer lands the vault at 601, so the position must say 601.
+    assert_eq!(position.collateral_amount, 601);
+}
+
+#[test]
+#[should_panic(expected = "Vault account must be initialized")]
+fn deposit_collateral_rejects_uninitialized_vault() {
+    deposit(
+        owner_account(),
+        init_position_account(500, 0),
+        uninit_vault_account(),
+        user_holding_account(1_000),
+        protocol_parameters_account(false),
+        DEPOSIT_AMOUNT,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Vault holding does not match the protocol's collateral definition")]
+fn deposit_collateral_rejects_vault_holding_for_other_definition() {
+    // The vault is at the right address but holds a different token, so moving
+    // the user's collateral into it would silently mis-bank the deposit.
+    let vault = token_holding_account(vault_id(), AccountId::new([0x21u8; 32]), 0);
+    deposit(
+        owner_account(),
+        init_position_account(500, 0),
+        vault,
+        user_holding_account(1_000),
+        protocol_parameters_account(false),
+        DEPOSIT_AMOUNT,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position vault_account_id does not match the vault account")]
+fn deposit_collateral_rejects_wrong_vault() {
+    let mut vault = init_vault_account();
+    vault.account_id = AccountId::new([0x88u8; 32]);
+    deposit(
+        owner_account(),
+        init_position_account(500, 0),
+        vault,
+        user_holding_account(1_000),
+        protocol_parameters_account(false),
+        DEPOSIT_AMOUNT,
+    );
+}
+
+#[test]
+#[should_panic(expected = "same Token Program as the vault")]
+fn deposit_collateral_rejects_holding_with_wrong_token_program() {
+    let mut holding = user_holding_account(1_000);
+    holding.account.program_owner = [9u32; 8];
+    deposit(
+        owner_account(),
+        init_position_account(500, 0),
+        init_vault_account(),
+        holding,
+        protocol_parameters_account(false),
+        DEPOSIT_AMOUNT,
+    );
+}
+
+#[test]
+#[should_panic(expected = "does not match the protocol's collateral definition")]
+fn deposit_collateral_rejects_holding_for_other_definition() {
+    let holding = AccountWithMetadata {
+        account: Account {
+            program_owner: TOKEN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&TokenHolding::Fungible {
+                definition_id: AccountId::new([0x21u8; 32]),
+                balance: 1_000,
+            }),
+            nonce: Nonce(0),
+        },
+        is_authorized: true,
+        account_id: user_holding_id(),
+    };
+    deposit(
+        owner_account(),
+        init_position_account(500, 0),
+        init_vault_account(),
+        holding,
+        protocol_parameters_account(false),
+        DEPOSIT_AMOUNT,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position collateral_amount overflow")]
+fn deposit_collateral_rejects_overflow() {
+    deposit(
+        owner_account(),
+        init_position_account(u128::MAX, 0),
+        vault_account_with(u128::MAX),
+        user_holding_account(1_000),
+        protocol_parameters_account(false),
+        1,
+    );
+}
+
+// --- generate_debt (spec §10.7) ---
+//
+// accumulator 1.0, redemption price 0.5, ratio 1.5x → required collateral is
+// 0.75 x nominal debt. Oracle is fresh and used only as a liveness gate.
+
+const ORACLE_PRICE: u128 = FIXED_POINT_ONE / 4;
+
+#[allow(clippy::too_many_arguments, reason = "mirrors the host fn ABI")]
+fn generate(
+    position: AccountWithMetadata,
+    accumulator: AccountWithMetadata,
+    oracle: AccountWithMetadata,
+    parameters: AccountWithMetadata,
+    amount: u128,
+) -> (Vec<lee_core::program::AccountPostState>, Vec<ChainedCall>) {
+    crate::generate_debt::generate_debt(
+        owner_account(),
+        position,
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(0),
+        accumulator,
+        crate::test_support::redemption_price_state_account(NOW),
+        oracle,
+        parameters,
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        amount,
+    )
+}
+
+fn fresh_oracle() -> AccountWithMetadata {
+    crate::test_support::oracle_account(NOW, ORACLE_PRICE)
+}
+
+fn unit_accumulator() -> AccountWithMetadata {
+    crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW)
+}
+
+#[test]
+#[should_panic(expected = "Market price oracle observation is dated in the future")]
+fn generate_debt_rejects_a_future_dated_oracle() {
+    // `saturating_sub` reports age 0 for a future timestamp, which would read as
+    // maximally fresh and defeat the liveness gate entirely.
+    generate(
+        init_position_account(1_000, 0),
+        unit_accumulator(),
+        crate::test_support::oracle_account(NOW + 1, ORACLE_PRICE),
+        protocol_parameters_account(false),
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Redemption price projected to zero")]
+fn generate_debt_rejects_a_redemption_price_that_projects_to_zero() {
+    // Same exposure as withdraw_collateral: a zero projected price zeroes the
+    // required collateral, so any mint would pass the §6.2 check.
+    crate::generate_debt::generate_debt(
+        owner_account(),
+        init_position_account(1_000, 0),
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(0),
+        unit_accumulator(),
+        redemption_state_with(
+            FIXED_POINT_ONE - stablecoin_core::RATE_DELTA_CLAMP.unsigned_abs(),
+            NOW - 7_000_000,
+        ),
+        fresh_oracle(),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100_000,
+    );
+}
+
+/// The mirror of the withdraw_collateral case: a rate at the controller's upper
+/// clamp projects the price past `u128` in 2_700_000 ms. The mint below is
+/// comfortably collateralized against that price — about 585_174_061_358
+/// required against 1_000_000_000_000 — so it must compare, not overflow.
+#[test]
+fn generate_debt_succeeds_when_the_projected_price_exceeds_u128() {
+    let (post_states, _) = crate::generate_debt::generate_debt(
+        owner_account(),
+        init_position_account(1_000_000_000_000, 0),
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(0),
+        unit_accumulator(),
+        redemption_state_with(
+            FIXED_POINT_ONE + stablecoin_core::RATE_DELTA_CLAMP.unsigned_abs(),
+            NOW - 2_700_000,
+        ),
+        fresh_oracle(),
+        protocol_parameters_account_with_ratio(FIXED_POINT_ONE * 11 / 10),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        1,
+    );
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.normalized_debt_amount, 1);
+}
+
+#[test]
+fn generate_debt_mints_and_increases_normalized_debt() {
+    let (post_states, chained_calls) = generate(
+        init_position_account(1_000, 0),
+        unit_accumulator(),
+        fresh_oracle(),
+        protocol_parameters_account(false),
+        100,
+    );
+
+    assert_eq!(post_states.len(), 9);
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    // accumulator is exactly 1.0, so the delta equals the minted amount.
+    assert_eq!(position.normalized_debt_amount, 100);
+    assert_eq!(position.collateral_amount, 1_000);
+
+    assert_eq!(chained_calls.len(), 1);
+    let mut definition_authorized = stablecoin_definition_account();
+    definition_authorized.is_authorized = true;
+    let expected = ChainedCall::new(
+        TOKEN_PROGRAM_ID,
+        vec![definition_authorized, user_stablecoin_holding_account(0)],
+        &token_core::Instruction::Mint {
+            amount_to_mint: 100,
+        },
+    )
+    .with_pda_seeds(vec![
+        stablecoin_core::compute_stablecoin_definition_pda_seed(),
+    ]);
+    assert_eq!(chained_calls[0], expected);
+}
+
+#[test]
+fn generate_debt_rounds_the_normalized_delta_up() {
+    // accumulator 3.0 → 100 / 3 = 33.33…, and §6.3 rounds UP so the borrower's
+    // nominal debt grows by at least the amount minted.
+    let (post_states, _) = generate(
+        init_position_account(1_000, 0),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE * 3, NOW),
+        fresh_oracle(),
+        protocol_parameters_account(false),
+        100,
+    );
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.normalized_debt_amount, 34);
+}
+
+#[test]
+fn generate_debt_echoes_the_read_only_globals() {
+    let (post_states, _) = generate(
+        init_position_account(1_000, 0),
+        unit_accumulator(),
+        fresh_oracle(),
+        protocol_parameters_account(false),
+        100,
+    );
+
+    assert_eq!(*post_states[6].account(), fresh_oracle().account);
+    assert_eq!(*post_states[8].account(), clock_account(NOW).account);
+}
+
+#[test]
+#[should_panic(expected = "Position is undercollateralized")]
+fn generate_debt_fails_when_the_mint_would_undercollateralize() {
+    // 100 collateral supports at most 133 nominal debt at 0.75x; 200 is over.
+    generate(
+        init_position_account(100, 0),
+        unit_accumulator(),
+        fresh_oracle(),
+        protocol_parameters_account(false),
+        200,
+    );
+}
+
+#[test]
+fn generate_debt_at_the_exact_ratio_boundary_succeeds() {
+    // debt 100 requires exactly 75 collateral.
+    let (post_states, _) = generate(
+        init_position_account(75, 0),
+        unit_accumulator(),
+        fresh_oracle(),
+        protocol_parameters_account(false),
+        100,
+    );
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.normalized_debt_amount, 100);
+}
+
+#[test]
+#[should_panic(expected = "Protocol is frozen")]
+fn generate_debt_rejects_when_frozen() {
+    generate(
+        init_position_account(1_000, 0),
+        unit_accumulator(),
+        fresh_oracle(),
+        protocol_parameters_account(true),
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Market price oracle observation is stale")]
+fn generate_debt_rejects_a_stale_oracle() {
+    let stale = NOW - 86_400_001;
+    generate(
+        init_position_account(1_000, 0),
+        unit_accumulator(),
+        crate::test_support::oracle_account(stale, ORACLE_PRICE),
+        protocol_parameters_account(false),
+        100,
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "Market price oracle account_id does not match ProtocolParameters.market_price_oracle_id"
+)]
+fn generate_debt_rejects_an_unbound_oracle() {
+    let mut oracle = fresh_oracle();
+    oracle.account_id = AccountId::new([0x99u8; 32]);
+    generate(
+        init_position_account(1_000, 0),
+        unit_accumulator(),
+        oracle,
+        protocol_parameters_account(false),
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Owner authorization is missing")]
+fn generate_debt_requires_owner_authorization() {
+    let mut owner = owner_account();
+    owner.is_authorized = false;
+    crate::generate_debt::generate_debt(
+        owner,
+        init_position_account(1_000, 0),
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(0),
+        unit_accumulator(),
+        crate::test_support::redemption_price_state_account(NOW),
+        fresh_oracle(),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position account must be initialized")]
+fn generate_debt_rejects_uninitialized_position() {
+    generate(
+        uninit_position_account(),
+        unit_accumulator(),
+        fresh_oracle(),
+        protocol_parameters_account(false),
+        100,
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "Stablecoin definition does not match the one bound at initialize_program"
+)]
+fn generate_debt_rejects_an_unbound_stablecoin_definition() {
+    let mut definition = stablecoin_definition_account();
+    definition.account_id = AccountId::new([0x88u8; 32]);
+    crate::generate_debt::generate_debt(
+        owner_account(),
+        init_position_account(1_000, 0),
+        definition,
+        user_stablecoin_holding_account(0),
+        unit_accumulator(),
+        crate::test_support::redemption_price_state_account(NOW),
+        fresh_oracle(),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "User stablecoin holding does not match the stablecoin definition")]
+fn generate_debt_rejects_holding_for_another_definition() {
+    let holding = token_holding_account(
+        user_stablecoin_holding_id(),
+        AccountId::new([0x21u8; 32]),
+        0,
+    );
+    crate::generate_debt::generate_debt(
+        owner_account(),
+        init_position_account(1_000, 0),
+        stablecoin_definition_account(),
+        holding,
+        unit_accumulator(),
+        crate::test_support::redemption_price_state_account(NOW),
+        fresh_oracle(),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+// --- repay_debt: fee-aware rebuild (spec §10.8) ---
+
+fn repay(
+    position: AccountWithMetadata,
+    definition: AccountWithMetadata,
+    accumulator: AccountWithMetadata,
+    parameters: AccountWithMetadata,
+    amount: u128,
+) -> (Vec<lee_core::program::AccountPostState>, Vec<ChainedCall>) {
+    crate::repay_debt::repay_debt(
+        owner_account(),
+        position,
+        definition,
+        user_stablecoin_holding_account(1_000),
+        accumulator,
+        parameters,
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        amount,
+    )
+}
+
+#[test]
+fn repay_debt_echoes_the_three_new_accounts() {
+    let (post_states, _) = repay(
+        init_position_account(1_000, 300),
+        stablecoin_definition_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        100,
+    );
+
+    assert_eq!(post_states.len(), 7);
+    assert_eq!(
+        *post_states[4].account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW).account,
+        "accumulator must be echoed unchanged"
+    );
+    assert_eq!(
+        *post_states[5].account(),
+        protocol_parameters_account(false).account,
+        "protocol parameters must be echoed unchanged"
+    );
+    assert_eq!(
+        *post_states[6].account(),
+        clock_account(NOW).account,
+        "clock must be echoed unchanged"
+    );
+}
+
+#[test]
+fn repay_debt_rounds_the_normalized_delta_down() {
+    // accumulator 3.0 → 100 / 3 = 33.33…, floored to 33 (§6.3), so the debt
+    // shrinks by slightly less than paid and the remainder favours the protocol.
+    let (post_states, _) = repay(
+        init_position_account(1_000, 300),
+        stablecoin_definition_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE * 3, NOW),
+        protocol_parameters_account(false),
+        100,
+    );
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.normalized_debt_amount, 300 - 33);
+}
+
+#[test]
+fn repay_debt_is_allowed_while_frozen() {
+    // Repaying only improves the protocol's position, so §7 keeps it open.
+    let (post_states, chained_calls) = repay(
+        init_position_account(1_000, 300),
+        stablecoin_definition_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(true),
+        100,
+    );
+
+    assert_eq!(chained_calls.len(), 1);
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.normalized_debt_amount, 200);
+}
+
+#[test]
+#[should_panic(
+    expected = "Stablecoin definition does not match the one bound at initialize_program"
+)]
+fn repay_debt_rejects_an_unbound_stablecoin_definition() {
+    // The Plan 1 scaffold trusted the caller here; ProtocolParameters now pins it.
+    let mut definition = stablecoin_definition_account();
+    definition.account_id = AccountId::new([0x88u8; 32]);
+    repay(
+        init_position_account(1_000, 300),
+        definition,
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Repay amount exceeds outstanding normalized debt")]
+fn repay_debt_rejects_overrepay_against_the_floored_delta() {
+    repay(
+        init_position_account(1_000, 10),
+        stablecoin_definition_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        11,
+    );
+}
+
+#[test]
+#[should_panic(expected = "ProtocolParameters account must be initialized")]
+fn repay_debt_rejects_uninitialized_protocol_parameters() {
+    repay(
+        init_position_account(1_000, 300),
+        stablecoin_definition_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        AccountWithMetadata {
+            account: Account::default(),
+            is_authorized: false,
+            account_id: protocol_parameters_id(),
+        },
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "StabilityFeeAccumulator account must be initialized")]
+fn repay_debt_rejects_uninitialized_accumulator() {
+    repay(
+        init_position_account(1_000, 300),
+        stablecoin_definition_account(),
+        crate::test_support::uninitialized(crate::test_support::accumulator_id()),
+        protocol_parameters_account(false),
+        100,
+    );
+}
+
+// --- close_position (spec §10.9) ---
+
+fn close(
+    position: AccountWithMetadata,
+    vault: AccountWithMetadata,
+    parameters: AccountWithMetadata,
+) -> (Vec<lee_core::program::AccountPostState>, Vec<ChainedCall>) {
+    crate::close_position::close_position(
+        owner_account(),
+        position,
+        vault,
+        parameters,
+        STABLECOIN_PROGRAM_ID,
+    )
+}
+
+#[test]
+fn close_position_clears_the_position_and_emits_no_chained_calls() {
+    let mut position = init_position_account(0, 0);
+    position.account.nonce = Nonce(7);
+    let (post_states, chained_calls) = close(
+        position,
+        init_vault_account(),
+        protocol_parameters_account(false),
+    );
+
+    assert_eq!(post_states.len(), 4);
+    assert!(chained_calls.is_empty());
+    // Data is zeroed, but program_owner and nonce must survive — the runtime
+    // rejects a program changing either, so the PDA cannot be released.
+    let cleared = post_states[1].account();
+    assert_eq!(cleared.data, Data::default());
+    assert_eq!(cleared.program_owner, STABLECOIN_PROGRAM_ID);
+    // Asserted against a non-zero nonce: the default fixture nonce is 0, so
+    // comparing against it would pass even if the nonce were reset.
+    assert_eq!(cleared.nonce, Nonce(7));
+    // The vault lingers untouched — the Token Program has no CloseHolding.
+    assert_eq!(*post_states[2].account(), init_vault_account().account);
+}
+
+#[test]
+fn close_position_is_allowed_while_frozen() {
+    let (post_states, _) = close(
+        init_position_account(0, 0),
+        init_vault_account(),
+        protocol_parameters_account(true),
+    );
+    assert_eq!(post_states[1].account().data, Data::default());
+}
+
+#[test]
+#[should_panic(expected = "Owner authorization is missing")]
+fn close_position_requires_owner_authorization() {
+    let mut owner = owner_account();
+    owner.is_authorized = false;
+    crate::close_position::close_position(
+        owner,
+        init_position_account(0, 0),
+        init_vault_account(),
+        protocol_parameters_account(false),
+        STABLECOIN_PROGRAM_ID,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position still has outstanding debt")]
+fn close_position_rejects_outstanding_debt() {
+    close(
+        init_position_account(0, 1),
+        init_vault_account(),
+        protocol_parameters_account(false),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position still holds collateral")]
+fn close_position_rejects_remaining_collateral() {
+    close(
+        init_position_account(1, 0),
+        init_vault_account(),
+        protocol_parameters_account(false),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Vault still holds a balance")]
+fn close_position_rejects_a_non_empty_vault() {
+    // Position accounting says empty but the vault disagrees — refuse rather
+    // than strand the tokens behind a released PDA.
+    let vault = token_holding_account(vault_id(), collateral_definition_id(), 1);
+    close(
+        init_position_account(0, 0),
+        vault,
+        protocol_parameters_account(false),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position vault_account_id does not match the vault account")]
+fn close_position_rejects_wrong_vault() {
+    let mut vault = init_vault_account();
+    vault.account_id = AccountId::new([0x88u8; 32]);
+    close(
+        init_position_account(0, 0),
+        vault,
+        protocol_parameters_account(false),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position account must be initialized")]
+fn close_position_rejects_uninitialized_position() {
+    close(
+        uninit_position_account(),
+        init_vault_account(),
+        protocol_parameters_account(false),
+    );
+}
+
+#[test]
+#[should_panic(expected = "ProtocolParameters account must be initialized")]
+fn close_position_rejects_uninitialized_protocol_parameters() {
+    close(
+        init_position_account(0, 0),
+        init_vault_account(),
+        AccountWithMetadata {
+            account: Account::default(),
+            is_authorized: false,
+            account_id: protocol_parameters_id(),
+        },
+    );
+}
+
+// --- freeze / unfreeze (spec §10.17–10.18) ---
+
+fn freeze_authority_account() -> AccountWithMetadata {
+    AccountWithMetadata {
+        account: Account::default(),
+        is_authorized: true,
+        account_id: crate::test_support::freeze_authority_id(),
+    }
+}
+
+fn parameters_frozen(is_frozen: bool) -> AccountWithMetadata {
+    crate::test_support::protocol_parameters_account(crate::test_support::ParameterOverrides {
+        is_frozen,
+        ..Default::default()
+    })
+}
+
+fn decoded_parameters(post: &lee_core::program::AccountPostState) -> ProtocolParameters {
+    ProtocolParameters::try_from(&post.account().data).expect("valid ProtocolParameters")
+}
+
+#[test]
+fn freeze_sets_is_frozen_and_touches_nothing_else() {
+    let before = decoded_parameters(&lee_core::program::AccountPostState::new(
+        parameters_frozen(false).account,
+    ));
+    let (post_states, chained_calls) = crate::freeze::freeze(
+        freeze_authority_account(),
+        parameters_frozen(false),
+        STABLECOIN_PROGRAM_ID,
+    );
+
+    assert_eq!(post_states.len(), 2);
+    assert!(chained_calls.is_empty());
+    let after = decoded_parameters(&post_states[1]);
+    assert!(after.is_frozen);
+    assert_eq!(
+        ProtocolParameters {
+            is_frozen: false,
+            ..after
+        },
+        before,
+        "only is_frozen may change"
+    );
+    // The parameters account keeps its owner and nonce; only the data changes.
+    assert_eq!(
+        post_states[1].account().program_owner,
+        STABLECOIN_PROGRAM_ID
+    );
+}
+
+#[test]
+fn unfreeze_clears_is_frozen_and_touches_nothing_else() {
+    let before = decoded_parameters(&lee_core::program::AccountPostState::new(
+        parameters_frozen(true).account,
+    ));
+    let (post_states, chained_calls) = crate::freeze::unfreeze(
+        freeze_authority_account(),
+        parameters_frozen(true),
+        STABLECOIN_PROGRAM_ID,
+    );
+
+    assert_eq!(post_states.len(), 2);
+    assert!(chained_calls.is_empty());
+    let after = decoded_parameters(&post_states[1]);
+    assert!(!after.is_frozen);
+    assert_eq!(
+        ProtocolParameters {
+            is_frozen: true,
+            ..after
+        },
+        before
+    );
+}
+
+#[test]
+fn freeze_is_idempotent_when_already_frozen() {
+    let (post_states, _) = crate::freeze::freeze(
+        freeze_authority_account(),
+        parameters_frozen(true),
+        STABLECOIN_PROGRAM_ID,
+    );
+    assert!(decoded_parameters(&post_states[1]).is_frozen);
+}
+
+#[test]
+fn unfreeze_is_idempotent_when_already_unfrozen() {
+    let (post_states, _) = crate::freeze::unfreeze(
+        freeze_authority_account(),
+        parameters_frozen(false),
+        STABLECOIN_PROGRAM_ID,
+    );
+    assert!(!decoded_parameters(&post_states[1]).is_frozen);
+}
+
+#[test]
+#[should_panic(expected = "Freeze authority authorization is missing")]
+fn freeze_requires_the_authority_to_sign() {
+    let mut authority = freeze_authority_account();
+    authority.is_authorized = false;
+    crate::freeze::freeze(authority, parameters_frozen(false), STABLECOIN_PROGRAM_ID);
+}
+
+#[test]
+#[should_panic(expected = "Freeze authority authorization is missing")]
+fn unfreeze_requires_the_authority_to_sign() {
+    let mut authority = freeze_authority_account();
+    authority.is_authorized = false;
+    crate::freeze::unfreeze(authority, parameters_frozen(true), STABLECOIN_PROGRAM_ID);
+}
+
+#[test]
+#[should_panic(expected = "Signer is not the protocol's freeze authority")]
+fn freeze_rejects_a_signer_other_than_the_freeze_authority() {
+    // Authorized, but not the account bound at initialize_program — e.g. the admin.
+    let mut impostor = freeze_authority_account();
+    impostor.account_id = crate::test_support::admin_id();
+    crate::freeze::freeze(impostor, parameters_frozen(false), STABLECOIN_PROGRAM_ID);
+}
+
+#[test]
+#[should_panic(expected = "Signer is not the protocol's freeze authority")]
+fn unfreeze_rejects_a_signer_other_than_the_freeze_authority() {
+    let mut impostor = freeze_authority_account();
+    impostor.account_id = crate::test_support::admin_id();
+    crate::freeze::unfreeze(impostor, parameters_frozen(true), STABLECOIN_PROGRAM_ID);
+}
+
+#[test]
+#[should_panic(expected = "ProtocolParameters account must be initialized")]
+fn freeze_rejects_uninitialized_protocol_parameters() {
+    crate::freeze::freeze(
+        freeze_authority_account(),
+        crate::test_support::uninitialized(crate::test_support::protocol_parameters_id()),
+        STABLECOIN_PROGRAM_ID,
+    );
+}
+
+#[test]
+#[should_panic(expected = "ProtocolParameters account ID does not match expected PDA derivation")]
+fn freeze_rejects_protocol_parameters_at_wrong_address() {
+    let mut parameters = parameters_frozen(false);
+    parameters.account_id = AccountId::new([0xC0u8; 32]);
+    crate::freeze::freeze(
+        freeze_authority_account(),
+        parameters,
+        STABLECOIN_PROGRAM_ID,
+    );
+}
+
+#[test]
+#[should_panic(expected = "ProtocolParameters account must be owned by the stablecoin program")]
+fn unfreeze_rejects_protocol_parameters_owned_by_another_program() {
+    let mut parameters = parameters_frozen(true);
+    parameters.account.program_owner = [9u32; 8];
+    crate::freeze::unfreeze(
+        freeze_authority_account(),
+        parameters,
+        STABLECOIN_PROGRAM_ID,
+    );
+}
+
+#[test]
+fn position_pda_is_deterministic_and_owner_and_nonce_specific() {
+    let id_a = compute_position_pda(STABLECOIN_PROGRAM_ID, owner_id(), TEST_POSITION_NONCE);
+    let id_b = compute_position_pda(STABLECOIN_PROGRAM_ID, owner_id(), TEST_POSITION_NONCE);
+    assert_eq!(id_a, id_b);
+
+    let other_owner = AccountId::new([0x11u8; 32]);
+    assert_ne!(
+        compute_position_pda(STABLECOIN_PROGRAM_ID, other_owner, TEST_POSITION_NONCE),
+        id_a
+    );
+
+    let other_nonce = TEST_POSITION_NONCE + 1;
+    assert_ne!(
+        compute_position_pda(STABLECOIN_PROGRAM_ID, owner_id(), other_nonce),
+        id_a
+    );
+}
+
+#[test]
+fn position_pda_and_vault_pda_do_not_collide() {
+    // Distinct domain tags must keep the position id and its vault id disjoint.
+    let position = compute_position_pda(STABLECOIN_PROGRAM_ID, owner_id(), TEST_POSITION_NONCE);
+    let vault = compute_position_vault_pda(STABLECOIN_PROGRAM_ID, position);
+    assert_ne!(position, vault);
+}
+
+// --- withdraw_collateral: fee-aware rebuild (spec §10.6) ---
+//
+// Fixtures pin accumulator = 1.0 and redemption price = 0.5 with no drift, and
+// the ratio is 1.5x, so required collateral = normalized_debt * 0.5 * 1.5.
+
+fn withdraw(
+    position: AccountWithMetadata,
+    parameters: AccountWithMetadata,
+    amount: u128,
+) -> (Vec<lee_core::program::AccountPostState>, Vec<ChainedCall>) {
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        position,
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        parameters,
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        amount,
+    )
+}
+
+/// A redemption-price state with a caller-chosen drift rate, for the projection
+/// edge cases the controller can actually produce.
+fn redemption_state_with(rate_per_millisecond: u128, last_updated_at: u64) -> AccountWithMetadata {
+    AccountWithMetadata {
+        account: Account {
+            program_owner: STABLECOIN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&stablecoin_core::RedemptionPriceState {
+                redemption_price_at_last_update: FIXED_POINT_ONE,
+                redemption_rate_per_millisecond: rate_per_millisecond,
+                controller_integral_term: 0,
+                last_updated_at,
+            }),
+            nonce: Nonce(0),
+        },
+        is_authorized: false,
+        account_id: crate::test_support::redemption_price_state_id(),
+    }
+}
+
+/// A rate one clamp below 1.0 decays the projected price to exactly zero over
+/// 7_000_000 ms. If the check runs against that, required collateral becomes
+/// zero and an indebted position can be drained completely.
+#[test]
+#[should_panic(expected = "Redemption price projected to zero")]
+fn withdraw_collateral_rejects_a_redemption_price_that_projects_to_zero() {
+    let elapsed = 7_000_000;
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(500_000, 300),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        redemption_state_with(
+            FIXED_POINT_ONE - stablecoin_core::RATE_DELTA_CLAMP.unsigned_abs(),
+            NOW - elapsed,
+        ),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        500_000,
+    );
+}
+
+/// Spec §11: `withdraw_collateral(0)` is a no-op. An indebted position must
+/// reach that no-op too — nothing about the position changes, so there is
+/// nothing to re-check. The rate below decays the projected price to zero,
+/// which the check rejects, so projecting at all would fail the call.
+#[test]
+fn withdraw_collateral_of_zero_is_a_no_op_for_an_indebted_position() {
+    let elapsed = 7_000_000;
+    let (post_states, chained_calls) = crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(500_000, 300),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        redemption_state_with(
+            FIXED_POINT_ONE - stablecoin_core::RATE_DELTA_CLAMP.unsigned_abs(),
+            NOW - elapsed,
+        ),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        0,
+    );
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.collateral_amount, 500_000);
+    assert_eq!(position.normalized_debt_amount, 300);
+    assert_eq!(chained_calls.len(), 1);
+}
+
+/// A rate one clamp above 1.0 projects the price past `u128` in 2_700_000 ms.
+/// The position below is comfortably collateralized against that price — about
+/// 585_174_061_358 required against 900_000_000_000 left — so the withdrawal
+/// must compare and succeed rather than overflow on the way to the comparison.
+#[test]
+fn withdraw_collateral_succeeds_when_the_projected_price_exceeds_u128() {
+    let elapsed = 2_700_000;
+    let (post_states, _) = crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(1_000_000_000_000, 1),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        redemption_state_with(
+            FIXED_POINT_ONE + stablecoin_core::RATE_DELTA_CLAMP.unsigned_abs(),
+            NOW - elapsed,
+        ),
+        protocol_parameters_account_with_ratio(FIXED_POINT_ONE * 11 / 10),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100_000_000_000,
+    );
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.collateral_amount, 900_000_000_000);
+}
+
+/// The same projection against a position that cannot cover it: 999 collateral
+/// left against debt 1 fails the comparison rather than panicking before it.
+#[test]
+#[should_panic(expected = "Position is undercollateralized")]
+fn withdraw_collateral_rejects_when_the_projected_price_exceeds_the_collateral() {
+    let elapsed = 2_700_000;
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(1_000, 1),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        redemption_state_with(
+            FIXED_POINT_ONE + stablecoin_core::RATE_DELTA_CLAMP.unsigned_abs(),
+            NOW - elapsed,
+        ),
+        protocol_parameters_account_with_ratio(FIXED_POINT_ONE * 11 / 10),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        1,
+    );
+}
+
+/// The mirror case: a rate one clamp above 1.0 projects past `u128` in
+/// 2_700_000 ms. A zero-debt position needs no collateralization check at all,
+/// so computing the projection must not block the withdrawal.
+#[test]
+fn withdraw_collateral_from_a_zero_debt_position_skips_the_projection() {
+    let elapsed = 2_700_000;
+    let (post_states, _) = crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(500_000, 0),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        redemption_state_with(
+            FIXED_POINT_ONE + stablecoin_core::RATE_DELTA_CLAMP.unsigned_abs(),
+            NOW - elapsed,
+        ),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        500_000,
+    );
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.collateral_amount, 0);
+}
+
+// The three read-only globals must each sit at their canonical PDA and be owned by
+// this program. Ownership plus a successful decode is not enough: a substituted
+// account could otherwise stand in for the global config.
+
+fn withdraw_with_globals(
+    accumulator: AccountWithMetadata,
+    redemption: AccountWithMetadata,
+    parameters: AccountWithMetadata,
+) {
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(1_000, 0),
+        init_vault_account(),
+        destination_holding_account(),
+        accumulator,
+        redemption,
+        parameters,
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "ProtocolParameters account ID does not match expected PDA derivation")]
+fn withdraw_collateral_rejects_protocol_parameters_at_wrong_address() {
+    let mut parameters = protocol_parameters_account(false);
+    parameters.account_id = AccountId::new([0xC0u8; 32]);
+    withdraw_with_globals(
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        parameters,
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "StabilityFeeAccumulator account ID does not match expected PDA derivation"
+)]
+fn withdraw_collateral_rejects_accumulator_at_wrong_address() {
+    let mut accumulator = crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW);
+    accumulator.account_id = AccountId::new([0xC1u8; 32]);
+    withdraw_with_globals(
+        accumulator,
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+    );
+}
+
+#[test]
+#[should_panic(expected = "RedemptionPriceState account ID does not match expected PDA derivation")]
+fn withdraw_collateral_rejects_redemption_price_state_at_wrong_address() {
+    let mut redemption = crate::test_support::redemption_price_state_account(NOW);
+    redemption.account_id = AccountId::new([0xC2u8; 32]);
+    withdraw_with_globals(
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        redemption,
+        protocol_parameters_account(false),
+    );
+}
+
+#[test]
+#[should_panic(expected = "ProtocolParameters account must be owned by the stablecoin program")]
+fn withdraw_collateral_rejects_protocol_parameters_owned_by_another_program() {
+    let mut parameters = protocol_parameters_account(false);
+    parameters.account.program_owner = [9u32; 8];
+    withdraw_with_globals(
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        parameters,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Vault holding does not match the protocol's collateral definition")]
+fn withdraw_collateral_rejects_vault_holding_for_other_definition() {
+    // Mirrors deposit_collateral: the global parameters, not the vault, are the
+    // authority on which token is collateral.
+    let other_definition = AccountId::new([0x21u8; 32]);
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(1_000, 0),
+        token_holding_account(vault_id(), other_definition, 1_000),
+        token_holding_account(destination_holding_id(), other_definition, 0),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+fn withdraw_collateral_echoes_the_four_read_only_globals() {
+    let (post_states, chained_calls) = withdraw(
+        init_position_account(1_000, 0),
+        protocol_parameters_account(false),
+        100,
+    );
+
+    assert_eq!(post_states.len(), 8);
+    assert_eq!(chained_calls.len(), 1);
+    assert_eq!(
+        *post_states[4].account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW).account,
+        "accumulator must be echoed unchanged"
+    );
+    assert_eq!(
+        *post_states[5].account(),
+        crate::test_support::redemption_price_state_account(NOW).account,
+        "redemption price state must be echoed unchanged"
+    );
+    assert_eq!(
+        *post_states[6].account(),
+        protocol_parameters_account(false).account,
+        "protocol parameters must be echoed unchanged"
+    );
+    assert_eq!(
+        *post_states[7].account(),
+        clock_account(NOW).account,
+        "clock must be echoed unchanged"
+    );
+}
+
+#[test]
+fn withdraw_collateral_with_debt_succeeds_when_collateralization_holds() {
+    // debt 100 needs 75 collateral; 900 remain after the withdrawal.
+    let (post_states, _) = withdraw(
+        init_position_account(1_000, 100),
+        protocol_parameters_account(false),
+        100,
+    );
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.collateral_amount, 900);
+    assert_eq!(position.normalized_debt_amount, 100);
+}
+
+#[test]
+fn withdraw_collateral_at_exact_ratio_boundary_succeeds() {
+    // debt 100 → required exactly 75; withdrawing 25 from 100 leaves exactly 75.
+    let (post_states, _) = withdraw(
+        init_position_account(100, 100),
+        protocol_parameters_account(false),
+        25,
+    );
+
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.collateral_amount, 75);
+}
+
+#[test]
+#[should_panic(expected = "Position is undercollateralized")]
+fn withdraw_collateral_fails_one_unit_below_the_ratio() {
+    // One more unit than the boundary case leaves 74 against a 75 requirement.
+    withdraw(
+        init_position_account(100, 100),
+        protocol_parameters_account(false),
+        26,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Protocol is frozen")]
+fn withdraw_collateral_rejects_when_frozen() {
+    withdraw(
+        init_position_account(1_000, 0),
+        protocol_parameters_account(true),
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "ProtocolParameters account must be initialized")]
+fn withdraw_collateral_rejects_uninitialized_protocol_parameters() {
+    withdraw(
+        init_position_account(1_000, 0),
+        AccountWithMetadata {
+            account: Account::default(),
+            is_authorized: false,
+            account_id: protocol_parameters_id(),
+        },
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "StabilityFeeAccumulator account must be initialized")]
+fn withdraw_collateral_rejects_uninitialized_accumulator() {
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(1_000, 0),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::uninitialized(crate::test_support::accumulator_id()),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "RedemptionPriceState account must be initialized")]
+fn withdraw_collateral_rejects_uninitialized_redemption_price_state() {
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(1_000, 0),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::uninitialized(crate::test_support::redemption_price_state_id()),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+fn withdraw_collateral_updates_position_and_emits_transfer() {
+    let initial_collateral: u128 = 500;
+    let amount: u128 = 200;
+    let (post_states, chained_calls) = crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(initial_collateral, 0),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        amount,
+    );
+
+    assert_eq!(post_states.len(), 8);
+
+    // Position post-state: plain `new`, holds the decremented Position.
+    let position_post = &post_states[1];
+    assert_eq!(position_post.required_claim(), None);
+    let position = Position::try_from(&position_post.account().data).expect("valid Position");
+    assert_eq!(
+        position,
+        Position {
+            owner_account_id: owner_id(),
+            position_nonce: TEST_POSITION_NONCE,
+            vault_account_id: vault_id(),
+            collateral_amount: initial_collateral - amount,
+            normalized_debt_amount: 0,
+            opened_at: 0,
+        }
+    );
+    assert_eq!(position_post.account().program_owner, STABLECOIN_PROGRAM_ID);
+
+    // Vault and destination post-states are pre-transfer (mutation comes via chained call).
+    assert_eq!(post_states[2].account(), &init_vault_account().account);
+    assert_eq!(
+        post_states[3].account(),
+        &destination_holding_account().account
+    );
+
+    // Single chained Token::Transfer with vault PDA seed.
+    assert_eq!(chained_calls.len(), 1);
+    let mut vault_authorized = init_vault_account();
+    vault_authorized.is_authorized = true;
+    let expected_transfer = ChainedCall::new(
+        TOKEN_PROGRAM_ID,
+        vec![vault_authorized, destination_holding_account()],
+        &token_core::Instruction::Transfer {
+            amount_to_transfer: amount,
+        },
+    )
+    .with_pda_seeds(vec![compute_position_vault_pda_seed(position_id())]);
+    assert_eq!(chained_calls[0], expected_transfer);
+}
+
+#[test]
+fn withdraw_collateral_allows_full_drain() {
+    let amount: u128 = 500;
+    let (post_states, _chained_calls) = crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(amount, 0),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        amount,
+    );
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.collateral_amount, 0);
+    assert_eq!(position.normalized_debt_amount, 0);
+}
+
+#[test]
+fn withdraw_collateral_allows_zero_amount() {
+    let initial: u128 = 500;
+    let (post_states, chained_calls) = crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(initial, 0),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        0,
+    );
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.collateral_amount, initial);
+
+    let mut vault_authorized = init_vault_account();
+    vault_authorized.is_authorized = true;
+    let expected_transfer = ChainedCall::new(
+        TOKEN_PROGRAM_ID,
+        vec![vault_authorized, destination_holding_account()],
+        &token_core::Instruction::Transfer {
+            amount_to_transfer: 0,
+        },
+    )
+    .with_pda_seeds(vec![compute_position_vault_pda_seed(position_id())]);
+    assert_eq!(chained_calls, vec![expected_transfer]);
+}
+
+#[test]
+#[should_panic(expected = "Owner authorization is missing")]
+fn withdraw_collateral_requires_owner_authorization() {
+    let mut owner = owner_account();
+    owner.is_authorized = false;
+    crate::withdraw_collateral::withdraw_collateral(
+        owner,
+        init_position_account(500, 0),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position account must be initialized")]
+fn withdraw_collateral_rejects_uninitialized_position() {
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        uninit_position_account(),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position is not owned by this stablecoin program")]
+fn withdraw_collateral_rejects_position_owned_by_other_program() {
+    let mut position = init_position_account(500, 0);
+    position.account.program_owner = [9u32; 8];
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        position,
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position account ID does not match expected derivation")]
+fn withdraw_collateral_rejects_wrong_position_address() {
+    let mut position = init_position_account(500, 0);
+    position.account_id = AccountId::new([0xFFu8; 32]);
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        position,
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position vault account ID does not match expected derivation")]
+fn withdraw_collateral_rejects_wrong_vault_address() {
+    let mut vault = init_vault_account();
+    vault.account_id = AccountId::new([0xEEu8; 32]);
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(500, 0),
+        vault,
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "User collateral holding definition does not match the position's collateral definition"
+)]
+fn withdraw_collateral_rejects_user_holding_for_other_definition() {
+    let mut destination = destination_holding_account();
+    destination.account.data = Data::from(&TokenHolding::Fungible {
+        definition_id: AccountId::new([0x21u8; 32]),
+        balance: 0,
+    });
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(500, 0),
+        init_vault_account(),
+        destination,
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "User collateral holding must be initialized")]
+fn withdraw_collateral_rejects_uninitialized_user_holding() {
+    let destination = AccountWithMetadata {
+        account: Account::default(),
+        is_authorized: false,
+        account_id: destination_holding_id(),
+    };
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(500, 0),
+        init_vault_account(),
+        destination,
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "User collateral holding must be owned by the same Token Program as the vault"
+)]
+fn withdraw_collateral_rejects_user_holding_with_wrong_token_program() {
+    let mut destination = destination_holding_account();
+    destination.account.program_owner = [9u32; 8];
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(500, 0),
+        init_vault_account(),
+        destination,
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Withdrawal amount exceeds position collateral")]
+fn withdraw_collateral_rejects_overdraw() {
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        init_position_account(100, 0),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        200,
+    );
+}
+
+#[test]
+fn repay_debt_decreases_debt_and_emits_burn() {
+    let initial_collateral: u128 = 500;
+    let initial_debt: u128 = 300;
+    let amount: u128 = 100;
+    let holding_balance: u128 = 1_000;
+
+    let (post_states, chained_calls) = crate::repay_debt::repay_debt(
+        owner_account(),
+        init_position_account(initial_collateral, initial_debt),
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(holding_balance),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        amount,
+    );
+
+    assert_eq!(post_states.len(), 7);
+
+    // Position post-state: plain `new`, holds the decremented Position.
+    let position_post = &post_states[1];
+    assert_eq!(position_post.required_claim(), None);
+    let position = Position::try_from(&position_post.account().data).expect("valid Position");
+    assert_eq!(
+        position,
+        Position {
+            owner_account_id: owner_id(),
+            position_nonce: TEST_POSITION_NONCE,
+            vault_account_id: vault_id(),
+            collateral_amount: initial_collateral,
+            normalized_debt_amount: initial_debt - amount,
+            opened_at: 0,
+        }
+    );
+    assert_eq!(position_post.account().program_owner, STABLECOIN_PROGRAM_ID);
+
+    // Stablecoin definition and user holding post-states are pre-burn.
+    assert_eq!(
+        post_states[2].account(),
+        &stablecoin_definition_account().account
+    );
+    assert_eq!(
+        post_states[3].account(),
+        &user_stablecoin_holding_account(holding_balance).account
+    );
+
+    // Single chained Token::Burn, no PDA seeds (user-authorized burn source).
+    assert_eq!(chained_calls.len(), 1);
+    let expected_burn = ChainedCall::new(
+        TOKEN_PROGRAM_ID,
+        vec![
+            stablecoin_definition_account(),
+            user_stablecoin_holding_account(holding_balance),
+        ],
+        &token_core::Instruction::Burn {
+            amount_to_burn: amount,
+        },
+    );
+    assert_eq!(chained_calls[0], expected_burn);
+}
+
+#[test]
+fn repay_debt_allows_full_repayment() {
+    let debt: u128 = 300;
+    let (post_states, _chained_calls) = crate::repay_debt::repay_debt(
+        owner_account(),
+        init_position_account(500, debt),
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(1_000),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        debt,
+    );
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.normalized_debt_amount, 0);
+    assert_eq!(position.collateral_amount, 500);
+}
+
+#[test]
+fn repay_debt_allows_zero_amount() {
+    let initial_debt: u128 = 300;
+    let (post_states, chained_calls) = crate::repay_debt::repay_debt(
+        owner_account(),
+        init_position_account(500, initial_debt),
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(1_000),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        0,
+    );
+    let position = Position::try_from(&post_states[1].account().data).expect("valid Position");
+    assert_eq!(position.normalized_debt_amount, initial_debt);
+
+    let expected_burn = ChainedCall::new(
+        TOKEN_PROGRAM_ID,
+        vec![
+            stablecoin_definition_account(),
+            user_stablecoin_holding_account(1_000),
+        ],
+        &token_core::Instruction::Burn { amount_to_burn: 0 },
+    );
+    assert_eq!(chained_calls, vec![expected_burn]);
+}
+
+#[test]
+#[should_panic(expected = "Owner authorization is missing")]
+fn repay_debt_requires_owner_authorization() {
+    let mut owner = owner_account();
+    owner.is_authorized = false;
+    crate::repay_debt::repay_debt(
+        owner,
+        init_position_account(500, 300),
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(1_000),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position account must be initialized")]
+fn repay_debt_rejects_uninitialized_position() {
+    crate::repay_debt::repay_debt(
+        owner_account(),
+        uninit_position_account(),
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(1_000),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position is not owned by this stablecoin program")]
+fn repay_debt_rejects_position_owned_by_other_program() {
+    let mut position = init_position_account(500, 300);
+    position.account.program_owner = [9u32; 8];
+    crate::repay_debt::repay_debt(
+        owner_account(),
+        position,
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(1_000),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position account ID does not match expected derivation")]
+fn repay_debt_rejects_wrong_position_address() {
+    let mut position = init_position_account(500, 300);
+    position.account_id = AccountId::new([0xFFu8; 32]);
+    crate::repay_debt::repay_debt(
+        owner_account(),
+        position,
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(1_000),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "User stablecoin holding authorization is missing")]
+fn repay_debt_requires_user_holding_authorization() {
+    let mut holding = user_stablecoin_holding_account(1_000);
+    holding.is_authorized = false;
+    crate::repay_debt::repay_debt(
+        owner_account(),
+        init_position_account(500, 300),
+        stablecoin_definition_account(),
+        holding,
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "User stablecoin holding must be initialized")]
+fn repay_debt_rejects_uninitialized_user_holding() {
+    let holding = AccountWithMetadata {
+        account: Account::default(),
+        is_authorized: true,
+        account_id: user_stablecoin_holding_id(),
+    };
+    crate::repay_debt::repay_debt(
+        owner_account(),
+        init_position_account(500, 300),
+        stablecoin_definition_account(),
+        holding,
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "Stablecoin holding and definition must be owned by the same Token Program"
+)]
+fn repay_debt_rejects_holding_with_different_token_program() {
+    let mut holding = user_stablecoin_holding_account(1_000);
+    holding.account.program_owner = [9u32; 8];
+    crate::repay_debt::repay_debt(
+        owner_account(),
+        init_position_account(500, 300),
+        stablecoin_definition_account(),
+        holding,
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Stablecoin holding does not match the provided stablecoin definition")]
+fn repay_debt_rejects_holding_for_other_definition() {
+    let mut holding = user_stablecoin_holding_account(1_000);
+    holding.account.data = Data::from(&TokenHolding::Fungible {
+        definition_id: AccountId::new([0x21u8; 32]),
+        balance: 1_000,
+    });
+    crate::repay_debt::repay_debt(
+        owner_account(),
+        init_position_account(500, 300),
+        stablecoin_definition_account(),
+        holding,
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Repay amount exceeds outstanding normalized debt")]
+fn repay_debt_rejects_overrepay() {
+    crate::repay_debt::repay_debt(
+        owner_account(),
+        init_position_account(500, 100),
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(1_000),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        200,
+    );
+}
+
+/// Mutates only the stored discovery copy, leaving the position address (and so
+/// the `(owner, position_nonce)` PDA derivation) valid — the state a corrupted
+/// or malformed `Position` would present.
+fn position_with_mutated_fields(mutate: impl FnOnce(&mut Position)) -> AccountWithMetadata {
+    let mut position = init_position_account(500, 0);
+    let mut data = Position::try_from(&position.account.data).expect("valid Position");
+    mutate(&mut data);
+    position.account.data = Data::from(&data);
+    position
+}
+
+#[test]
+#[should_panic(expected = "Position owner_account_id does not match the owner account")]
+fn withdraw_collateral_rejects_position_with_stale_owner_field() {
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        position_with_mutated_fields(|p| p.owner_account_id = AccountId::new([0xAAu8; 32])),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position vault_account_id does not match the vault account")]
+fn withdraw_collateral_rejects_position_with_stale_vault_field() {
+    crate::withdraw_collateral::withdraw_collateral(
+        owner_account(),
+        position_with_mutated_fields(|p| p.vault_account_id = AccountId::new([0xBBu8; 32])),
+        init_vault_account(),
+        destination_holding_account(),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        crate::test_support::redemption_price_state_account(NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Position owner_account_id does not match the owner account")]
+fn repay_debt_rejects_position_with_stale_owner_field() {
+    crate::repay_debt::repay_debt(
+        owner_account(),
+        position_with_mutated_fields(|p| {
+            p.normalized_debt_amount = 300;
+            p.owner_account_id = AccountId::new([0xAAu8; 32]);
+        }),
+        stablecoin_definition_account(),
+        user_stablecoin_holding_account(1_000),
+        crate::test_support::accumulator_account(FIXED_POINT_ONE, NOW),
+        protocol_parameters_account(false),
+        clock_account(NOW),
+        STABLECOIN_PROGRAM_ID,
+        100,
+    );
+}

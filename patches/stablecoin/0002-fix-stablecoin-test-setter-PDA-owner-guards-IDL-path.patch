@@ -1,0 +1,184 @@
+From 79c723b5beadef4e8353fbff3d420f747aab0182 Mon Sep 17 00:00:00 2001
+From: paschal533 <okwuosahpaschal@gmail.com>
+Date: Tue, 6 Oct 2026 14:13:08 +0100
+Subject: [PATCH] fix(stablecoin): test setter PDA/owner guards; IDL path
+ fallback for upstream; hook hardening
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ programs/stablecoin/core/src/lib.rs          | 57 ++++++++++++-----
+ programs/stablecoin/src/liquidation_hooks.rs | 65 ++++++++++++++++++--
+ 2 files changed, 104 insertions(+), 18 deletions(-)
+
+diff --git a/programs/stablecoin/core/src/lib.rs b/programs/stablecoin/core/src/lib.rs
+index cf2fb22..56325d9 100644
+--- a/programs/stablecoin/core/src/lib.rs
++++ b/programs/stablecoin/core/src/lib.rs
+@@ -752,31 +752,60 @@ mod instruction_tests {
+ 
+ #[cfg(test)]
+ mod hook_order_tests {
+-    //! Spec §5.10 / §3.2: spel-cli encodes by IDL position, the guest decodes by enum index, so the
+-    //! appended hooks must sit at the same index in both. Upstream: point IDL_PATH at
+-    //! `../../../../artifacts/stablecoin-idl.json`.
++    //! Spec 5.10 / 3.2: spel-cli encodes by IDL position, the guest decodes by enum index, so the
++    //! appended hooks must sit at the same index in both. The IDL is read from `idl/` (this repo) or,
++    //! upstream, from `artifacts/` (the upstream PR must regenerate `artifacts/stablecoin-idl.json`
++    //! with the hook instructions).
+     use super::*;
+ 
+-    const IDL_PATH: &str = concat!(
++    const IDL_CANDIDATES: [&str; 2] = [
++        concat!(
++            env!("CARGO_MANIFEST_DIR"),
++            "/../../../idl/stablecoin-idl.json"
++        ),
++        concat!(
++            env!("CARGO_MANIFEST_DIR"),
++            "/../../../artifacts/stablecoin-idl.json"
++        ),
++    ];
++    const PRISTINE_IDL: &str = concat!(
+         env!("CARGO_MANIFEST_DIR"),
+-        "/../../../idl/stablecoin-idl.json"
++        "/../../../idl/upstream/stablecoin-idl.json"
+     );
+ 
+-    fn enum_index(instruction: &Instruction) -> u32 {
+-        risc0_zkvm::serde::to_vec(instruction).expect("instruction serializes")[0]
+-    }
+-
+-    #[test]
+-    fn hook_instructions_share_enum_and_idl_index() {
++    fn instruction_names(path: &str) -> Vec<String> {
+         let idl: serde_json::Value =
+-            serde_json::from_str(&std::fs::read_to_string(IDL_PATH).expect("IDL file"))
++            serde_json::from_str(&std::fs::read_to_string(path).expect("IDL file"))
+                 .expect("IDL json");
+-        let names: Vec<String> = idl["instructions"]
++        idl["instructions"]
+             .as_array()
+             .expect("instructions array")
+             .iter()
+             .map(|i| i["name"].as_str().expect("name").to_owned())
+-            .collect();
++            .collect()
++    }
++
++    fn idl_path() -> &'static str {
++        IDL_CANDIDATES
++            .into_iter()
++            .find(|p| std::path::Path::new(p).exists())
++            .unwrap_or_else(|| panic!("stablecoin IDL not found in any of {IDL_CANDIDATES:?}"))
++    }
++
++    fn enum_index(instruction: &Instruction) -> u32 {
++        risc0_zkvm::serde::to_vec(instruction).expect("instruction serializes")[0]
++    }
++
++    #[test]
++    fn hook_instructions_share_enum_and_idl_index() {
++        let names = instruction_names(idl_path());
++        if std::path::Path::new(PRISTINE_IDL).exists() {
++            assert_eq!(
++                names[..19],
++                instruction_names(PRISTINE_IDL)[..],
++                "upstream instructions 0-18 must keep their IDL positions"
++            );
++        }
+         let hooks = [
+             (
+                 "set_liquidation_engine",
+diff --git a/programs/stablecoin/src/liquidation_hooks.rs b/programs/stablecoin/src/liquidation_hooks.rs
+index fbc41c3..d930e29 100644
+--- a/programs/stablecoin/src/liquidation_hooks.rs
++++ b/programs/stablecoin/src/liquidation_hooks.rs
+@@ -2,9 +2,9 @@
+ //!
+ //! Authentication is Variant C (lez-auction-engine ADR-019): the immediate `caller_program_id`
+ //! must be the bound engine program AND the bound engine-authority PDA must be authorised.
+-//! `caller_program_id` alone would accept any program the engine chained to with a forwarded
+-//! authorisation only if the engine misbehaved; the PDA alone is launderable because lee keeps an
+-//! authorised account authorised down the call chain (`validated_state_diff/mod.rs:262-290`).
++//! `caller_program_id` alone trusts every engine code path; the authority PDA alone is launderable
++//! because lee propagates authorisation down the chain (ADR-019,
++//! `validated_state_diff/mod.rs:262-290`).
+ 
+ use lee_core::{
+     account::{Account, AccountId, AccountWithMetadata, Data},
+@@ -54,6 +54,10 @@ pub fn assert_engine_call(
+     engine_authority: &AccountWithMetadata,
+     state: &LiquidationEngineState,
+ ) {
++    assert_ne!(
++        state.engine_program_id, DEFAULT_PROGRAM_ID,
++        "Bound engine program id must be non-zero"
++    );
+     assert_eq!(
+         caller_program_id, state.engine_program_id,
+         "Caller program is not the liquidation engine"
+@@ -328,7 +332,60 @@ mod tests {
+             ENGINE,
+         );
+         assert!(calls.is_empty());
+-        assert!(decode_params(&post[2]).is_frozen);
++        let input = ProtocolParameters::try_from(
++            &protocol_parameters_account(ParameterOverrides::default())
++                .account
++                .data,
++        )
++        .unwrap();
++        assert!(!input.is_frozen);
++        assert_eq!(
++            decode_params(&post[2]),
++            ProtocolParameters {
++                is_frozen: true,
++                ..input
++            }
++        );
++    }
++
++    #[test]
++    #[should_panic(expected = "Bound engine program id must be non-zero")]
++    fn guard_rejects_state_with_zero_engine_program() {
++        let state = LiquidationEngineState {
++            engine_program_id: DEFAULT_PROGRAM_ID,
++            engine_authority_id: engine_authority_id(),
++        };
++        assert_engine_call(DEFAULT_PROGRAM_ID, &engine_authority(true), &state);
++    }
++
++    #[test]
++    #[should_panic(expected = "does not match expected PDA derivation")]
++    fn bind_to_wrong_state_account_rejected() {
++        set_liquidation_engine(
++            signer(admin_id()),
++            protocol_parameters_account(ParameterOverrides::default()),
++            protocol_parameters_account(ParameterOverrides::default()),
++            STABLECOIN_PROGRAM_ID,
++            DEFAULT_PROGRAM_ID,
++            ENGINE,
++            engine_authority_id(),
++        );
++    }
++
++    #[test]
++    #[should_panic(expected = "must be owned by the stablecoin program")]
++    fn bind_over_foreign_owned_state_rejected() {
++        let mut foreign = engine_state();
++        foreign.account.program_owner = IMPOSTOR;
++        set_liquidation_engine(
++            signer(admin_id()),
++            protocol_parameters_account(ParameterOverrides::default()),
++            foreign,
++            STABLECOIN_PROGRAM_ID,
++            DEFAULT_PROGRAM_ID,
++            ENGINE,
++            engine_authority_id(),
++        );
+     }
+ 
+     #[test]
+-- 
+2.50.1.windows.1
+

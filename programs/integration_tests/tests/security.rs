@@ -124,66 +124,80 @@ fn impostor_own_pda_is_rejected_by_the_immediate_caller_check() {
 
 // ---- impostor chaining liquidate_position / both hooks (Task 7 ruling, item A(b)) ----
 
-/// Two worlds: (0) the real binding with a forged flag on the real engine authority; (1) the host is
-/// bound to (real engine program id, the impostor's OWN PDA) so the authority id matches and is
-/// legitimately authorised by the impostor's seed: only the immediate-caller check is left standing.
-fn impostor_attack_worlds() -> Vec<(&'static str, World, u8, [u8; 32], AccountId)> {
+/// Forged flag: the host keeps its real binding and the impostor claims the real engine authority.
+fn forged_world() -> (World, u8, [u8; 32], AccountId) {
+    (impostor_world(), 0, [0; 32], engine_authority())
+}
+
+/// Rebound: the host is bound to (real engine program id, the impostor's OWN PDA) so the authority id
+/// matches and is legitimately authorised by the impostor's seed: only the immediate-caller check is
+/// left standing.
+fn rebound_world() -> (World, u8, [u8; 32], AccountId) {
     let seed = auth_seed_bytes(&config());
     let own = own_pda(test_programs_methods::IMPOSTOR_ID, seed);
-    let forged = impostor_world();
-    let mut rebound = impostor_world();
-    rebound
-        .bind_engine_to(engine_program(), own)
+    let mut w = impostor_world();
+    w.bind_engine_to(engine_program(), own)
         .expect("admin rebinds");
-    vec![
-        ("forged flag", forged, 0, [0; 32], engine_authority()),
-        ("own PDA, authority id matches", rebound, 1, seed, own),
-    ]
+    (w, 1, seed, own)
+}
+
+fn run_attack_liquidate(world: (World, u8, [u8; 32], AccountId)) {
+    let (mut w, mode, seed, authority) = world;
+    let (pos, accounts) = hook_accounts(&mut w, authority);
+    let r = w.submit(
+        test_programs_methods::IMPOSTOR_ID,
+        accounts,
+        &[k::ATTACKER],
+        ImpostorInstruction::AttackLiquidate {
+            host_program_id: host_program(),
+            mode,
+            seed,
+            collateral_to_seize: LIQ_COLLATERAL,
+            normalized_debt_to_cover: LIQ_DEBT,
+        },
+    );
+    assert_err(r, NOT_ENGINE);
+    assert_host_untouched(&w, Some(pos));
+}
+
+/// One transaction chains engine_freeze_new_debt AND liquidate_position; the first guard stops it.
+fn run_attack_both(world: (World, u8, [u8; 32], AccountId)) {
+    let (mut w, mode, seed, authority) = world;
+    let (pos, accounts) = hook_accounts(&mut w, authority);
+    let r = w.submit(
+        test_programs_methods::IMPOSTOR_ID,
+        accounts,
+        &[k::ATTACKER],
+        ImpostorInstruction::AttackBoth {
+            host_program_id: host_program(),
+            mode,
+            seed,
+            collateral_to_seize: LIQ_COLLATERAL,
+            normalized_debt_to_cover: LIQ_DEBT,
+        },
+    );
+    assert_err(r, NOT_ENGINE);
+    assert_host_untouched(&w, Some(pos));
 }
 
 #[test]
-fn impostor_chaining_liquidate_position_is_rejected() {
-    for (name, mut w, mode, seed, authority) in impostor_attack_worlds() {
-        let (pos, accounts) = hook_accounts(&mut w, authority);
-        let r = w.submit(
-            test_programs_methods::IMPOSTOR_ID,
-            accounts,
-            &[k::ATTACKER],
-            ImpostorInstruction::AttackLiquidate {
-                host_program_id: host_program(),
-                mode,
-                seed,
-                collateral_to_seize: LIQ_COLLATERAL,
-                normalized_debt_to_cover: LIQ_DEBT,
-            },
-        );
-        assert_err(r, NOT_ENGINE);
-        assert_host_untouched(&w, Some(pos));
-        println!("liquidate_position / {name}: rejected");
-    }
+fn impostor_chaining_liquidate_position_with_a_forged_flag_is_rejected() {
+    run_attack_liquidate(forged_world());
 }
 
 #[test]
-fn impostor_chaining_both_hooks_is_rejected() {
-    // One transaction chains engine_freeze_new_debt AND liquidate_position; the first guard stops it.
-    for (name, mut w, mode, seed, authority) in impostor_attack_worlds() {
-        let (pos, accounts) = hook_accounts(&mut w, authority);
-        let r = w.submit(
-            test_programs_methods::IMPOSTOR_ID,
-            accounts,
-            &[k::ATTACKER],
-            ImpostorInstruction::AttackBoth {
-                host_program_id: host_program(),
-                mode,
-                seed,
-                collateral_to_seize: LIQ_COLLATERAL,
-                normalized_debt_to_cover: LIQ_DEBT,
-            },
-        );
-        assert_err(r, NOT_ENGINE);
-        assert_host_untouched(&w, Some(pos));
-        println!("both hooks / {name}: rejected");
-    }
+fn impostor_chaining_liquidate_position_with_a_rebound_own_pda_is_rejected() {
+    run_attack_liquidate(rebound_world());
+}
+
+#[test]
+fn impostor_chaining_both_hooks_with_a_forged_flag_is_rejected() {
+    run_attack_both(forged_world());
+}
+
+#[test]
+fn impostor_chaining_both_hooks_with_a_rebound_own_pda_is_rejected() {
+    run_attack_both(rebound_world());
 }
 
 // ---- laundering (Task 7 ruling, item A(c)) ----

@@ -181,7 +181,9 @@ fn live_debt_auction_is_recovery_in_progress_even_when_freeze_is_disabled() {
 
 #[test]
 fn unstartable_debt_auction_freezes() {
-    // Debt lot 500 at ref price p: start amount = 500 * RAY / p.
+    // Debt lot 500 at ref price p: start amount = 500 * RAY / p. The outcome only exposes "frozen", so the
+    // start_amount == 0 vs cap-exceeded arithmetic is pinned by the unit test
+    // `start_debt_zero_start_amount_is_config_fault` (crates/auction_core/src/system.rs).
     let cap_exceeded = EngineParamsArgs {
         protocol_token_ref_price: ONE / 100, // 50_000 tokens > max_mint_per_auction (5_000)
         ..token_params()
@@ -419,9 +421,13 @@ fn wrong_clock_is_rejected() {
 /// (500 * RAY / (2 * RAY) = 250 tokens <= 300) but not at the lowest price a valid oracle may report
 /// (1.6 after the 20% clamp: 312 tokens > 300), so an oracle that is actually USED freezes the host.
 fn oracle_world() -> World {
+    oracle_world_with_cap(300)
+}
+
+fn oracle_world_with_cap(max_mint_per_auction: u128) -> World {
     let p = EngineParamsArgs {
         ref_oracle_enabled: true,
-        max_mint_per_auction: 300,
+        max_mint_per_auction,
         ..token_params()
     };
     let mut w = system_world(Some(mint_authority()), p);
@@ -451,7 +457,15 @@ fn stale_ref_oracle_falls_back_to_the_admin_price() {
 #[test]
 fn garbage_ref_oracle_falls_back_to_the_admin_price() {
     // Undecodable data, a zero price and an out-of-range price are all treated as "no oracle".
-    for (name, price) in [("zero price", 0), ("far below the admin price", 1)] {
+    // Admin price 2.0: a valid reading is in [admin/2, 2*admin] = [1.0, 4.0] (inclusive) and is then
+    // clamped to [1.6, 2.4] (system::ref_price, price::effective_ref_price). With the cap 300 the start
+    // amount is 250 at the admin price (no freeze) and 312 at 1.6 (freeze): a reading below the band
+    // that were clamped instead of ignored would freeze.
+    for (name, price) in [
+        ("zero price", 0),
+        ("far below the admin price", 1),
+        ("just below the band (admin/2 - 1)", ONE - 1),
+    ] {
         let mut w = oracle_world();
         w.set_ref_oracle(price, w.now);
         w.check_solvency().expect("NoAction");
@@ -469,6 +483,48 @@ fn garbage_ref_oracle_falls_back_to_the_admin_price() {
     w.check_solvency().expect("NoAction");
     assert!(!w.host_frozen(), "undecodable oracle data");
     assert!(!acc(&w).host_frozen_by_engine);
+}
+
+#[test]
+fn above_band_ref_oracle_falls_back_but_the_band_edge_is_clamped() {
+    // Cap 230: the admin price (2.0) gives 250 tokens (> 230, freeze); the 20% upper clamp (2.4) gives
+    // 208 (no freeze). So "freeze" means the reading was ignored, "no freeze" means it was used (clamped).
+    // The upper band edge 2*admin = 4.0 is still valid (inclusive) and is clamped to 2.4.
+    let mut w = oracle_world_with_cap(230);
+    w.set_ref_oracle(4 * ONE, w.now);
+    w.check_solvency().expect("NoAction");
+    assert!(
+        !w.host_frozen(),
+        "4.0 (band edge) is valid and clamped to 2.4"
+    );
+    // One unit above the band: ignored, the admin price applies and the start amount exceeds the cap.
+    let mut w = oracle_world_with_cap(230);
+    w.set_ref_oracle(4 * ONE + 1, w.now);
+    w.check_solvency().expect("check_solvency");
+    assert!(
+        w.host_frozen(),
+        "above the band falls back to the admin price"
+    );
+    assert!(acc(&w).host_frozen_by_engine);
+}
+
+#[test]
+fn in_band_ref_oracle_is_clamped_to_the_20_percent_edge() {
+    // Cap 300: 1.0 is the lowest valid reading (admin/2); it is clamped to 1.6, not used as 1.0 (500 tokens)
+    // and not ignored (250 tokens, no freeze): 312 > 300 freezes. Control: 1.7 is inside the clamp
+    // and unchanged (294 tokens), so it does not freeze.
+    let mut w = oracle_world();
+    w.set_ref_oracle(ONE, w.now);
+    w.check_solvency().expect("check_solvency");
+    assert!(w.host_frozen(), "1.0 is clamped to 1.6: 312 tokens > 300");
+    assert!(acc(&w).host_frozen_by_engine);
+    let mut w = oracle_world();
+    w.set_ref_oracle(17 * ONE / 10, w.now);
+    w.check_solvency().expect("NoAction");
+    assert!(
+        !w.host_frozen(),
+        "1.7 is inside the clamp: 294 tokens <= 300"
+    );
 }
 
 #[test]

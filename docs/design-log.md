@@ -744,3 +744,22 @@ One more holding per surplus auction (accounts are never released). The referenc
 
 **Status**
 Accepted (Plan 2, Task 13; F4 pairing added in Task 14)
+
+---
+
+## ADR-034: Private Path: Variant C Holds; `liquidate` Is Public-Only on v0.2.4; Attack-Test Surface
+
+**Context**
+ADR-019 left a private-path test of Variant C open (the circuit keeps one authorised set per transaction). Spec §8: the PoC submits public transactions only; the private SDK is sub-project B (milestone M4). Task 7's review also required end-to-end attack tests through the real guests for the hook guards and for laundering.
+
+**Decision**
+- Private path, two in-process `execute_and_prove` tests (all-public identities, `security.rs`): (1) an impostor chaining to `engine_freeze_new_debt` with its own legitimately authorised PDA is rejected by the hook's immediate-caller check (circuit error `ProgramProveFailed("Guest panicked: assertion `left == right` failed: Caller program is not the liquidation engine ...")`), so Variant C holds on the private path; (2) `liquidate` is rejected by the circuit with `CircuitProvingError("Guest panicked: assertion `left == right` failed: Inconsistent authorization for account ... left: false right: true")`: the auction vault is authorised by its seed in `InitializeAccount` and passed unauthorised to the hook, which the transaction-wide set forbids, the same limitation the upstream `open_position` has. Making `liquidate` private-capable needs a different vault-initialisation shape (e.g. the hook initialising custody) and is recorded for sub-project B; nothing in the PoC depends on it.
+- Public path, real lee + real guests, attacker programs in `programs/test_programs` (`impostor`, `flawed_engine`): forged `is_authorized` flag, the impostor's own PDA, an impostor chaining `liquidate_position`, one transaction chaining both hooks, and `set_liquidation_engine` through a chained call (rejected `set_liquidation_engine must be a top-level call`, binding intact) are all rejected. The cases where the authority id matches and is genuinely authorised (the host rebound to the real engine program id with the impostor's PDA as authority) leave only the immediate-caller check standing, so they pin it directly.
+- Laundering: the real engine has no path that authorises `ENGINE_AUTH` for a program other than `cfg.host_program_id`, and the host's hooks chain to nothing (invariants (i), (ii)), so the attack cannot be mounted against the real engine. The test binds the host to `flawed_engine`, a test-only program that authorises its PDA for a caller-chosen program (S2's `call_untrusted`); `flawed_engine` -> `impostor` (forwards the flags it received, no seeds, nothing forged) -> `engine_freeze_new_debt` / `liquidate_position`. lee propagates the authorisation (the authority is authorised and its id matches the binding), and the hook still rejects with `Caller program is not the liquidation engine` because the immediate caller is the impostor. Disabling the immediate-caller check makes these tests fail (red check in the Task 16 report).
+- Documentation-only tests: the engine IDL carries no program-id argument (M5) and a config built on a fake host is accepted (I4), so clients must verify `host_program_id` / `token_program_id` against DEPLOYMENTS.md.
+
+**Trade-offs**
+Private liquidation is not available on v0.2.4 with this chain shape. Bids, claims and system auctions were not exercised on the private path in Plan 2. The laundering test needs a deliberately flawed engine, so it proves the host guard, not the real engine's invariant (i); that invariant is enforced in code and reviewed in Task 19.
+
+**Status**
+Accepted (Plan 2, Task 16)

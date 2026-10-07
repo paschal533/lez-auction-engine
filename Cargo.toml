@@ -4,6 +4,8 @@ members = [
     "programs/auction_engine/core",
     "programs/auction_engine",
     "programs/auction_engine/methods",
+    "programs/test_programs/core",
+    "programs/test_programs/methods",
     "programs/token/core",
     "programs/token",
     "programs/token/methods",
@@ -20,6 +22,7 @@ exclude = [
     "programs/token/methods/guest",
     "programs/stablecoin/methods/guest",
     "programs/auction_engine/methods/guest",
+    "programs/test_programs/methods/guest",
 ]
 resolver = "2"
 

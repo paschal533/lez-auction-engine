@@ -1955,6 +1955,8 @@ dependencies = [
  "serde_json",
  "stablecoin-methods",
  "stablecoin_core",
+ "test-programs-methods",
+ "test_programs_core",
  "token-methods",
  "token_core",
  "twap_oracle_core",
@@ -7215,6 +7217,22 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "test-programs-methods"
+version = "0.1.0"
+dependencies = [
+ "risc0-build",
+ "risc0-zkvm",
+]
+
+[[package]]
+name = "test_programs_core"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "serde",
 ]
 
 [[package]]

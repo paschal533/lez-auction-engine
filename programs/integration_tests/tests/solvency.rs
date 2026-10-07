@@ -181,8 +181,13 @@ fn live_debt_auction_is_recovery_in_progress_even_when_freeze_is_disabled() {
 
 #[test]
 fn unstartable_debt_auction_freezes() {
-    let cheap = EngineParamsArgs {
-        protocol_token_ref_price: ONE / 100,
+    // Debt lot 500 at ref price p: start amount = 500 * RAY / p.
+    let cap_exceeded = EngineParamsArgs {
+        protocol_token_ref_price: ONE / 100, // 50_000 tokens > max_mint_per_auction (5_000)
+        ..token_params()
+    };
+    let zero_start = EngineParamsArgs {
+        protocol_token_ref_price: 1_000 * ONE, // 500 * RAY / (1_000 * RAY) rounds to 0 tokens
         ..token_params()
     };
     for (name, authority, params) in [
@@ -193,9 +198,14 @@ fn unstartable_debt_auction_freezes() {
         ),
         ("ProtocolTokenMismatch", None, token_params()),
         (
+            "MintCapConfig (start_amount above max_mint_per_auction, ADR-024)",
+            Some(mint_authority()),
+            cap_exceeded,
+        ),
+        (
             "MintCapConfig (start_amount == 0, ADR-024)",
             Some(mint_authority()),
-            cheap,
+            zero_start,
         ),
     ] {
         let mut w = system_world(authority, params);
@@ -324,7 +334,10 @@ fn any_signer_may_call_but_an_unsigned_caller_may_not() {
     w.ensure_signer(k::ATTACKER);
     let mut accounts = placeholders(&w);
     accounts[0] = id(k::ATTACKER);
-    assert!(w.check_solvency_raw(accounts.clone(), &[]).is_err());
+    assert_err(
+        w.check_solvency_raw(accounts.clone(), &[]),
+        "must be a signer",
+    );
     assert!(!w.host_frozen());
     w.check_solvency_raw(accounts, &[k::ATTACKER])
         .expect("anyone");
@@ -396,6 +409,81 @@ fn wrong_clock_is_rejected() {
     w.book_shortfall();
     let mut accounts = placeholders(&w);
     accounts[10] = id(k::ATTACKER);
-    assert!(w.check_solvency_raw(accounts, &[k::CALLER]).is_err());
+    assert_err(w.check_solvency_raw(accounts, &[k::CALLER]), "WrongClock");
+    assert!(!w.host_frozen());
+}
+
+// ---- configured protocol-token reference oracle (Task 15 review I2) ----
+
+/// Token configured with a reference oracle; a mint cap that fits the start amount at the admin price
+/// (500 * RAY / (2 * RAY) = 250 tokens <= 300) but not at the lowest price a valid oracle may report
+/// (1.6 after the 20% clamp: 312 tokens > 300), so an oracle that is actually USED freezes the host.
+fn oracle_world() -> World {
+    let p = EngineParamsArgs {
+        ref_oracle_enabled: true,
+        max_mint_per_auction: 300,
+        ..token_params()
+    };
+    let mut w = system_world(Some(mint_authority()), p);
+    w.advance(3_600_001);
+    w
+}
+
+#[test]
+fn valid_ref_oracle_is_used_by_the_decision() {
+    // Control: a fresh oracle at 1.6 overrides the admin price and the start amount exceeds the cap.
+    let mut w = oracle_world();
+    w.set_ref_oracle(16 * ONE / 10, w.now);
+    w.check_solvency().expect("check_solvency");
+    assert!(w.host_frozen());
+}
+
+#[test]
+fn stale_ref_oracle_falls_back_to_the_admin_price() {
+    // The same 1.6 reading, one millisecond past `ref_oracle_max_age_ms`: ignored, no freeze.
+    let mut w = oracle_world();
+    w.set_ref_oracle(16 * ONE / 10, w.now - 3_600_001);
+    w.check_solvency().expect("NoAction");
+    assert!(!w.host_frozen());
+    assert!(!acc(&w).host_frozen_by_engine);
+}
+
+#[test]
+fn garbage_ref_oracle_falls_back_to_the_admin_price() {
+    // Undecodable data, a zero price and an out-of-range price are all treated as "no oracle".
+    for (name, price) in [("zero price", 0), ("far below the admin price", 1)] {
+        let mut w = oracle_world();
+        w.set_ref_oracle(price, w.now);
+        w.check_solvency().expect("NoAction");
+        assert!(!w.host_frozen(), "{name}");
+    }
+    let mut w = oracle_world();
+    w.state.force_insert_account(
+        ref_oracle(),
+        lee_core::account::Account {
+            program_owner: [9u32; 8],
+            data: lee_core::account::Data::try_from(vec![0xAB; 7]).expect("data fits"),
+            ..lee_core::account::Account::default()
+        },
+    );
+    w.check_solvency().expect("NoAction");
+    assert!(!w.host_frozen(), "undecodable oracle data");
+    assert!(!acc(&w).host_frozen_by_engine);
+}
+
+#[test]
+fn wrong_ref_oracle_id_is_rejected() {
+    // A configured ref oracle is pinned to its id: an attacker-made oracle cannot steer the decision.
+    let mut w = oracle_world();
+    w.set_ref_oracle(16 * ONE / 10, w.now);
+    let token = protocol_token_def();
+    assert_err(
+        w.check_solvency_with(token, id(k::ATTACKER)),
+        "WrongAccount",
+    );
+    assert_err(
+        w.check_solvency_with(token, unused(SLOT_REF_ORACLE)),
+        "WrongAccount",
+    );
     assert!(!w.host_frozen());
 }

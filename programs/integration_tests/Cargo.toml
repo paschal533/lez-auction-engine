@@ -20,3 +20,5 @@ stablecoin-methods = { path = "../stablecoin/methods" }
 auction_core = { workspace = true }
 auction_engine_core = { workspace = true }
 auction-engine-methods = { path = "../auction_engine/methods" }
+test_programs_core = { path = "../test_programs/core" }
+test-programs-methods = { path = "../test_programs/methods" }

@@ -182,3 +182,22 @@ Variant C: the `["ENGINE_AUTH", config]` seed is attached only to the one call w
 Idempotence: the host's `engine_freeze_new_debt` is idempotent, so a repeated `check_solvency` on an already-frozen host re-freezes harmlessly. `host_frozen_by_engine` records that the engine froze the host; the engine never clears it, and only the host's freeze authority unfreezes (a later Healthy check does not unfreeze).
 
 F4 interpretation (ADR-017): the freeze applies only above the absolute `bad_debt_freeze_threshold` (>= `debt_lot`), never for a small shortfall. After a Freeze the real host rejects `OpenPosition` and `GenerateDebt` with "Protocol is frozen" (tests in `programs/integration_tests/tests/solvency.rs`).
+
+## Security tests
+
+`programs/integration_tests/tests/security.rs` (13 tests; real lee, token, stablecoin and engine guests; attacker guests `impostor` and `flawed_engine` in `programs/test_programs`, test-only, never deployed). Variant C (ADR-019) and ADR-026 are pinned as follows.
+
+| Test | Attack covered |
+|---|---|
+| `impostor_forging_the_authority_flag_is_rejected` | impostor chains `engine_freeze_new_debt` with a forged `is_authorized` on the real authority: `Caller program is not the liquidation engine` |
+| `impostor_own_pda_is_rejected_by_the_immediate_caller_check` | impostor authorises its own PDA by seed and chains the freeze hook |
+| `impostor_chaining_liquidate_position_is_rejected` | the same two shapes against `liquidate_position`; the second binds the host to (real engine program id, impostor PDA) so only the immediate-caller check is left |
+| `impostor_chaining_both_hooks_is_rejected` | one transaction chains `engine_freeze_new_debt` and `liquidate_position` |
+| `laundering_freeze_through_an_intermediate_program_is_rejected`, `laundering_liquidate_through_an_intermediate_program_is_rejected` | host bound to the test-only `flawed_engine`, which authorises its PDA for the impostor; the impostor forwards the received flags; rejected because the immediate caller is the impostor (the real engine offers no such path, invariants (i) and (ii)) |
+| `set_liquidation_engine_through_a_chained_call_is_rejected` | the admin's signature forwarded through the impostor: `set_liquidation_engine must be a top-level call`; binding unchanged |
+| `rogue_config_with_the_same_salt_cannot_liquidate_the_bound_host` | a config on the same host and salt is a different PDA (admin in the seed, ADR-027); its authority is not the bound one |
+| `engine_takes_no_program_id_argument` | documentation only (M5): no engine instruction carries a program id in the IDL |
+| `fake_host_config_is_accepted_so_clients_must_verify_program_ids` | I4: the engine cannot tell a fake host; clients verify program ids against DEPLOYMENTS.md |
+| `engine_authority_cannot_be_signed_at_top_level` | a user cannot authorise the engine PDA (`must be a signer`) |
+| `private_path_impostor_is_rejected_by_the_immediate_caller_check` | ADR-034: Variant C holds in the privacy circuit |
+| `private_path_liquidate_is_not_expressible_on_v0_2_4` | ADR-034: `Inconsistent authorization for account` |

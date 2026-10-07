@@ -1239,3 +1239,28 @@ impl World {
             .is_frozen
     }
 }
+
+// ---- chain measurement and raw account access (Task 17) ----
+pub mod measure;
+
+impl World {
+    /// Measures the chain (executions, cycles), then submits. Returns (executions, result).
+    pub fn measured(
+        &mut self,
+        label: &str,
+        accounts: Vec<AccountId>,
+        signers: &[u8],
+        ix: Ix,
+    ) -> (usize, Result<(), LeeError>) {
+        self.seed_clock();
+        let keys: Vec<PrivateKey> = signers.iter().map(|n| key(*n)).collect();
+        let refs: Vec<&PrivateKey> = keys.iter().collect();
+        let m = measure::measure(label, &self.state, engine_program(), &accounts, &refs, &ix);
+        (m.per_exec.len(), self.engine(accounts, signers, ix))
+    }
+
+    /// Raw account (R3 isolation checks).
+    pub fn raw(&self, account: AccountId) -> Account {
+        self.state.get_account_by_id(account)
+    }
+}

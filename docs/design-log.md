@@ -763,3 +763,41 @@ Private liquidation is not available on v0.2.4 with this chain shape. Bids, clai
 
 **Status**
 Accepted (Plan 2, Task 16)
+
+---
+
+## ADR-036: Chained-Call Budget per Instruction (measured)
+
+**Context**
+ADR-018: at most 11 executions per public transaction, 10 per private one. Spec section 11 asks for cycles per instruction (`CYCLES.md` is Plan 3).
+
+**Decision**
+Every engine instruction stays within 10 executions; `programs/integration_tests/tests/chains.rs` asserts it (and the exact counts of `liquidate` = 5, final `bid_with_settlement` = 4, `take_surplus` = 3, `take_debt` = 3 and the burn variants). Measured in Plan 2 by replaying each transaction's whole chain with the risc0 executor (`tests/common/measure.rs`, the S1 step 6 method): executor cycles of natively built guests in dev mode, not proving cost. The scenario is the harness default (one position, defaults from `defaults_for_tests`).
+
+| Instruction | Executions | Total cycles |
+|---|---|---|
+| observe_feed | 1 | 689,818 |
+| set_collateral_config | 1 | 926,597 |
+| liquidate (init vault, host hook, keeper reward) | 5 | 3,151,610 |
+| bid (non-final: burn, collateral out) | 3 | 1,626,443 |
+| bid_with_settlement (final: burn, penalty, collateral out) | 4 | 1,960,962 |
+| claim_leftover | 2 | 839,296 |
+| start_surplus_auction (no implicit burn) | 3 | 1,157,463 |
+| start_surplus_auction (implicit burn) | 4 | 1,352,191 |
+| take_surplus | 3 | 1,216,593 |
+| close_surplus_auction | 2 | 914,363 |
+| settle_debt (empty buffer, nothing burned) | 1 | 591,029 |
+| settle_debt (burn) | 2 | 785,555 |
+| start_debt_auction (no implicit burn) | 1 | 835,255 |
+| start_debt_auction (implicit burn) | 2 | 1,029,778 |
+| take_debt | 3 | 1,317,796 |
+| check_solvency (freeze, empty buffer) | 2 | 1,335,557 |
+| check_solvency (implicit burn + freeze) | 3 | 1,530,390 |
+
+`settle_empty`, `close_debt_auction` and `set_engine_params` are single engine executions, `init_config` is 2 (Shared Reference R3; not measured here). The maximum is `liquidate` with 5 executions, half the private-path limit. The engine execution is the largest part of every chain (0.65 to 1.96 M cycles); each token call costs 0.11 to 0.14 M and the host hook 0.27 to 0.81 M.
+
+**Trade-offs**
+Cycle numbers are indicative; Plan 3 re-measures with the real-proof pipeline and owns the regression check. The final bid (`bid_with_settlement`, 1,960,962 cycles) is above the roughly 1.9 M cycle line at which the S6 spike said to revisit ADR-023 (accounting written only at chain end); it exceeds it by about 3 percent, in executor cycles of one scenario. Revisited: ADR-023 stands. Its per-bid `Accounting` update would be added only to non-final bids, because the final bid already writes `Accounting` at chain end. Against the measured non-final `bid` (1,626,443 cycles) the S6 cost of 94,904 cycles is 5.8 percent, still above the 5 percent rule. The 1.9 M line applied to the bid that would carry the update, and the final bid does not need it.
+
+**Status**
+Accepted (Plan 2, Task 17)

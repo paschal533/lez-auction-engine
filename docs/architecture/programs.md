@@ -201,3 +201,22 @@ F4 interpretation (ADR-017): the freeze applies only above the absolute `bad_deb
 | `engine_authority_cannot_be_signed_at_top_level` | a user cannot authorise the engine PDA (`must be a signer`) |
 | `private_path_impostor_is_rejected_by_the_immediate_caller_check` | ADR-034: Variant C holds in the privacy circuit |
 | `private_path_liquidate_is_not_expressible_on_v0_2_4` | ADR-034: `Inconsistent authorization for account` |
+
+## Invariants checked on accounts
+
+`programs/integration_tests/tests/invariants.rs` checks the spec section 5.13 invariants that need accounts, through the real guests. `check_all` returns the first violated invariant as text, so the negative tests can show that the check itself catches a broken engine.
+
+| Invariant | Test | What is checked |
+|---|---|---|
+| 2 (vault >= book, collateral conservation) | `collateral_invariants_hold_over_random_bids` (3 seeds, after every step) | auction vault balance >= `collateral_left` (live) or unclaimed leftover (settled); `seized == reward + sold + left` |
+| 7 (reservations) | same | sum of live `reserved_amount` == `type_reserved` == `global_reserved` |
+| 9 (buffer covers the book) | same, and `surplus_returned_ge_untaken_lot_with_vault_donation` | actual buffer >= penalties + returned surplus - settled debt - lots out (signed: donations are not in the book) |
+| 10 (seizure and debt cleared match the host) | `inv10_debt_clear_matches_seizure_over_full_chain`, `inv10_check_catches_seizure_without_debt_clear` | host position zeroed; `collateral_seized` == host vault balance, `debt_principal` == host normalized debt (the host bounds only the MAXIMUM seizure); after settlement settled principal == burned + shortfall |
+| 11 (supply is backed) | same as invariant 2 | stablecoin supply <= position debt + open auction debt + unbacked debt + injected |
+| 12 (liveness) | `liveness_unsafe_position_is_liquidatable_within_caps_or_alone` | blocked only with `CapacityExhausted` while another auction holds the capacity, liquidatable once it settles |
+| 17 (system burn/mint totals) | `system_invariants_burn_and_mint_totals` | minted <= cap; unbacked falls by exactly the coin burned; protocol-token supply moves by the minted/burned totals |
+| R3 (isolation) | `r3_a_bid_touches_only_its_own_auction` | a bid leaves the other auction, vault, record, host position and Accounting byte-identical |
+| surplus book uses `>=` | `surplus_returned_ge_untaken_lot_with_vault_donation` | a donation into the surplus vault makes `total_surplus_returned` exceed the untaken lot; `==` would reject a correct run |
+| no admin path moves funds | `no_admin_instruction_moves_surplus_or_buffer_funds` | every admin instruction (`caller_of` is exhaustive over the instruction enum) with the buffer, surplus vault and auction vault in every slot: funds, books and stablecoin supply unchanged |
+
+Chain budgets: `programs/integration_tests/tests/chains.rs` (ADR-036).

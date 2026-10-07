@@ -21,6 +21,7 @@ TWAP=5681e27c27b3ece4a7c161bbf8e12e6ece6ca69925a87b77f9e193fa4a249b31
 CLOCK=4BdcjoXkq786TMWcBGGHqcxeLYMZmn17rL4eM9ZyRWNU
 FAUCET_PDA=GmAwyCjGaT7ocZ2ePDgGFmNw9Yv51ohG421dHMukZRQC
 ONE=1000000000000000000000000000
+SALT=1
 env_file="$LN/localnet.env"   # written by hand after step_accounts and step_engine (see docs/architecture/localnet.md)
 load() { local keep="${ORACLE:-}"; . "$env_file"; [[ -n "$keep" ]] && ORACLE="$keep"; return 0; }
 spel_host() { "$SP" --idl "$LN/stablecoin-idl-u128.json" -p "$STABLE" -- "$@"; }
@@ -36,9 +37,20 @@ step_sequencer() {
   (cd "$S1/lez" && RISC0_DEV_MODE=1 RUST_LOG=info setsid nohup target/debug/sequencer_service \
     lez/sequencer/service/configs/debug/sequencer_config.json --home "$LN/seqhome" --listen-address 127.0.0.1 -p 3040 \
     > "$LN/logs/sequencer.log" 2>&1 < /dev/null &)
-  sleep 20
-  # setsid may fork, so $! is not reliable: record the pid of whatever listens on our port (we just started it).
-  ss -ltnp 2>/dev/null | sed -n 's/.*:3040 .*pid=\([0-9]*\).*/\1/p' | head -1 > "$LN/sequencer.pid"
+  rm -f "$LN/sequencer.pid" "$LN/config-verified"
+  # Poll for the listener (up to 60 s). setsid may fork, so $! is not reliable: record the pid of whatever listens
+  # on our port (we just started it).
+  local pid="" i
+  for i in $(seq 1 30); do
+    pid="$(ss -ltnp 2>/dev/null | sed -n 's/.*:3040 .*pid=\([0-9]*\).*/\1/p' | head -1)"
+    [[ -n "$pid" ]] && break
+    sleep 2
+  done
+  if [[ -z "$pid" ]]; then
+    echo "sequencer did not open port 3040 within 60 s; see $LN/logs/sequencer.log" >&2
+    exit 1
+  fi
+  echo "$pid" > "$LN/sequencer.pid"
   curl -s -X POST localhost:3040 -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"getLastBlockId","params":{}}'
 }
 
@@ -121,7 +133,7 @@ step_host() {
 
 step_engine() {
   load
-  spel_engine init-config --salt 1 --global-cap 10000000 --freeze-on-bad-debt true --bad-debt-freeze-threshold 1000 \
+  spel_engine init-config --salt "$SALT" --global-cap 10000000 --freeze-on-bad-debt true --bad-debt-freeze-threshold 1000 \
     --protocol-token-enabled false --protocol-token-ref-price 2000000000000000000000000000 --ref-oracle-enabled false \
     --ref-oracle-max-age-ms 3600000 --surplus-buffer-target 1000 --surplus-lot 500 --surplus-delay-ms 0 \
     --surplus-premium-bps 500 --surplus-max-discount-bps 2000 --debt-lot 500 --debt-initial-discount-bps 0 \
@@ -131,21 +143,36 @@ step_engine() {
     --stablecoin-definition "$SDEF" --protocol-token-definition "$UNUSED1" --ref-oracle "$UNUSED0"
 }
 
+# Compares decode-config output against everything the host is about to trust. Exits non-zero on any mismatch.
+check_decoded_config() {
+  local decoded="$1"
+  grep -qx "admin=$ENGINE_ADMIN salt=$SALT" <<<"$decoded" || { echo "admin/salt mismatch: do NOT bind" >&2; return 1; }
+  grep -qx "host_program_id=$STABLE token_program_id=$TOK" <<<"$decoded" || { echo "program id mismatch: do NOT bind" >&2; return 1; }
+  grep -qx "host_protocol_parameters_id=$PP stablecoin_definition_id=$SDEF" <<<"$decoded" \
+    || { echo "protocol parameters / stablecoin definition mismatch: do NOT bind" >&2; return 1; }
+}
+
 step_verify_and_bind() {
   load
   # Bind-time verification (ADR-027, I7): read the config the host is about to bind and compare.
   # (`spel inspect` needs an IDL type and the engine IDL has none, so the raw data comes from `wallet account get`.)
+  # step_bind refuses to run unless this wrote the marker for the same config id.
+  rm -f "$LN/config-verified"
   local data decoded
   data="$("$W" account get --account-id "Public/$CONFIG" | grep '^{' | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"])')"
   decoded="$(cd "$REPO" && scripts/wsl-cargo.sh run -q -p engine_integration_tests --example localnet_tool -- decode-config "$data")"
   echo "$decoded" | head -3 | tee "$LN/config-decoded.txt"
-  grep -q "^admin=$ENGINE_ADMIN " <<<"$decoded" || { echo "admin mismatch: do NOT bind" >&2; exit 1; }
-  grep -q "^host_program_id=$STABLE token_program_id=$TOK\$" <<<"$decoded" || { echo "program id mismatch: do NOT bind" >&2; exit 1; }
-  echo "config verified (admin, host and token program ids match); next: $0 step_bind"
+  check_decoded_config "$decoded" || exit 1
+  printf '%s\n' "$CONFIG" > "$LN/config-verified"
+  echo "config verified (admin, salt, host/token program ids, protocol parameters, stablecoin definition); next: $0 step_bind"
 }
 
 step_bind() {
   load
+  if [[ ! -f "$LN/config-verified" ]] || [[ "$(cat "$LN/config-verified")" != "$CONFIG" ]]; then
+    echo "refusing to bind: run step_verify_and_bind first (marker missing or for another config)" >&2
+    exit 1
+  fi
   spel_host set-liquidation-engine --engine-program-id "$ENGINE_LIMBS" --engine-authority-id "$ENGINE_AUTH" \
     --admin "$ADMIN" --protocol-parameters "$PP" --liquidation-engine-state "$LES"
 }
@@ -230,10 +257,14 @@ step_refresh_oracle() {
 
 step_stop() {
   # Stop only the sequencer this script started (pid file), never anything matched by name.
-  if [[ -f "$LN/sequencer.pid" ]]; then
-    kill "$(cat "$LN/sequencer.pid")" 2>/dev/null || true
-    rm -f "$LN/sequencer.pid"
+  local pid
+  pid="$(cat "$LN/sequencer.pid" 2>/dev/null || true)"
+  if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+    echo "no sequencer pid recorded in $LN/sequencer.pid; nothing stopped (check manually, do not pkill by name)" >&2
+    exit 1
   fi
+  kill "$pid" 2>/dev/null || echo "pid $pid was not running" >&2
+  rm -f "$LN/sequencer.pid"
 }
 
 step_check() {

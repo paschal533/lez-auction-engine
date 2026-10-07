@@ -24,19 +24,43 @@ fn limbs_of(id: &ProgramId) -> String {
     id.iter().map(u32::to_string).collect::<Vec<_>>().join(",")
 }
 
-fn program_from_hex(h: &str) -> ProgramId {
-    assert_eq!(h.len(), 64, "ImageID must be 64 hex characters");
-    let bytes: Vec<u8> = (0..32)
-        .map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).expect("hex"))
-        .collect();
-    core::array::from_fn(|i| {
+fn fail(msg: &str) -> ! {
+    eprintln!("localnet_tool: {msg}");
+    std::process::exit(2);
+}
+
+/// Strict hex decoding: even length, ASCII hex digits only (no panics on bad input).
+fn decode_hex(h: &str) -> Result<Vec<u8>, String> {
+    if !h.is_ascii() {
+        return Err("hex input contains non-ASCII characters".into());
+    }
+    if !h.len().is_multiple_of(2) {
+        return Err(format!("hex input has odd length {}", h.len()));
+    }
+    (0..h.len() / 2)
+        .map(|i| {
+            u8::from_str_radix(&h[2 * i..2 * i + 2], 16)
+                .map_err(|_| format!("invalid hex digits at offset {}", 2 * i))
+        })
+        .collect()
+}
+
+fn program_from_hex(h: &str) -> Result<ProgramId, String> {
+    let bytes = decode_hex(h)?;
+    if bytes.len() != 32 {
+        return Err(format!(
+            "ImageID must be 64 hex characters, got {}",
+            h.len()
+        ));
+    }
+    Ok(core::array::from_fn(|i| {
         u32::from_le_bytes([
             bytes[4 * i],
             bytes[4 * i + 1],
             bytes[4 * i + 2],
             bytes[4 * i + 3],
         ])
-    })
+    }))
 }
 
 const USAGE: &str = "usage: localnet_tool export-guests <dir> | pdas <engine_hex> <host_hex> \
@@ -71,8 +95,8 @@ fn main() {
             );
         }
         Some("pdas") if args.len() == 8 => {
-            let engine = program_from_hex(&args[1]);
-            let host = program_from_hex(&args[2]);
+            let engine = program_from_hex(&args[1]).unwrap_or_else(|e| fail(&e));
+            let host = program_from_hex(&args[2]).unwrap_or_else(|e| fail(&e));
             let admin: AccountId = args[3].parse().expect("engine admin account id (base58)");
             let salt: u64 = args[4].parse().expect("salt");
             let owner: AccountId = args[5].parse().expect("owner account id (base58)");
@@ -111,12 +135,11 @@ fn main() {
         Some("decode-config") if args.len() == 2 => {
             // Bind-time verification (ADR-027, I7): decode an EngineConfig account's raw data.
             let h = args[1].trim();
-            let bytes: Vec<u8> = (0..h.len() / 2)
-                .map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).expect("hex"))
-                .collect();
-            let data = lee_core::account::Data::try_from(bytes).expect("account data");
+            let bytes = decode_hex(h).unwrap_or_else(|e| fail(&e));
+            let data = lee_core::account::Data::try_from(bytes)
+                .unwrap_or_else(|e| fail(&format!("not valid account data: {e:?}")));
             let cfg = auction_engine_core::state::EngineConfigState::try_from(&data)
-                .expect("an EngineConfig account");
+                .unwrap_or_else(|e| fail(&format!("not an EngineConfig account: {e:?}")));
             println!("admin={} salt={}", cfg.admin, cfg.salt);
             println!(
                 "host_program_id={} token_program_id={}",

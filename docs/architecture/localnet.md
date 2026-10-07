@@ -62,16 +62,16 @@ LIQREC AUCTION AUCTION_VAULT ENGINE_LIMBS`, plus `POSITION1 HOST_VAULT1`, and fo
 | deploy | token, twap_oracle, token_mint_authority, stablecoin, auction_engine (blocks 14-22) | confirmed |
 | host setup | `new_fungible_definition` COLL `f66412b8...`; `create_oracle_price_account` `ab9eedce...`; `initialize_program` `8c8bed65...` | confirmed |
 | `init_config` | `6d8b2361...` | confirmed, PDAs derived by spel equal `localnet_tool pdas` output |
-| bind-time verification (ADR-027, I7) | read `CONFIG` with `wallet account get`, `decode-config` | admin = ENGINE_ADMIN, host_program_id = stablecoin ImageID, token_program_id = token ImageID: matched, bind allowed |
+| bind-time verification (ADR-027, I7) | read `CONFIG` with `wallet account get`, `decode-config` | admin = ENGINE_ADMIN, salt = 1, host_program_id = stablecoin ImageID, token_program_id = token ImageID, host_protocol_parameters_id = PP, stablecoin_definition_id = SDEF: matched; the script writes a `config-verified` marker and `step_bind` refuses to run without a marker for the same config id |
 | `set_liquidation_engine` | `a804528f...` (host IDL index 19) | confirmed; `liquidation_engine_state` data holds the engine ImageID |
 | `set_collateral_config` | `a29c7735...` | confirmed |
 | holdings | 2 x token `initialize_account` | confirmed |
 | positions | nonce 0: `open_position` `e7b68ed2...` (500_000 coll), `generate_debt` `65696b91...` (300_000); nonce 1: `open_position` `213c4efa...` (1_000_000), `generate_debt` `2b7ca33b...` (100_000) | confirmed |
 | raise min ratio to 2.0 | first try `7953b4f3...` FAILED (see finding 1); retry `c3ec2228...` | confirmed |
+| oracle refresh (ran after the failed `liquidate`, before its retry) | `create_oracle_price_account` `7d3fe69e...`, host `set_market_price_oracle` `aff4ef2f...`, engine `set_collateral_config` `a5c6780e...` | confirmed |
 | `liquidate` | first try `3b541776...` FAILED `PriceFeedStale` (finding 2); after the oracle refresh `c277bd02...` | confirmed |
 | `bid_with_settlement` | `48a32f98...`, coin_in_max 330_000 | confirmed |
 | `claim_leftover` | `bff2fa35...` | confirmed |
-| oracle refresh | `create_oracle_price_account` `7d3fe69e...`, host `set_market_price_oracle` `aff4ef2f...`, engine `set_collateral_config` `a5c6780e...` | confirmed |
 
 Sequencer log: exactly the two `failed execution check` lines above, both before their successful retries.
 

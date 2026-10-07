@@ -1181,3 +1181,61 @@ impl World {
         )
     }
 }
+
+// ---- check_solvency and the host freeze chain (Task 15) ----
+
+impl World {
+    /// The eleven `check_solvency` accounts (Shared Reference R2 #16) with explicit slot accounts.
+    pub fn check_solvency_accounts(
+        &self,
+        token_slot: AccountId,
+        ref_slot: AccountId,
+    ) -> Vec<AccountId> {
+        vec![
+            id(k::CALLER),
+            config(),
+            accounting(),
+            buffer(),
+            stable_def(),
+            token_slot,
+            ref_slot,
+            engine_authority(),
+            les(),
+            protocol_parameters(),
+            CLOCK_01_PROGRAM_ACCOUNT_ID,
+        ]
+    }
+
+    /// Slot accounts exactly as the config demands (the configured id or the `UNUSED` placeholder).
+    pub fn check_solvency(&mut self) -> Result<(), LeeError> {
+        let cfg: auction_engine_core::state::EngineConfigState = self.read(config());
+        let token_slot = cfg
+            .protocol_token
+            .unwrap_or_else(|| unused(SLOT_PROTOCOL_TOKEN));
+        let ref_slot = self.ref_slot();
+        self.check_solvency_with(token_slot, ref_slot)
+    }
+
+    pub fn check_solvency_with(
+        &mut self,
+        token_slot: AccountId,
+        ref_slot: AccountId,
+    ) -> Result<(), LeeError> {
+        let accounts = self.check_solvency_accounts(token_slot, ref_slot);
+        self.check_solvency_raw(accounts, &[k::CALLER])
+    }
+
+    /// Fully caller-controlled account list and signer set.
+    pub fn check_solvency_raw(
+        &mut self,
+        accounts: Vec<AccountId>,
+        signers: &[u8],
+    ) -> Result<(), LeeError> {
+        self.engine(accounts, signers, Ix::CheckSolvency)
+    }
+
+    pub fn host_frozen(&self) -> bool {
+        self.read::<stablecoin_core::ProtocolParameters>(protocol_parameters())
+            .is_frozen
+    }
+}

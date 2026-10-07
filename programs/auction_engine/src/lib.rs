@@ -21,6 +21,7 @@ pub mod observe;
 pub mod settle;
 #[cfg(test)]
 mod settle_tests;
+pub mod solvency;
 pub mod surplus;
 #[cfg(test)]
 mod surplus_tests;

@@ -402,4 +402,27 @@ mod auction_engine {
         let a = engine::debt::CloseDebtAccounts { caller, config, accounting, debt_auction, clock };
         finish(engine::debt::close_debt_auction(ctx.self_program_id, a))
     }
+
+    #[instruction]
+    #[allow(clippy::too_many_arguments, reason = "eleven accounts (Shared Reference R2)")]
+    pub fn check_solvency(
+        ctx: ProgramContext,
+        #[account(signer)] caller: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut, pda = [literal("ACCT"), account("config")])] accounting: AccountWithMetadata,
+        #[account(mut, pda = [literal("BUFFER"), account("config")])] buffer: AccountWithMetadata,
+        #[account(mut)] stablecoin_definition: AccountWithMetadata,
+        protocol_token_definition: AccountWithMetadata,
+        ref_oracle: AccountWithMetadata,
+        #[account(pda = [literal("ENGINE_AUTH"), account("config")])] engine_authority: AccountWithMetadata,
+        liquidation_engine_state: AccountWithMetadata,
+        #[account(mut)] protocol_parameters: AccountWithMetadata,
+        clock: AccountWithMetadata,
+    ) -> SpelResult {
+        let a = engine::solvency::CheckSolvencyAccounts {
+            caller, config, accounting, buffer, stablecoin_definition, protocol_token_definition, ref_oracle,
+            engine_authority, liquidation_engine_state, protocol_parameters, clock,
+        };
+        finish(engine::solvency::check_solvency(ctx.self_program_id, a))
+    }
 }

@@ -338,5 +338,6 @@ mod tests {
             14
         );
         assert_eq!(idx(&Instruction::CloseDebtAuction), 15);
+        assert_eq!(idx(&Instruction::CheckSolvency), 16);
     }
 }

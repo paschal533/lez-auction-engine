@@ -44,3 +44,11 @@ fn engine_idl_is_a_prefix_of_the_reference_order() {
         assert_eq!(name, R2[i], "IDL position {i}");
     }
 }
+
+#[test]
+fn engine_idl_is_complete() {
+    assert_eq!(
+        idl_names(),
+        R2.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>()
+    );
+}

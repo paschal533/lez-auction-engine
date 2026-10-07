@@ -118,6 +118,7 @@ pub enum Instruction {
     },
     /// Accounts: caller(s), config, accounting(m), debt_auction(m), clock.
     CloseDebtAuction,
-    // Task 15 appends the remaining variant here (check_solvency = 16, Shared Reference R2 order),
-    // together with its guest function and an index assertion in `instruction_indices_follow_reference_order`.
+    /// Accounts: caller(s), config, accounting(m), buffer(m), stablecoin_definition(m), protocol_token_definition
+    /// [slot 1], ref_oracle [slot 0], engine_authority, liquidation_engine_state, protocol_parameters(m), clock.
+    CheckSolvency,
 }

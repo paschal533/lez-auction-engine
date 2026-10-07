@@ -165,3 +165,20 @@ The invariant `debt_on_auction <= unbacked_debt` holds after every step; the int
 ### Mock protocol token
 
 The tests create the protocol token with a real `Token::NewFungibleDefinition` whose `mint_authority` is `["MINT_AUTH", config]` (`World::with_system` / `create_protocol_token`); it is used only by F4 (mint) and F5 (burn). The engine never initialises the mint-authority PDA (S7, ADR-021).
+
+## check_solvency
+
+`check_solvency()` (R2 index 16, permissionless: any signer; at most 3 program executions) implements spec §5.11 and ADR-017. Order: account pins (buffer, stablecoin definition, `engine_authority`, `liquidation_engine_state`, host `protocol_parameters`, both optional slots), an implicit `settle_debt(MAX)` through `settle::implicit_settle` (so `debt_on_auction` stays excluded and `debt_on_auction <= unbacked_debt` keeps holding), then the core decision on the settled `unbacked_debt`:
+
+| Decision | When (first match) | Program-layer effect |
+|---|---|---|
+| `Healthy` | `unbacked <= bad_debt_freeze_threshold` (equality is Healthy) | implicit settle only |
+| `Freeze` | token not configured; or freeze enabled and the start check fails with `MintCapConfig` (incl. `start_amount == 0`, ADR-024), `MintAuthorityMissing` or `ProtocolTokenMismatch` | chain `Burn(buffer*)` if the settle burns, then `stablecoin.engine_freeze_new_debt(engine_authority*, liquidation_engine_state, protocol_parameters)`; `Accounting.host_frozen_by_engine = true` |
+| `RecoveryInProgress` | a debt auction is live (above threshold) | revert (`RecoveryInProgress`): nothing is frozen and the implicit settle is not applied |
+| `NoAction` | `freeze_on_bad_debt == false` with a token, or a startable auction (a keeper should start it), or a transient start error | implicit settle only |
+
+Variant C: the `["ENGINE_AUTH", config]` seed is attached only to the one call whose program id is `cfg.host_program_id`; the accounts forwarded to it are the pinned `engine_authority` PDA, `liquidation_engine_state` at `compute_liquidation_engine_state_pda(host)` and the config's `host_protocol_parameters_id`. Both optional slots are pinned to the configured id or the `["UNUSED", config, k]` placeholder (ADR-030), so a caller cannot swap in an account that forces a Freeze. The decision is therefore a function of engine-validated state only.
+
+Idempotence: the host's `engine_freeze_new_debt` is idempotent, so a repeated `check_solvency` on an already-frozen host re-freezes harmlessly. `host_frozen_by_engine` records that the engine froze the host; the engine never clears it, and only the host's freeze authority unfreezes (a later Healthy check does not unfreeze).
+
+F4 interpretation (ADR-017): the freeze applies only above the absolute `bad_debt_freeze_threshold` (>= `debt_lot`), never for a small shortfall. After a Freeze the real host rejects `OpenPosition` and `GenerateDebt` with "Protocol is frozen" (tests in `programs/integration_tests/tests/solvency.rs`).

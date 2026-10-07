@@ -26,21 +26,21 @@ use crate::{
     token_calls, EngineResult,
 };
 
-const NOW: u64 = 1_700_000_000_000;
-const PROTOCOL: AccountId = AccountId::new([0x91; 32]);
-const REF_ORACLE: AccountId = AccountId::new([0x92; 32]);
-const CALLER: AccountId = AccountId::new([0x93; 32]);
-const TAKER_PROTOCOL: AccountId = AccountId::new([0x94; 32]);
-const TAKER_STABLE: AccountId = AccountId::new([0x95; 32]);
-const FOREIGN: AccountId = AccountId::new([0x96; 32]);
+pub(crate) const NOW: u64 = 1_700_000_000_000;
+pub(crate) const PROTOCOL: AccountId = AccountId::new([0x91; 32]);
+pub(crate) const REF_ORACLE: AccountId = AccountId::new([0x92; 32]);
+pub(crate) const CALLER: AccountId = AccountId::new([0x93; 32]);
+pub(crate) const TAKER_PROTOCOL: AccountId = AccountId::new([0x94; 32]);
+pub(crate) const TAKER_STABLE: AccountId = AccountId::new([0x95; 32]);
+pub(crate) const FOREIGN: AccountId = AccountId::new([0x96; 32]);
 const OTHER_PROGRAM: [u32; 8] = [0x77; 8];
 
 const LOT: u128 = 500;
-const BUFFER: u128 = 1_500;
-const ADMIN_REF: u128 = 2 * ONE;
+pub(crate) const BUFFER: u128 = 1_500;
+pub(crate) const ADMIN_REF: u128 = 2 * ONE;
 const TTL: u64 = 14_400_000;
 
-fn protocol_config(oracle: bool) -> EngineConfigState {
+pub(crate) fn protocol_config(oracle: bool) -> EngineConfigState {
     EngineConfigState {
         protocol_token: Some(PROTOCOL),
         protocol_token_ref_price: ADMIN_REF,
@@ -49,11 +49,11 @@ fn protocol_config(oracle: bool) -> EngineConfigState {
     }
 }
 
-fn config_account(cfg: &EngineConfigState) -> AccountWithMetadata {
+pub(crate) fn config_account(cfg: &EngineConfigState) -> AccountWithMetadata {
     meta(cfg_id(), engine_owned(cfg.into()), false)
 }
 
-fn accounting_account(state: &AccountingState) -> AccountWithMetadata {
+pub(crate) fn accounting_account(state: &AccountingState) -> AccountWithMetadata {
     meta(
         accounting_pda(&ENGINE, &cfg_id()),
         engine_owned(state.into()),
@@ -61,7 +61,7 @@ fn accounting_account(state: &AccountingState) -> AccountWithMetadata {
     )
 }
 
-fn holding(
+pub(crate) fn holding(
     id: AccountId,
     definition: AccountId,
     balance: u128,
@@ -81,7 +81,7 @@ fn holding(
     )
 }
 
-fn stable_definition() -> AccountWithMetadata {
+pub(crate) fn stable_definition() -> AccountWithMetadata {
     meta(
         STABLE,
         Account {
@@ -109,7 +109,7 @@ fn protocol_definition() -> AccountWithMetadata {
     )
 }
 
-fn buffer_id() -> AccountId {
+pub(crate) fn buffer_id() -> AccountId {
     buffer_pda(&ENGINE, &cfg_id())
 }
 
@@ -121,7 +121,7 @@ fn vault_id(nonce: u64) -> AccountId {
     surplus_vault_pda(&ENGINE, &auction_id(nonce))
 }
 
-fn placeholder(slot: u64) -> AccountWithMetadata {
+pub(crate) fn placeholder(slot: u64) -> AccountWithMetadata {
     fresh(unused_slot_pda(&ENGINE, &cfg_id(), slot))
 }
 
@@ -146,14 +146,14 @@ fn run_start(a: StartSurplusAccounts, nonce: u64) -> EngineResult {
 const S_ACCOUNTING: usize = 2;
 const S_AUCTION: usize = 5;
 
-fn accounting_of(p: &AccountPostState) -> AccountingState {
+pub(crate) fn accounting_of(p: &AccountPostState) -> AccountingState {
     AccountingState::try_from(&p.account().data).expect("accounting decodes")
 }
 fn surplus_of(p: &AccountPostState) -> SurplusAuctionState {
     SurplusAuctionState::try_from(&p.account().data).expect("surplus decodes")
 }
 
-fn oracle_account(price: u128, timestamp: u64) -> AccountWithMetadata {
+pub(crate) fn oracle_account(price: u128, timestamp: u64) -> AccountWithMetadata {
     meta(
         REF_ORACLE,
         Account {

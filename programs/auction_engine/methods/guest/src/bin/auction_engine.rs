@@ -344,4 +344,62 @@ mod auction_engine {
         let a = engine::surplus::CloseSurplusAccounts { caller, config, accounting, surplus_auction, surplus_vault, buffer, clock };
         finish(engine::surplus::close_surplus_auction(ctx.self_program_id, a))
     }
+
+    #[instruction]
+    #[allow(clippy::too_many_arguments, reason = "nine accounts plus the nonce (Shared Reference R2)")]
+    pub fn start_debt_auction(
+        ctx: ProgramContext,
+        #[account(signer)] caller: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut, pda = [literal("ACCT"), account("config")])] accounting: AccountWithMetadata,
+        #[account(mut, pda = [literal("BUFFER"), account("config")])] buffer: AccountWithMetadata,
+        #[account(mut)] stablecoin_definition: AccountWithMetadata,
+        #[account(init, pda = [literal("DEBT"), account("config"), arg("nonce")])] debt_auction: AccountWithMetadata,
+        protocol_token_definition: AccountWithMetadata,
+        ref_oracle: AccountWithMetadata,
+        clock: AccountWithMetadata,
+        nonce: u64,
+    ) -> SpelResult {
+        let a = engine::debt::StartDebtAccounts {
+            caller, config, accounting, buffer, stablecoin_definition, debt_auction, protocol_token_definition,
+            ref_oracle, clock,
+        };
+        finish(engine::debt::start_debt_auction(ctx.self_program_id, a, nonce))
+    }
+
+    #[instruction]
+    #[allow(clippy::too_many_arguments, reason = "nine accounts plus two amounts (Shared Reference R2)")]
+    pub fn take_debt(
+        ctx: ProgramContext,
+        #[account(mut, signer)] taker_stable_holding: AccountWithMetadata,
+        #[account(mut)] taker_protocol_holding: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut, pda = [literal("ACCT"), account("config")])] accounting: AccountWithMetadata,
+        #[account(mut)] debt_auction: AccountWithMetadata,
+        #[account(mut)] stablecoin_definition: AccountWithMetadata,
+        #[account(mut)] protocol_token_definition: AccountWithMetadata,
+        #[account(pda = [literal("MINT_AUTH"), account("config")])] mint_authority: AccountWithMetadata,
+        clock: AccountWithMetadata,
+        amount_coin: u128,
+        min_protocol_out: u128,
+    ) -> SpelResult {
+        let a = engine::debt::TakeDebtAccounts {
+            taker_stable_holding, taker_protocol_holding, config, accounting, debt_auction, stablecoin_definition,
+            protocol_token_definition, mint_authority, clock,
+        };
+        finish(engine::debt::take_debt(ctx.self_program_id, a, amount_coin, min_protocol_out))
+    }
+
+    #[instruction]
+    pub fn close_debt_auction(
+        ctx: ProgramContext,
+        #[account(signer)] caller: AccountWithMetadata,
+        config: AccountWithMetadata,
+        #[account(mut, pda = [literal("ACCT"), account("config")])] accounting: AccountWithMetadata,
+        #[account(mut)] debt_auction: AccountWithMetadata,
+        clock: AccountWithMetadata,
+    ) -> SpelResult {
+        let a = engine::debt::CloseDebtAccounts { caller, config, accounting, debt_auction, clock };
+        finish(engine::debt::close_debt_auction(ctx.self_program_id, a))
+    }
 }

@@ -1103,3 +1103,81 @@ impl World {
         )
     }
 }
+
+// ---- F4 debt auction (Task 14) ----
+
+/// A second taker protocol-token holding that is never initialised (S7: fresh holding).
+pub const TAKER2_PROTOCOL: u8 = 68;
+
+pub fn debt_auction(nonce: u64) -> AccountId {
+    pda::debt_auction_pda(&engine_program(), &config(), nonce)
+}
+
+impl World {
+    pub fn start_debt(&mut self, nonce: u64) -> Result<(), LeeError> {
+        let cfg: auction_engine_core::state::EngineConfigState = self.read(config());
+        let token_slot = cfg
+            .protocol_token
+            .unwrap_or_else(|| unused(SLOT_PROTOCOL_TOKEN));
+        let ref_slot = self.ref_slot();
+        self.engine(
+            vec![
+                id(k::CALLER),
+                config(),
+                accounting(),
+                buffer(),
+                stable_def(),
+                debt_auction(nonce),
+                token_slot,
+                ref_slot,
+                CLOCK_01_PROGRAM_ACCOUNT_ID,
+            ],
+            &[k::CALLER],
+            Ix::StartDebtAuction { nonce },
+        )
+    }
+
+    /// `take_debt` by `stable` (signer) receiving tokens in `protocol`; `signers` must include `stable`.
+    pub fn take_debt(
+        &mut self,
+        nonce: u64,
+        stable: u8,
+        protocol: u8,
+        signers: &[u8],
+        amount_coin: u128,
+        min_out: u128,
+    ) -> Result<(), LeeError> {
+        self.engine(
+            vec![
+                id(stable),
+                id(protocol),
+                config(),
+                accounting(),
+                debt_auction(nonce),
+                stable_def(),
+                protocol_token_def(),
+                mint_authority(),
+                CLOCK_01_PROGRAM_ACCOUNT_ID,
+            ],
+            signers,
+            Ix::TakeDebt {
+                amount_coin,
+                min_protocol_out: min_out,
+            },
+        )
+    }
+
+    pub fn close_debt(&mut self, nonce: u64) -> Result<(), LeeError> {
+        self.engine(
+            vec![
+                id(k::CALLER),
+                config(),
+                accounting(),
+                debt_auction(nonce),
+                CLOCK_01_PROGRAM_ACCOUNT_ID,
+            ],
+            &[k::CALLER],
+            Ix::CloseDebtAuction,
+        )
+    }
+}

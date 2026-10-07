@@ -107,7 +107,17 @@ pub enum Instruction {
     },
     /// Accounts: caller(s), config, accounting(m), surplus_auction(m), surplus_vault(m), buffer(m), clock.
     CloseSurplusAuction,
-    // Tasks 14–15 append the remaining variants here, in Shared Reference R2 order
-    // (start_debt_auction = 13 … check_solvency = 16). Each appending task also appends the guest
-    // function and an index assertion to `instruction_indices_follow_reference_order`.
+    /// Accounts: caller(s), config, accounting(m), buffer(m), stablecoin_definition(m), debt_auction(i,m),
+    /// protocol_token_definition [slot 1], ref_oracle [slot 0], clock.
+    StartDebtAuction { nonce: u64 },
+    /// Accounts: taker_stable_holding(s,m), taker_protocol_holding(m), config, accounting(m), debt_auction(m),
+    /// stablecoin_definition(m), protocol_token_definition(m), mint_authority, clock.
+    TakeDebt {
+        amount_coin: u128,
+        min_protocol_out: u128,
+    },
+    /// Accounts: caller(s), config, accounting(m), debt_auction(m), clock.
+    CloseDebtAuction,
+    // Task 15 appends the remaining variant here (check_solvency = 16, Shared Reference R2 order),
+    // together with its guest function and an index assertion in `instruction_indices_follow_reference_order`.
 }

@@ -326,4 +326,17 @@ mod tests {
         );
         assert_eq!(idx(&Instruction::CloseSurplusAuction), 12);
     }
+
+    #[test]
+    fn debt_indices() {
+        assert_eq!(idx(&Instruction::StartDebtAuction { nonce: 0 }), 13);
+        assert_eq!(
+            idx(&Instruction::TakeDebt {
+                amount_coin: 0,
+                min_protocol_out: 0
+            }),
+            14
+        );
+        assert_eq!(idx(&Instruction::CloseDebtAuction), 15);
+    }
 }

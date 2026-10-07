@@ -3,8 +3,8 @@
 ## Layout
 
 - `programs/auction_engine/core` (`auction_engine_core`): shared, guest-safe types. Instruction enum, borsh account states, PDA seed functions, `EngineError`, argument parsing and validation. Depends on `auction_core` (pure math) and `lee_core`; used by the guest, the host-side handlers, tests and the Plan 3 SDK.
-- `programs/auction_engine` (planned, Task 8): handlers that take `lee_core` accounts and return post-states plus chained calls; pure Rust, unit-testable without a zkVM.
-- `programs/auction_engine/methods` (planned, Task 8): the risc0 guest (one `#[instruction]` function per `Instruction` variant, in enum order) and the host build crate that exposes `AUCTION_ENGINE_ELF` / `AUCTION_ENGINE_ID`.
+- `programs/auction_engine` (`auction_engine_program`): handlers that take `lee_core` accounts and return post-states plus chained calls; pure Rust, unit-testable without a zkVM.
+- `programs/auction_engine/methods`: the risc0 guest (one `#[instruction]` function per `Instruction` variant, in enum order) and the host build crate that exposes `AUCTION_ENGINE_ELF` / `AUCTION_ENGINE_ID`.
 
 ## Accounts and seeds
 
@@ -80,11 +80,14 @@ Arguments use spel-encodable types only (ADR-030): bps as `u32` (≤ 10_000; col
 - Account layouts: borsh of the `auction_engine_core::state` structs, each starting with its 8-byte tag (`TAG_*`). Decoders must check the tag.
 - PDAs: `auction_engine_core::pda::*_pda` (the SDK must reuse these functions, not re-implement them).
 - IDLs: `idl/auction_engine-idl.json`, `idl/stablecoin-idl.json` (regenerated with `tools/idl-gen` by every task that changes a guest).
-- Errors: `EngineError::code()`; the guest message is `Program error [6000+code]: <Name>`.
+- Errors: `EngineError::code()` (raw codes in the Errors section above, from `auction_engine_core::error`); the guest panic reads `Program error [6000+code]: Program error {code}: <Name>`; match on the name or the raw code.
 - Program-id verification (I4): before building ANY transaction for a config, the SDK/CLI reads its `EngineConfig` and refuses unless `host_program_id` and `token_program_id` equal the expected ImageIDs in `DEPLOYMENTS.md` (and `admin` is the expected operator): the engine chains to those stored ids with the user's signer flags.
 - Bid account choice (ADR-029, added in Task 11): list `accounting` (`bid_with_settlement`) whenever `coin_in_max >= remaining_target` or the quoted fill would empty the lot within the quote's slippage margin.
 - Optional slots (ADR-030): pass `unused_slot_pda(config, 0|1)` when the reference oracle / protocol token is not configured.
 - Signers that sign more than one stablecoin-program transaction must be `wallet auth-transfer init`-ed first (ADR-018).
+- Verified in Task 19 against the code: instruction order and indices = `idl/auction_engine-idl.json` (`tests/idl.rs`, R2 order 0–16), account lists and signer/writable flags = the R2 table above (stablecoin hooks 19–21 = `idl/stablecoin-idl.json`), error names and codes = `auction_engine_core::error` (the Errors section above).
+- Quote-test fixtures the SDK can reuse (`programs/integration_tests/tests/common/mod.rs`): `World::with_engine()` = `EngineParamsArgs::defaults_for_tests()` + `CollateralArgs::defaults_for_tests()` (Ray scale, 60-minute max oracle age, band 9000–11000 bps, penalty 10%) on a host with redemption price `R = 0.5` collateral per coin, min CR 1.5 and a stability fee of exactly 1.0 per ms; `World::unsafe_position()` opens the standard liquidatable position, whose expected quote is `LIQ_COLLATERAL = 500_000` (seized), `LIQ_DEBT = 600_000` (nominal debt), `LIQ_TARGET = 660_000` (amount to raise, +10%), `LIQ_REWARD = 25` collateral (`min(tip + chip·D = 605, reward_cap = 50, penalty·D = 60_000)` = 50 coin at R = 0.5), `LIQ_LOT = LIQ_COLLATERAL - LIQ_REWARD = 475_000`. Other constants: `T0` (initial clock, ms), `ONE` (= RAY = `FIXED_POINT_ONE`), `R`, `SALT = 1`, and the signer/holding seeds in `common::k`.
+- Client obligations from `THREAT_MODEL.md`: verify program ids (I4, above), knowing that the published ImageIDs come from a native build until Plan 3's Docker builds; show unsold auctions that keep their cap reservation; call `observe_feed` on refresh (S5); simulate `observed()` before every `t_eff` preview (ADR-024); never unfreeze, or advise unfreezing, while settled `unbacked_debt` is above `bad_debt_freeze_threshold` (immediate re-freeze); treat `Accounting.host_frozen_by_engine` as "has ever frozen", not as the current state.
 
 ## Test harness
 
@@ -173,13 +176,13 @@ The tests create the protocol token with a real `Token::NewFungibleDefinition` w
 | Decision | When (first match) | Program-layer effect |
 |---|---|---|
 | `Healthy` | `unbacked <= bad_debt_freeze_threshold` (equality is Healthy) | implicit settle only |
-| `Freeze` | token not configured; or freeze enabled and the start check fails with `MintCapConfig` (incl. `start_amount == 0`, ADR-024), `MintAuthorityMissing` or `ProtocolTokenMismatch` | chain `Burn(buffer*)` if the settle burns, then `stablecoin.engine_freeze_new_debt(engine_authority*, liquidation_engine_state, protocol_parameters)`; `Accounting.host_frozen_by_engine = true` |
+| `Freeze` | token not configured; or freeze enabled and the start check fails with `MintCapConfig` (incl. `start_amount == 0`, ADR-024), `MintAuthorityMissing` or `ProtocolTokenMismatch` | chain `Burn(buffer*)` if the settle burns, then `stablecoin.engine_freeze_new_debt(engine_authority*, liquidation_engine_state, protocol_parameters)`; `Accounting.host_frozen_by_engine = true` ("has ever frozen") |
 | `RecoveryInProgress` | a debt auction is live (above threshold) | revert (`RecoveryInProgress`): nothing is frozen and the implicit settle is not applied |
 | `NoAction` | `freeze_on_bad_debt == false` with a token, or a startable auction (a keeper should start it), or a transient start error | implicit settle only |
 
 Variant C: the `["ENGINE_AUTH", config]` seed is attached only to the one call whose program id is `cfg.host_program_id`; the accounts forwarded to it are the pinned `engine_authority` PDA, `liquidation_engine_state` at `compute_liquidation_engine_state_pda(host)` and the config's `host_protocol_parameters_id`. Both optional slots are pinned to the configured id or the `["UNUSED", config, k]` placeholder (ADR-030), so a caller cannot swap in an account that forces a Freeze. The decision is therefore a function of engine-validated state only.
 
-Idempotence: the host's `engine_freeze_new_debt` is idempotent, so a repeated `check_solvency` on an already-frozen host re-freezes harmlessly. `host_frozen_by_engine` records that the engine froze the host; the engine never clears it, and only the host's freeze authority unfreezes (a later Healthy check does not unfreeze).
+Idempotence: the host's `engine_freeze_new_debt` is idempotent, so a repeated `check_solvency` on an already-frozen host re-freezes harmlessly. `host_frozen_by_engine` means "the engine has frozen this host at least once": it is set on every Freeze and never cleared, so it stays `true` after the freeze authority unfreezes and is not the current freeze state (read the host's `ProtocolParameters.is_frozen` for that). Only the host's freeze authority unfreezes; a later Healthy check does not, and while settled `unbacked_debt` stays above the threshold anyone can re-freeze right after an unfreeze (THREAT_MODEL).
 
 F4 interpretation (ADR-017): the freeze applies only above the absolute `bad_debt_freeze_threshold` (>= `debt_lot`), never for a small shortfall. After a Freeze the real host rejects `OpenPosition` and `GenerateDebt` with "Protocol is frozen" (tests in `programs/integration_tests/tests/solvency.rs`).
 

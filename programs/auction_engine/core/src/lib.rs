@@ -340,4 +340,13 @@ mod tests {
         assert_eq!(idx(&Instruction::CloseDebtAuction), 15);
         assert_eq!(idx(&Instruction::CheckSolvency), 16);
     }
+
+    #[test]
+    fn samples_cover_every_variant_in_enum_order() {
+        let samples = instruction::instruction_samples();
+        assert_eq!(samples.len(), 17, "one sample per Instruction variant");
+        for (i, sample) in samples.iter().enumerate() {
+            assert_eq!(idx(sample) as usize, i, "{sample:?}");
+        }
+    }
 }

@@ -90,7 +90,9 @@ Matches the expected end state of the task brief.
 
 ## Findings (for Plan 3 and the upstream PR)
 
-1. **`idl/stablecoin-idl.json` instruction order differs from `stablecoin_core::Instruction` for indices 8-18.**
+1. **`idl/stablecoin-idl.json` instruction order differs from `stablecoin_core::Instruction` for indices 8-18**
+   (known upstream fact, spec §3.2; the full mapping is pinned by `stablecoin_idl_position_maps_to_enum_index` in
+   `programs/integration_tests/tests/idl.rs`).
    spel encodes the IDL position as the instruction index; the guest decodes the enum. Indices 0-7 and the three
    appended hooks (19-21) agree (that is all `hook_instructions_share_enum_and_idl_index` checks), but e.g.
    `set_minimum_collateralization_ratio` is IDL 11 / enum 8, and IDL index 11 executed `set_timing_parameters`

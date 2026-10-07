@@ -77,6 +77,7 @@ Arguments use spel-encodable types only (ADR-030): bps as `u32` (≤ 10_000; col
 ## Interfaces for Plan 3 (SDK, CLI, CI)
 
 - Instruction encoding: risc0 serde of `auction_engine_core::Instruction` (`risc0_zkvm::serde::to_vec`, first word = variant index = IDL index). Stablecoin hooks: `stablecoin_core::Instruction` indices 19–21.
+- Stablecoin instructions: encode by ENUM index (`risc0_zkvm::serde::to_vec(&ix)[0]`), never by IDL position. `idl/stablecoin-idl.json` follows the upstream guest function order, which differs from `stablecoin_core::Instruction` for IDL positions 8–18 (spec §3.2, known upstream fact; the IDL is pinned to upstream and is not reordered). The table below is pinned by `stablecoin_idl_position_maps_to_enum_index` (`programs/integration_tests/tests/idl.rs`).
 - Account layouts: borsh of the `auction_engine_core::state` structs, each starting with its 8-byte tag (`TAG_*`). Decoders must check the tag.
 - PDAs: `auction_engine_core::pda::*_pda` (the SDK must reuse these functions, not re-implement them).
 - IDLs: `idl/auction_engine-idl.json`, `idl/stablecoin-idl.json` (regenerated with `tools/idl-gen` by every task that changes a guest).
@@ -88,6 +89,37 @@ Arguments use spel-encodable types only (ADR-030): bps as `u32` (≤ 10_000; col
 - Verified in Task 19 against the code: instruction order and indices = `idl/auction_engine-idl.json` (`tests/idl.rs`, R2 order 0–16), account lists and signer/writable flags = the R2 table above (stablecoin hooks 19–21 = `idl/stablecoin-idl.json`), error names and codes = `auction_engine_core::error` (the Errors section above).
 - Quote-test fixtures the SDK can reuse (`programs/integration_tests/tests/common/mod.rs`): `World::with_engine()` = `EngineParamsArgs::defaults_for_tests()` + `CollateralArgs::defaults_for_tests()` (Ray scale, 60-minute max oracle age, band 9000–11000 bps, penalty 10%) on a host with redemption price `R = 0.5` collateral per coin, min CR 1.5 and a stability fee of exactly 1.0 per ms; `World::unsafe_position()` opens the standard liquidatable position, whose expected quote is `LIQ_COLLATERAL = 500_000` (seized), `LIQ_DEBT = 600_000` (nominal debt), `LIQ_TARGET = 660_000` (amount to raise, +10%), `LIQ_REWARD = 25` collateral (`min(tip + chip·D = 605, reward_cap = 50, penalty·D = 60_000)` = 50 coin at R = 0.5), `LIQ_LOT = LIQ_COLLATERAL - LIQ_REWARD = 475_000`. Other constants: `T0` (initial clock, ms), `ONE` (= RAY = `FIXED_POINT_ONE`), `R`, `SALT = 1`, and the signer/holding seeds in `common::k`.
 - Client obligations from `THREAT_MODEL.md`: verify program ids (I4, above), knowing that the published ImageIDs come from a native build until Plan 3's Docker builds; show unsold auctions that keep their cap reservation; call `observe_feed` on refresh (S5); simulate `observed()` before every `t_eff` preview (ADR-024); never unfreeze, or advise unfreezing, while settled `unbacked_debt` is above `bad_debt_freeze_threshold` (immediate re-freeze); treat `Accounting.host_frozen_by_engine` as "has ever frozen", not as the current state.
+
+Stablecoin IDL position to enum index (the enum index is what the guest decodes and what the SDK must encode):
+
+| IDL position | Instruction | Enum index |
+|---|---|---|
+| 0-7 | `initialize_program` ... `close_position` | same as the position (0-7) |
+| 8 | `withdraw_collateral` | 17 |
+| 9 | `repay_debt` | 18 |
+| 10 | `set_stability_fee_per_millisecond` | 14 |
+| 11 | `set_minimum_collateralization_ratio` | 8 |
+| 12 | `set_controller_gains` | 9 |
+| 13 | `set_timing_parameters` | 11 |
+| 14 | `set_admin` | 12 |
+| 15 | `set_freeze_authority` | 13 |
+| 16 | `set_market_price_oracle` | 10 |
+| 17 | `freeze` | 15 |
+| 18 | `unfreeze` | 16 |
+| 19-21 | `set_liquidation_engine`, `liquidate_position`, `engine_freeze_new_debt` | same as the position (19-21) |
+
+Plan 3 carry-overs:
+
+- Program CI with the risc0 toolchain: engine and stablecoin suites, the hook order test, and an `idl-gen` diff against the committed IDLs.
+- SDK encoders keyed by enum index, using the table above.
+- Config-time check that `protocol_token` is a token definition owned by the token program (THREAT_MODEL finding 4).
+- Debt relist griefing hardening (`debt_delay_ms`, or an atomic close-expired in `set_engine_params`).
+- Reproducible Docker builds, then refresh the ImageIDs in `DEPLOYMENTS.md`.
+- `CYCLES.md` plus a regression check, and re-measure ADR-023 with real proofs.
+- `REQUIREMENTS.md` plus its checker, `cargo-fuzz`, and a red-team pass.
+- An oracle price publisher / keeper.
+- Upstream issue for the stablecoin guest function order (spel mis-encodes IDL positions 8-18).
+- Split oversized test files (`tests/common/mod.rs` 1273 lines, `surplus_tests.rs` 958 lines).
 
 ## Test harness
 

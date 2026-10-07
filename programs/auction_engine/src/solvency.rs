@@ -7,8 +7,9 @@
 //! use, and both optional slots are pinned (ADR-030), so a caller cannot steer the decision.
 //!
 //! Idempotence: on an already-frozen host the host's freeze is idempotent, so a repeated Freeze is a
-//! harmless re-freeze. `host_frozen_by_engine` records that the engine froze the host; the engine never
-//! clears it (only the host's freeze authority unfreezes).
+//! harmless re-freeze. `host_frozen_by_engine` records that the engine has frozen this host at least
+//! once; it is not the current freeze state (an unfreeze by the host's freeze authority does not clear
+//! it, and the engine never clears it).
 
 use auction_core::system::{
     check_solvency as decide, start_debt, SolvencyDecision, SystemAuctionError,

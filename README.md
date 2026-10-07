@@ -18,16 +18,16 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 
 ## Run the tests
 
-Rust 1.94.0 (pinned by `rust-toolchain.toml`) and Python 3 are enough for the core. From the repository root (Git Bash on Windows, or any POSIX shell):
+Git Bash on Windows cannot resolve the LEZ and risc0 git dependencies of the workspace (`programs/UPSTREAM.md`), so the core checks run in Linux/WSL through the wrapper (ADR-025, `.github/workflows/core.yml`). Rust 1.94.0 (pinned by `rust-toolchain.toml`) and Python 3 are enough. Format is checked only on our crates with `-p` (vendored code keeps its upstream formatting). From the repository root in WSL:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy -p auction_core --all-targets -- -D warnings
-PROPTEST_CASES=5000 cargo test -p auction_core
-cargo run -q -p auction_core --example vectors > "$TEMP/vectors.json" && python tools/differential/check.py "$TEMP/vectors.json"
+scripts/wsl-cargo.sh fmt -p auction_core -p auction_engine_core -p auction_engine_program -p engine_integration_tests -- --check
+scripts/wsl-cargo.sh clippy --locked -p auction_core --all-targets -- -D warnings
+PROPTEST_CASES=5000 scripts/wsl-cargo.sh test --locked -p auction_core
+scripts/wsl-cargo.sh run --locked -q -p auction_core --example vectors > /tmp/vectors.json && python3 tools/differential/check.py /tmp/vectors.json
 ```
 
-The last line is the differential check: the example prints test vectors from the Rust core and `tools/differential/check.py` replays them against an independent Python model. CI (`.github/workflows/core.yml`, Ubuntu) uses `/tmp/vectors.json` and `python3` instead of `$TEMP` and `python`.
+From Git Bash, wrap each one as shown under "Build and test the programs (WSL)" below (`MSYS_NO_PATHCONV=1 wsl -d Ubuntu-20.04 -e bash -lc 'cd /mnt/c/Users/user/Documents/basecamp/lez-auction-engine && scripts/wsl-cargo.sh ...'`). The last line is the differential check: the example prints test vectors from the Rust core and `tools/differential/check.py` replays them against an independent Python model. CI additionally runs `PROPTEST_CASES=2000 cargo test --locked -p auction_core --test invariants --test s5_pause_onset`.
 
 The spikes under `spikes/` need the risc0 toolchain (WSL or Linux) and are not part of the workspace; see the per-spike documents for the exact commands.
 
@@ -47,6 +47,7 @@ MSYS_NO_PATHCONV=1 wsl -d Ubuntu-20.04 -e bash -lc   'cd /mnt/c/Users/user/Docum
 - Design log (ADRs): [docs/design-log.md](docs/design-log.md)
 - Spikes: [docs/spikes/](docs/spikes/) ([S1](docs/spikes/S1.md), [S2](docs/spikes/S2.md), [S3](docs/spikes/S3.md), [S4](docs/spikes/S4.md), [S5](docs/spikes/S5.md), [S6](docs/spikes/S6.md), [S7](docs/spikes/S7.md)); spike code in [spikes/](spikes/)
 - Architecture: [docs/architecture/core.md](docs/architecture/core.md) (auction state machine), [docs/architecture/math.md](docs/architecture/math.md) (fixed-point arithmetic), [docs/architecture/hooks.md](docs/architecture/hooks.md) (stablecoin hooks), [docs/architecture/programs.md](docs/architecture/programs.md) (engine program, Plan 3 interfaces), [docs/architecture/security-checklist.md](docs/architecture/security-checklist.md) (per-instruction checklist)
+- Localnet smoke test: [docs/architecture/localnet.md](docs/architecture/localnet.md); deployed program ids and reference-price log: [DEPLOYMENTS.md](DEPLOYMENTS.md)
 - Threat model: [THREAT_MODEL.md](THREAT_MODEL.md)
 - Plans: [docs/superpowers/plans/](docs/superpowers/plans/)
 

@@ -2,6 +2,8 @@
 
 Every spike outcome is appended here as a new ADR or an amendment.
 
+ADRs are numbered in decision order and appear in the order they were written, so the numbering is not always monotonic in the file (ADR-028, ADR-029 and ADR-031 appear after ADR-030; ADR-035 appears after ADR-036).
+
 ## ADR-001: Track B Toolchain
 
 **Context**

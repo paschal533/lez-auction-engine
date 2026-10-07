@@ -122,3 +122,99 @@ pub enum Instruction {
     /// [slot 1], ref_oracle [slot 0], engine_authority, liquidation_engine_state, protocol_parameters(m), clock.
     CheckSolvency,
 }
+
+/// One sample per `Instruction` variant, in enum order (index `i` is variant `i`).
+///
+/// Test support: lets tests derive per-variant tables (admin set, enum indices) from the enum
+/// instead of keeping a hand-written list. Not part of the public API.
+#[doc(hidden)]
+#[must_use]
+pub fn instruction_samples() -> Vec<Instruction> {
+    vec![
+        Instruction::InitConfig {
+            salt: 0,
+            global_cap: 0,
+            freeze_on_bad_debt: false,
+            bad_debt_freeze_threshold: 0,
+            protocol_token_enabled: false,
+            protocol_token_ref_price: 0,
+            ref_oracle_enabled: false,
+            ref_oracle_max_age_ms: 0,
+            surplus_buffer_target: 0,
+            surplus_lot: 0,
+            surplus_delay_ms: 0,
+            surplus_premium_bps: 0,
+            surplus_max_discount_bps: 0,
+            debt_lot: 0,
+            debt_initial_discount_bps: 0,
+            debt_growth: vec![],
+            surplus_decay: vec![],
+            max_mint_per_auction: 0,
+            min_take: 0,
+            system_ttl_ms: 0,
+        },
+        Instruction::SetEngineParams {
+            global_cap: 0,
+            freeze_on_bad_debt: false,
+            bad_debt_freeze_threshold: 0,
+            protocol_token_enabled: false,
+            protocol_token_ref_price: 0,
+            ref_oracle_enabled: false,
+            ref_oracle_max_age_ms: 0,
+            surplus_buffer_target: 0,
+            surplus_lot: 0,
+            surplus_delay_ms: 0,
+            surplus_premium_bps: 0,
+            surplus_max_discount_bps: 0,
+            debt_lot: 0,
+            debt_initial_discount_bps: 0,
+            debt_growth: vec![],
+            surplus_decay: vec![],
+            max_mint_per_auction: 0,
+            min_take: 0,
+            system_ttl_ms: 0,
+        },
+        Instruction::SetCollateralConfig {
+            oracle_scale: 0,
+            max_oracle_age_ms: 0,
+            max_conf_bps: 0,
+            band_lo_bps: 0,
+            band_hi_bps: 0,
+            penalty_bps: 0,
+            tip: 0,
+            chip_bps: 0,
+            reward_cap: 0,
+            debt_floor: 0,
+            min_bid: 0,
+            type_cap: 0,
+            schedule: vec![],
+            admin_paused: false,
+        },
+        Instruction::ObserveFeed,
+        Instruction::Liquidate { nonce: 0 },
+        Instruction::Bid {
+            coin_in_max: 0,
+            min_collateral_out: 0,
+        },
+        Instruction::BidWithSettlement {
+            coin_in_max: 0,
+            min_collateral_out: 0,
+        },
+        Instruction::SettleEmpty,
+        Instruction::ClaimLeftover,
+        Instruction::SettleDebt { amount: 0 },
+        Instruction::StartSurplusAuction { nonce: 0 },
+        Instruction::TakeSurplus {
+            amount_coin: 0,
+            max_protocol_in: 0,
+        },
+        Instruction::CloseSurplusAuction,
+        Instruction::StartDebtAuction { nonce: 0 },
+        Instruction::TakeDebt {
+            amount_coin: 0,
+            min_protocol_out: 0,
+        },
+        Instruction::CloseDebtAuction,
+        Instruction::CheckSolvency,
+    ]
+}

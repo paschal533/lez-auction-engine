@@ -6,6 +6,7 @@ mod common;
 
 use auction_engine_core::{
     args::{CollateralArgs, EngineParamsArgs},
+    instruction::instruction_samples,
     state::{AccountingState, AuctionState, EngineConfigState, SurplusAuctionState},
     Instruction as Ix,
 };
@@ -411,7 +412,13 @@ fn admin_name(ix: &Ix) -> Option<&'static str> {
     }
 }
 
-const ADMIN_INSTRUCTIONS: [&str; 3] = ["init_config", "set_engine_params", "set_collateral_config"];
+/// Derived from one sample per enum variant, so a new admin instruction is picked up by `admin_name`.
+fn admin_instructions() -> Vec<&'static str> {
+    instruction_samples()
+        .iter()
+        .filter_map(admin_name)
+        .collect()
+}
 
 struct Attempt {
     name: &'static str,
@@ -539,8 +546,13 @@ fn assert_covers_every_admin_instruction(attempts: &[&Attempt]) {
     let mut seen: Vec<&str> = attempts.iter().filter_map(|a| admin_name(&a.ix)).collect();
     seen.sort_unstable();
     seen.dedup();
-    let mut all = ADMIN_INSTRUCTIONS.to_vec();
+    let mut all = admin_instructions();
     all.sort_unstable();
+    assert_eq!(
+        all.len(),
+        3,
+        "init_config, set_engine_params, set_collateral_config"
+    );
     assert_eq!(seen, all, "every admin instruction is attempted");
 }
 

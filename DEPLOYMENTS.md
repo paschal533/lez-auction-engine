@@ -22,4 +22,8 @@ Reproducible (Docker) builds and testnet deployment: Plan 3 / milestone M6.
 
 ## Reference price changes (ADR-017)
 
-Every change of `protocol_token_ref_price` is recorded here: date, config, old → new, reason. (None yet.)
+Every change of `protocol_token_ref_price` is recorded here: date, config, old → new, reason.
+
+| Date | Config | Old → New | Reason |
+|---|---|---|---|
+| 2026-10-07 | localnet smoke `init_config` | none → `2_000_000_000_000_000_000_000_000_000` (2e27 RAY) | initial value passed to `init_config` by `scripts/localnet-smoke.sh` (`step_engine`, `--protocol-token-ref-price`) |

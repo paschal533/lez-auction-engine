@@ -1954,6 +1954,7 @@ dependencies = [
  "serde",
  "serde_json",
  "stablecoin-methods",
+ "stablecoin-methods-b",
  "stablecoin_core",
  "test-programs-methods",
  "test_programs_core",
@@ -7012,6 +7013,14 @@ dependencies = [
  "risc0-build",
  "risc0-zkvm",
  "stablecoin_core",
+]
+
+[[package]]
+name = "stablecoin-methods-b"
+version = "0.1.0"
+dependencies = [
+ "risc0-build",
+ "risc0-zkvm",
 ]
 
 [[package]]

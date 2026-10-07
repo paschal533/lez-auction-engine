@@ -5,6 +5,9 @@ edition = "2021"
 
 [workspace]
 
+[features]
+instance-b = []
+
 [profile.release]
 debug = 0
 strip = "symbols"

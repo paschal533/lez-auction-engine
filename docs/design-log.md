@@ -801,3 +801,19 @@ Cycle numbers are indicative; Plan 3 re-measures with the real-proof pipeline an
 
 **Status**
 Accepted (Plan 2, Task 17)
+
+---
+
+## ADR-035: Second Host Instance via a Guest Feature
+
+**Context**
+Spec §5.4 and S1: one stablecoin binary supports one host instance; a second needs a distinct ImageID. S1 used a patched clone and a Docker build.
+
+**Decision**
+The vendored guest gains feature `instance-b`, which adds `#[used] static HOST_INSTANCE_TAG: [u8; 8] = *b"INST-B01"` (the S1 mechanism). `programs/stablecoin/methods_b` embeds the same guest package with that feature (`embed_methods_with_options`). The commit is tagged `[local]` and excluded from the upstream patch series. `scripts/check-hook-patches.sh` applies the `programs/stablecoin` diffs of `[local]` commits after the series, so its byte-for-byte comparison still catches any un-exported, non-`[local]` change. The engine needs nothing: its seeds include the config, and each config binds one host.
+
+**Trade-offs**
+A second guest build in the test workspace (one more long first build).
+
+**Status**
+Accepted (Plan 2, Task 18)

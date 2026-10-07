@@ -220,3 +220,5 @@ F4 interpretation (ADR-017): the freeze applies only above the absolute `bad_deb
 | no admin path moves funds | `no_admin_instruction_moves_surplus_or_buffer_funds` | every admin instruction (`caller_of` is exhaustive over the instruction enum) with the buffer, surplus vault and auction vault in representative slots (the test asserts every admin instruction is attempted): funds, books and stablecoin supply unchanged |
 
 Chain budgets: `programs/integration_tests/tests/chains.rs` (ADR-036).
+
+R4/R5 are shown across two host instances (one collateral type each) with two engine configs on one engine program; see `tests/two_instances.rs`.

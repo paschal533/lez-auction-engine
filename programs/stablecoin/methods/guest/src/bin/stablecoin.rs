@@ -7,6 +7,12 @@ use spel_framework::prelude::*;
 #[cfg(not(test))]
 risc0_zkvm::guest::entry!(main);
 
+/// Second host instance build (lez-auction-engine spec §5.4, spike S1): changes only the ImageID.
+/// Local test build, not offered upstream.
+#[cfg(feature = "instance-b")]
+#[used]
+static HOST_INSTANCE_TAG: [u8; 8] = *b"INST-B01";
+
 #[lez_program(instruction = "stablecoin_core::Instruction")]
 mod stablecoin {
     #[allow(unused_imports)]

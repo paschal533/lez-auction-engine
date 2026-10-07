@@ -13,6 +13,7 @@ members = [
     "programs/stablecoin/core",
     "programs/stablecoin",
     "programs/stablecoin/methods",
+    "programs/stablecoin/methods_b",
     "programs/upstream_integration_tests",
     "programs/integration_tests",
     "tools/idl-gen",

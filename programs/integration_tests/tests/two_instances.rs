@@ -249,13 +249,50 @@ fn liquidate_b(w: &mut World, pos_b: AccountId) -> Result<(), lee::error::LeeErr
     )
 }
 
+fn set_collateral_config_b(w: &mut World, c: &CollateralArgs) {
+    w.engine(
+        vec![
+            id(k::ENGINE_ADMIN),
+            config_b(),
+            coll_b(),
+            coll_config_b(),
+            oracle_b(),
+            pp_b(),
+            rps_b(),
+            CLOCK,
+        ],
+        &[k::ENGINE_ADMIN],
+        collateral_ix(c),
+    )
+    .expect("set collateral config B");
+}
+
+fn paused_args() -> CollateralArgs {
+    CollateralArgs {
+        admin_paused: true,
+        ..CollateralArgs::defaults_for_tests()
+    }
+}
+
 #[test]
 fn instances_have_distinct_programs_and_state() {
     let (w, _, _) = two_instances();
+    // The distinct ImageID is what makes B a separate host instance (S1).
     assert_ne!(host_b(), host_program());
-    assert_ne!(pp_b(), protocol_parameters());
-    assert_ne!(config_b(), config());
-    let _ = w;
+    let pp_account = w.state.get_account_by_id(pp_b());
+    assert_ne!(
+        pp_account,
+        Account::default(),
+        "B protocol parameters initialised"
+    );
+    assert_ne!(pp_account, w.state.get_account_by_id(protocol_parameters()));
+}
+
+#[test]
+fn both_instances_liquidate_when_unfaulted() {
+    let (mut w, pos_a, pos_b) = two_instances();
+    w.liquidate(pos_a, 0).expect("A is liquidatable unfaulted");
+    liquidate_b(&mut w, pos_b).expect("B is liquidatable unfaulted");
 }
 
 #[test]
@@ -269,13 +306,28 @@ fn stale_feed_on_a_does_not_pause_b() {
 }
 
 #[test]
+fn stale_feed_on_b_does_not_pause_a() {
+    let (mut w, pos_a, pos_b) = two_instances();
+    w.advance(3_600_001);
+    let now = w.now;
+    w.set_oracle(R, now);
+    assert_err(liquidate_b(&mut w, pos_b), "PriceFeedStale");
+    w.liquidate(pos_a, 0).expect("instance A keeps liquidating");
+}
+
+#[test]
 fn admin_pause_on_a_does_not_pause_b() {
     let (mut w, pos_a, pos_b) = two_instances();
-    let paused = CollateralArgs {
-        admin_paused: true,
-        ..CollateralArgs::defaults_for_tests()
-    };
-    w.set_collateral_config(k::ENGINE_ADMIN, &paused).unwrap();
+    w.set_collateral_config(k::ENGINE_ADMIN, &paused_args())
+        .unwrap();
     assert_err(w.liquidate(pos_a, 0), "Paused");
     liquidate_b(&mut w, pos_b).expect("instance B unaffected");
+}
+
+#[test]
+fn admin_pause_on_b_does_not_pause_a() {
+    let (mut w, pos_a, pos_b) = two_instances();
+    set_collateral_config_b(&mut w, &paused_args());
+    assert_err(liquidate_b(&mut w, pos_b), "Paused");
+    w.liquidate(pos_a, 0).expect("instance A unaffected");
 }

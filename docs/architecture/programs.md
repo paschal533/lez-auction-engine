@@ -221,4 +221,4 @@ F4 interpretation (ADR-017): the freeze applies only above the absolute `bad_deb
 
 Chain budgets: `programs/integration_tests/tests/chains.rs` (ADR-036).
 
-R4/R5 are shown across two host instances (one collateral type each) with two engine configs on one engine program; see `tests/two_instances.rs`.
+R4/R5 are shown across two host instances (one collateral type each) with two engine configs on one engine program; see `tests/two_instances.rs`. Instance B (`programs/stablecoin/methods_b`) is a test-only build and is never deployed.

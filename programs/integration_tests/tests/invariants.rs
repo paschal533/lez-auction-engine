@@ -6,191 +6,20 @@ mod common;
 
 use auction_engine_core::{
     args::{CollateralArgs, EngineParamsArgs},
-    state::{
-        AccountingState, AuctionState, CollateralConfigState, EngineConfigState,
-        SurplusAuctionState,
-    },
+    state::{AccountingState, AuctionState, EngineConfigState, SurplusAuctionState},
     Instruction as Ix,
 };
 use clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID as CLOCK;
+use common::checks::*;
 use common::*;
-use lee_core::account::{Account, AccountId, Data};
+use lee_core::account::{Account, AccountId};
 use stablecoin_core::Position;
-
-macro_rules! ensure {
-    ($cond:expr, $($arg:tt)*) => {
-        if !($cond) {
-            return Err(format!($($arg)*));
-        }
-    };
-}
-
-/// What the host held at the moment a position was handed to the engine (invariant 10 baseline).
-struct Liquidated {
-    pos: AccountId,
-    host_collateral: u128,
-    host_debt: u128,
-}
-
-#[derive(Default)]
-struct Tracked {
-    liquidated: Vec<Liquidated>,
-}
-
-/// Records the host side of `pos`, then liquidates it (nonce 0).
-fn liquidate_tracked(w: &mut World, t: &mut Tracked, pos: AccountId) {
-    let host_collateral = w.balance(host_vault(pos));
-    let host_debt = w.read::<Position>(pos).normalized_debt_amount;
-    w.liquidate(pos, 0).expect("liquidate");
-    t.liquidated.push(Liquidated {
-        pos,
-        host_collateral,
-        host_debt,
-    });
-}
-
-fn check_all(w: &World, t: &Tracked) -> Result<(), String> {
-    let cfg: EngineConfigState = w.read(config());
-    let coll: CollateralConfigState = w.read(coll_config());
-    let acc: AccountingState = w.read(accounting());
-    let (mut live_reserved, mut live_penalty, mut live_debt_open) = (0u128, 0u128, 0u128);
-    let (mut settled_principal, mut settled_count) = (0u128, 0usize);
-    for l in &t.liquidated {
-        let a: AuctionState = w.read(auction(l.pos, 0));
-        let vault = w.balance(auction_vault(l.pos, 0));
-        // Invariant 2: the vault holds at least the book (a donation may raise it, never lower it).
-        let book = if a.settled {
-            a.leftover_claimable - a.leftover_claimed
-        } else {
-            a.collateral_left
-        };
-        ensure!(vault >= book, "inv 2: vault {vault} < book {book}");
-        // Collateral conservation inside the auction book.
-        ensure!(
-            a.collateral_seized == a.keeper_reward + a.collateral_sold + a.collateral_left,
-            "inv 2: seized {} != reward {} + sold {} + left {}",
-            a.collateral_seized,
-            a.keeper_reward,
-            a.collateral_sold,
-            a.collateral_left
-        );
-        // Invariant 10, per position: the engine seized exactly what the host held and recorded exactly the
-        // debt the host cleared (the host bounds only the MAXIMUM seizure, so the engine must match).
-        let p: Position = w.read(l.pos);
-        ensure!(
-            (p.collateral_amount, p.normalized_debt_amount) == (0, 0),
-            "inv 10 host position: ({}, {}) left on the host",
-            p.collateral_amount,
-            p.normalized_debt_amount
-        );
-        ensure!(
-            a.collateral_seized == l.host_collateral,
-            "inv 10 collateral: seized {} != host held {}",
-            a.collateral_seized,
-            l.host_collateral
-        );
-        ensure!(
-            a.debt_principal == l.host_debt,
-            "inv 10 debt: principal {} != host cleared {}",
-            a.debt_principal,
-            l.host_debt
-        );
-        if a.settled {
-            settled_principal += a.debt_principal;
-            settled_count += 1;
-        } else {
-            live_reserved += a.reserved_amount;
-            live_penalty += a.penalty_raised;
-            live_debt_open += a.debt_principal - a.debt_raised;
-        }
-    }
-    // Invariant 10, across the chain: every cleared debt unit was either burned by a bidder or booked as
-    // shortfall once its auction settled (liquidate -> bid -> settle).
-    if settled_count > 0 {
-        ensure!(
-            settled_principal == acc.total_debt_burned + acc.total_shortfall_booked,
-            "inv 10 chain: settled principal {settled_principal} != burned {} + shortfall {}",
-            acc.total_debt_burned,
-            acc.total_shortfall_booked
-        );
-    }
-    // Invariant 7: sum of live reservations == type_reserved == global_reserved (one type per instance).
-    ensure!(live_reserved == coll.type_reserved, "inv 7: type reserved");
-    ensure!(
-        coll.type_reserved == cfg.global_reserved,
-        "inv 7: global reserved"
-    );
-    // Invariant 9: the actual buffer covers the book (penalties + returned surplus - settled debt - lots out).
-    // Signed: donations into the buffer are not in the book, so the book itself may be negative.
-    let credits = acc.total_penalty_collected + live_penalty + acc.total_surplus_returned;
-    let debits = acc.total_debt_settled + acc.total_surplus_lots_out;
-    let book_buffer = i128::try_from(credits).unwrap() - i128::try_from(debits).unwrap();
-    let buffer_balance = i128::try_from(w.balance(buffer())).unwrap();
-    ensure!(
-        buffer_balance >= book_buffer,
-        "inv 9: buffer {buffer_balance} < book {book_buffer}"
-    );
-    // Invariant 11 (accumulator stays 1.0 in the harness, so nominal == normalized): supply is backed by
-    // position debt, open auction debt, unbacked debt, or stablecoin the harness injected.
-    let positions_debt: u128 = [position(k::OWNER, 0), position(k::OWNER2, 0)]
-        .iter()
-        .map(|p| {
-            // A position the scenario never opened simply carries no debt.
-            Position::try_from(&w.raw(*p).data).map_or(0, |pos| pos.normalized_debt_amount)
-        })
-        .sum();
-    ensure!(
-        w.supply(stable_def())
-            <= positions_debt + live_debt_open + acc.unbacked_debt + w.injected_stable,
-        "inv 11: supply {} unbacked",
-        w.supply(stable_def())
-    );
-    Ok(())
-}
-
-fn assert_ok(r: Result<(), String>, label: &str) {
-    if let Err(e) = r {
-        panic!("{label}: {e}");
-    }
-}
 
 fn lcg(seed: &mut u64) -> u64 {
     *seed = seed
         .wrapping_mul(6_364_136_223_846_793_005)
         .wrapping_add(1_442_695_040_888_963_407);
     *seed >> 33
-}
-
-/// Rewrites the decoded state of `account` (test-local tampering, never used on a happy path).
-fn tamper<T>(w: &mut World, account: AccountId, f: impl FnOnce(&mut T))
-where
-    T: for<'a> TryFrom<&'a Data>,
-    for<'a> Data: From<&'a T>,
-{
-    let mut raw = w.raw(account);
-    let mut value: T = w.read(account);
-    f(&mut value);
-    raw.data = Data::from(&value);
-    w.state.force_insert_account(account, raw);
-}
-
-/// The standard unsafe position, liquidated, then bid down (non-final), finished (final) and claimed.
-fn full_chain() -> (World, Tracked, AccountId) {
-    let mut w = World::with_engine();
-    let mut t = Tracked::default();
-    let pos = w.unsafe_position();
-    liquidate_tracked(&mut w, &mut t, pos);
-    assert_ok(check_all(&w, &t), "after liquidate");
-    w.bidder(k::BIDDER_STABLE, k::BIDDER_COLL, 1_000_000);
-    w.bid(pos, 100_000, 0).expect("partial bid");
-    assert_ok(check_all(&w, &t), "after partial bid");
-    w.bid_settle(pos, u128::MAX, 0).expect("final bid");
-    assert!(w.read::<AuctionState>(auction(pos, 0)).settled);
-    assert_ok(check_all(&w, &t), "after settlement");
-    w.claim_leftover(k::OWNER, k::OWNER_COLL, pos)
-        .expect("claim leftover");
-    assert_ok(check_all(&w, &t), "after claim");
-    (w, t, pos)
 }
 
 #[test]
@@ -274,6 +103,28 @@ fn liveness_unsafe_position_is_liquidatable_within_caps_or_alone() {
     w.bid_settle(whale, u128::MAX, 0).unwrap();
     w.liquidate(small, 0)
         .expect("liquidatable once the reservation is released");
+
+    // Within the caps, both auctions run side by side (660_000 + 132_000 <= 800_000).
+    let mut w = World::with_engine();
+    let whale = w.open_position(
+        k::OWNER,
+        k::OWNER_COLL,
+        k::OWNER_STABLE,
+        0,
+        LIQ_COLLATERAL,
+        LIQ_DEBT,
+    );
+    let small = w.open_small_position();
+    w.set_min_cr(2 * ONE);
+    let roomy = CollateralArgs {
+        type_cap: 800_000,
+        ..CollateralArgs::defaults_for_tests()
+    };
+    w.set_collateral_config(k::ENGINE_ADMIN, &roomy).unwrap();
+    let mut t = Tracked::default();
+    liquidate_tracked(&mut w, &mut t, whale);
+    liquidate_tracked(&mut w, &mut t, small);
+    assert_ok(check_all(&w, &t), "two auctions within the cap");
 }
 
 #[test]
@@ -306,7 +157,8 @@ fn system_invariants_burn_and_mint_totals() {
     .unwrap();
     let acc: AccountingState = w.read(accounting());
     assert_eq!(acc.unbacked_debt, unbacked - 500);
-    assert!(acc.total_protocol_minted <= 5_000);
+    let cfg: EngineConfigState = w.read(config());
+    assert!(acc.total_protocol_minted <= cfg.system.max_mint_per_auction);
     assert_eq!(
         w.supply(protocol_token_def()),
         protocol_supply + acc.total_protocol_minted
@@ -347,7 +199,24 @@ fn r3_a_bid_touches_only_its_own_auction() {
         w.raw(b),
         w.raw(accounting()),
     );
+    let (a_auction, config_before, coll_before) =
+        (w.raw(auction(a, 0)), w.raw(config()), w.raw(coll_config()));
     w.bid(a, 100_000, 0).unwrap();
+    assert_ne!(
+        w.raw(auction(a, 0)),
+        a_auction,
+        "the bid did change its own auction (the isolation check is not vacuous)"
+    );
+    assert_eq!(
+        w.raw(config()),
+        config_before,
+        "R3: a non-final bid leaves the shared config untouched"
+    );
+    assert_eq!(
+        w.raw(coll_config()),
+        coll_before,
+        "R3: a non-final bid leaves the collateral config untouched"
+    );
     assert_eq!(
         w.raw(auction(b, 0)),
         b_auction,
@@ -518,18 +387,13 @@ fn surplus_returned_ge_untaken_lot_with_vault_donation() {
 
 // ---- Binding addition 3 (Task 13): no admin instruction moves surplus or buffer funds ----
 
-#[derive(Debug, PartialEq, Eq)]
-enum Caller {
-    Admin,
-    Permissionless,
-}
-
 /// Exhaustive on purpose: adding an engine instruction forces a decision about who may call it.
-fn caller_of(ix: &Ix) -> Caller {
+/// `Some(name)` = admin instruction.
+fn admin_name(ix: &Ix) -> Option<&'static str> {
     match ix {
-        Ix::InitConfig { .. } | Ix::SetEngineParams { .. } | Ix::SetCollateralConfig { .. } => {
-            Caller::Admin
-        }
+        Ix::InitConfig { .. } => Some("init_config"),
+        Ix::SetEngineParams { .. } => Some("set_engine_params"),
+        Ix::SetCollateralConfig { .. } => Some("set_collateral_config"),
         Ix::ObserveFeed
         | Ix::Liquidate { .. }
         | Ix::Bid { .. }
@@ -543,43 +407,141 @@ fn caller_of(ix: &Ix) -> Caller {
         | Ix::StartDebtAuction { .. }
         | Ix::TakeDebt { .. }
         | Ix::CloseDebtAuction
-        | Ix::CheckSolvency => Caller::Permissionless,
+        | Ix::CheckSolvency => None,
     }
 }
+
+const ADMIN_INSTRUCTIONS: [&str; 3] = ["init_config", "set_engine_params", "set_collateral_config"];
 
 struct Attempt {
     name: &'static str,
     ix: Ix,
     accounts: Vec<AccountId>,
-    must_succeed: bool,
+    /// `None`: must succeed; `Some(text)`: must be rejected and the error must contain `text`.
+    expect_err: Option<&'static str>,
 }
 
-fn fund_snapshot_without_surplus(w: &World, pos: AccountId) -> Vec<Account> {
-    [
+fn fund_snapshot(w: &World, pos: AccountId, with_surplus: bool) -> Vec<Account> {
+    let mut ids = vec![
         buffer(),
         auction_vault(pos, 0),
         accounting(),
         auction(pos, 0),
         stable_def(),
-    ]
-    .iter()
-    .map(|a| w.raw(*a))
-    .collect()
+    ];
+    if with_surplus {
+        ids.extend([surplus_vault(0), surplus_auction(0)]);
+    }
+    ids.iter().map(|a| w.raw(*a)).collect()
 }
 
-fn fund_snapshot(w: &World, pos: AccountId) -> Vec<Account> {
-    [
-        buffer(),
-        surplus_vault(0),
-        auction_vault(pos, 0),
-        accounting(),
-        auction(pos, 0),
-        surplus_auction(0),
-        stable_def(),
-    ]
-    .iter()
-    .map(|a| w.raw(*a))
-    .collect()
+/// Submits the attempt as the engine admin and checks the verdict and that no fund or book moved.
+fn run_attempt(w: &mut World, pos: AccountId, with_surplus: bool, a: &Attempt) {
+    let funds_before = fund_snapshot(w, pos, with_surplus);
+    let result = w.engine(a.accounts.clone(), &[k::ENGINE_ADMIN], a.ix.clone());
+    match a.expect_err {
+        None => result.unwrap_or_else(|e| panic!("{}: {e:?}", a.name)),
+        Some(text) => {
+            println!("ADMIN[{}] rejected: {:?}", a.name, result.as_ref().err());
+            assert_err(result, text);
+        }
+    }
+    assert_eq!(
+        funds_before,
+        fund_snapshot(w, pos, with_surplus),
+        "{}: funds or books moved",
+        a.name
+    );
+}
+
+fn admin_params() -> EngineParamsArgs {
+    EngineParamsArgs {
+        protocol_token_enabled: true,
+        surplus_lot: 400,
+        ..EngineParamsArgs::defaults_for_tests()
+    }
+}
+
+fn params_attempt(
+    name: &'static str,
+    p: &EngineParamsArgs,
+    slots: [AccountId; 2],
+    acct: AccountId,
+    expect_err: Option<&'static str>,
+) -> Attempt {
+    Attempt {
+        name,
+        ix: set_engine_params_ix(p),
+        accounts: vec![
+            id(k::ENGINE_ADMIN),
+            config(),
+            acct,
+            coll_config(),
+            slots[0],
+            slots[1],
+        ],
+        expect_err,
+    }
+}
+
+fn coll_attempt(
+    name: &'static str,
+    coll: AccountId,
+    orc: AccountId,
+    def: AccountId,
+    expect_err: Option<&'static str>,
+) -> Attempt {
+    let c = CollateralArgs {
+        admin_paused: true,
+        ..CollateralArgs::defaults_for_tests()
+    };
+    Attempt {
+        name,
+        ix: collateral_ix(&c),
+        accounts: vec![
+            id(k::ENGINE_ADMIN),
+            config(),
+            def,
+            coll,
+            orc,
+            protocol_parameters(),
+            redemption_state(),
+            CLOCK,
+        ],
+        expect_err,
+    }
+}
+
+fn init_attempt(
+    name: &'static str,
+    salt: u64,
+    accounts: [AccountId; 3],
+    expect_err: Option<&'static str>,
+) -> Attempt {
+    Attempt {
+        name,
+        ix: init_config_ix(salt, &admin_params()),
+        accounts: vec![
+            id(k::ENGINE_ADMIN),
+            accounts[0],
+            accounts[1],
+            accounts[2],
+            protocol_parameters(),
+            stable_def(),
+            protocol_token_def(),
+            unused(0),
+        ],
+        expect_err,
+    }
+}
+
+fn assert_covers_every_admin_instruction(attempts: &[&Attempt]) {
+    let mut seen: Vec<&str> = attempts.iter().filter_map(|a| admin_name(&a.ix)).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    let mut all = ADMIN_INSTRUCTIONS.to_vec();
+    all.sort_unstable();
+    assert_eq!(seen, all, "every admin instruction is attempted");
 }
 
 #[test]
@@ -588,38 +550,27 @@ fn no_admin_instruction_moves_surplus_or_buffer_funds() {
     let pos = w.unsafe_position();
     w.liquidate(pos, 0).unwrap();
     w.donate_stable(buffer(), 1_500);
-    let admin = id(k::ENGINE_ADMIN);
+    let p = admin_params();
+    let (protocol, no_ref) = (protocol_token_def(), unused(0));
 
-    let p = EngineParamsArgs {
-        protocol_token_enabled: true,
-        surplus_lot: 400,
-        ..EngineParamsArgs::defaults_for_tests()
-    };
-    let c = CollateralArgs {
-        admin_paused: true,
-        ..CollateralArgs::defaults_for_tests()
-    };
-    // A legitimate set_engine_params while the buffer and an auction vault are funded (it is refused once a
-    // system auction is live, ProtocolTokenLocked, so it runs before the surplus auction starts).
-    let funds_before = fund_snapshot_without_surplus(&w, pos);
-    w.engine(
-        vec![
-            admin,
-            config(),
-            accounting(),
-            coll_config(),
-            protocol_token_def(),
-            unused(0),
-        ],
-        &[k::ENGINE_ADMIN],
-        set_engine_params_ix(&p),
-    )
-    .expect("legit set_engine_params");
-    assert_eq!(
-        funds_before,
-        fund_snapshot_without_surplus(&w, pos),
-        "legit set_engine_params moved funds"
+    // Legitimate calls while the buffer and an auction vault are funded (set_engine_params is refused for a
+    // protocol-token or system-parameter change once a system auction is live, so it runs before one starts).
+    let legit_params = params_attempt(
+        "set_engine_params (legit)",
+        &p,
+        [protocol, no_ref],
+        accounting(),
+        None,
     );
+    let legit_coll = coll_attempt(
+        "set_collateral_config (legit)",
+        coll_config(),
+        oracle(),
+        collateral_def(),
+        None,
+    );
+    run_attempt(&mut w, pos, false, &legit_params);
+    run_attempt(&mut w, pos, false, &legit_coll);
 
     w.start_surplus(0).unwrap();
     assert!(
@@ -628,158 +579,88 @@ fn no_admin_instruction_moves_surplus_or_buffer_funds() {
             && w.balance(auction_vault(pos, 0)) > 0,
         "all three fund accounts hold a balance"
     );
-    let before = fund_snapshot(&w, pos);
-
+    let before = fund_snapshot(&w, pos, true);
     let new_salt = 99;
     let other_config =
         auction_engine_core::pda::config_pda(&engine_program(), &id(k::ENGINE_ADMIN), new_salt);
-    let coll_accounts = |coll: AccountId, orc: AccountId, def: AccountId| {
-        vec![
-            admin,
-            config(),
-            def,
-            coll,
-            orc,
-            protocol_parameters(),
-            redemption_state(),
-            CLOCK,
-        ]
+    let other_acct = auction_engine_core::pda::accounting_pda(&engine_program(), &other_config);
+    let locked = EngineParamsArgs {
+        surplus_lot: 300,
+        ..p.clone()
     };
-    let init_accounts = |cfg: AccountId, acct: AccountId, buf: AccountId| {
-        vec![
-            admin,
-            cfg,
-            acct,
-            buf,
-            protocol_parameters(),
-            stable_def(),
-            protocol_token_def(),
-            unused(0),
-        ]
-    };
-    // The legitimate set_collateral_config must succeed (proves the test is live); every other attempt puts a
-    // fund account into a slot the instruction accepts, or reuses existing accounts.
     let attempts = vec![
-        Attempt {
-            name: "set_engine_params (live system auction: ProtocolTokenLocked)",
-            ix: set_engine_params_ix(&EngineParamsArgs {
-                surplus_lot: 300,
-                ..p.clone()
-            }),
-            accounts: vec![
-                admin,
-                config(),
-                accounting(),
-                coll_config(),
-                protocol_token_def(),
-                unused(0),
-            ],
-            must_succeed: false,
-        },
-        Attempt {
-            name: "set_engine_params (buffer as ref-oracle slot)",
-            ix: set_engine_params_ix(&p),
-            accounts: vec![
-                admin,
-                config(),
-                accounting(),
-                coll_config(),
-                protocol_token_def(),
-                buffer(),
-            ],
-            must_succeed: false,
-        },
-        Attempt {
-            name: "set_engine_params (surplus vault as protocol-token slot)",
-            ix: set_engine_params_ix(&p),
-            accounts: vec![
-                admin,
-                config(),
-                accounting(),
-                coll_config(),
-                surplus_vault(0),
-                unused(0),
-            ],
-            must_succeed: false,
-        },
-        Attempt {
-            name: "set_engine_params (buffer as accounting)",
-            ix: set_engine_params_ix(&p),
-            accounts: vec![
-                admin,
-                config(),
-                buffer(),
-                coll_config(),
-                protocol_token_def(),
-                unused(0),
-            ],
-            must_succeed: false,
-        },
-        Attempt {
-            name: "set_collateral_config (legit)",
-            ix: collateral_ix(&c),
-            accounts: coll_accounts(coll_config(), oracle(), collateral_def()),
-            must_succeed: true,
-        },
-        Attempt {
-            name: "set_collateral_config (buffer as coll_config)",
-            ix: collateral_ix(&c),
-            accounts: coll_accounts(buffer(), oracle(), collateral_def()),
-            must_succeed: false,
-        },
-        Attempt {
-            name: "set_collateral_config (surplus vault as oracle)",
-            ix: collateral_ix(&c),
-            accounts: coll_accounts(coll_config(), surplus_vault(0), collateral_def()),
-            must_succeed: false,
-        },
-        Attempt {
-            name: "set_collateral_config (auction vault as collateral definition)",
-            ix: collateral_ix(&c),
-            accounts: coll_accounts(coll_config(), oracle(), auction_vault(pos, 0)),
-            must_succeed: false,
-        },
-        Attempt {
-            name: "init_config again (same salt, existing accounts)",
-            ix: init_config_ix(SALT, &p),
-            accounts: init_accounts(config(), accounting(), buffer()),
-            must_succeed: false,
-        },
-        Attempt {
-            name: "init_config (new salt, existing funded buffer)",
-            ix: init_config_ix(new_salt, &p),
-            accounts: init_accounts(other_config, accounting(), buffer()),
-            must_succeed: false,
-        },
+        params_attempt("set_engine_params (live system auction: system-parameter lock)", &locked, [protocol, no_ref], accounting(), Some("ProtocolTokenLocked")),
+        params_attempt("set_engine_params (buffer as ref-oracle slot)", &p, [protocol, buffer()], accounting(), Some("unused slot")),
+        params_attempt("set_engine_params (surplus vault as protocol-token slot: rejected by the live-auction lock)", &p, [surplus_vault(0), no_ref], accounting(), Some("ProtocolTokenLocked")),
+        params_attempt("set_engine_params (buffer as accounting)", &p, [protocol, no_ref], buffer(), Some(r#"WrongAccount(\"accounting\")"#)),
+        coll_attempt("set_collateral_config (buffer as coll_config)", buffer(), oracle(), collateral_def(), Some(r#"PdaMismatch { account_name: \"coll_config\""#)),
+        coll_attempt("set_collateral_config (surplus vault as oracle)", coll_config(), surplus_vault(0), collateral_def(), Some("OracleMismatch")),
+        coll_attempt("set_collateral_config (auction vault as collateral definition)", coll_config(), oracle(), auction_vault(pos, 0), Some(r#"PdaMismatch { account_name: \"coll_config\""#)),
+        init_attempt("init_config again (same salt, existing accounts)", SALT, [config(), accounting(), buffer()], Some("AccountAlreadyInitialized")),
+        init_attempt("init_config (new salt, new config and accounting, existing funded buffer)", new_salt, [other_config, other_acct, buffer()], Some(r#"PdaMismatch { account_name: \"buffer\""#)),
     ];
-    for a in attempts {
-        assert_eq!(
-            caller_of(&a.ix),
-            Caller::Admin,
-            "{}: only admin instructions are attempted",
-            a.name
-        );
-        let funds_before = fund_snapshot(&w, pos);
-        let result = w.engine(a.accounts, &[k::ENGINE_ADMIN], a.ix);
-        if a.must_succeed {
-            result.unwrap_or_else(|e| panic!("{}: {e:?}", a.name));
-        } else {
-            assert!(
-                result.is_err(),
-                "{}: malformed admin call was accepted",
-                a.name
-            );
-        }
-        assert_eq!(
-            funds_before,
-            fund_snapshot(&w, pos),
-            "{}: funds or books moved",
-            a.name
-        );
+    let covered: Vec<&Attempt> = attempts
+        .iter()
+        .chain([&legit_params, &legit_coll])
+        .collect();
+    assert_covers_every_admin_instruction(&covered);
+    for a in &attempts {
+        run_attempt(&mut w, pos, true, a);
     }
     assert_eq!(
         before,
-        fund_snapshot(&w, pos),
+        fund_snapshot(&w, pos, true),
         "no fund account, book or the stablecoin supply changed"
     );
+}
+
+/// Finding for the controller: with no live system auction nothing but `optional_slot` judges the
+/// protocol-token slot, so an admin can point it at any non-zero id, a fund account included. That only rewrites
+/// the config (no instruction moves funds on that path); the test pins what is observed.
+#[test]
+fn admin_fund_account_in_protocol_token_slot_without_live_auction() {
+    let mut w = World::with_system(false);
+    let pos = w.unsafe_position();
+    w.liquidate(pos, 0).unwrap();
+    w.donate_stable(buffer(), 1_500);
+    let before = fund_snapshot(&w, pos, false);
+    let a = params_attempt(
+        "set_engine_params (buffer as protocol-token slot, no live auction)",
+        &admin_params(),
+        [buffer(), unused(0)],
+        accounting(),
+        None,
+    );
+    run_attempt(&mut w, pos, false, &a);
+    let cfg: EngineConfigState = w.read(config());
+    assert_eq!(
+        cfg.protocol_token,
+        Some(buffer()),
+        "accepted: the config now names the buffer as protocol token"
+    );
+    assert_eq!(
+        before,
+        fund_snapshot(&w, pos, false),
+        "no fund or book moved"
+    );
+    // Observed: the repointed config does not stop a permissionless start (it never reads the protocol-token
+    // definition), but a take, which burns protocol tokens, is refused.
+    w.start_surplus(0)
+        .expect("start_surplus does not read the protocol-token slot");
+    assert_err(
+        w.take_surplus(0, 100, u128::MAX),
+        r#"WrongAccount(\"slot\")"#,
+    );
+    // Passing the buffer itself as the definition satisfies the slot id but not the use-time token check.
+    let mut accounts = w.take_surplus_accounts(0);
+    accounts[6] = buffer();
+    let result = w.engine(
+        accounts,
+        &[k::TAKER_PROTOCOL],
+        Ix::TakeSurplus {
+            amount_coin: 100,
+            max_protocol_in: u128::MAX,
+        },
+    );
+    assert_err(result, "ProtocolTokenMismatch");
 }

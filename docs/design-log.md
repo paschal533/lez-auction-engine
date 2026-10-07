@@ -794,7 +794,7 @@ Every engine instruction stays within 10 executions; `programs/integration_tests
 | check_solvency (freeze, empty buffer) | 2 | 1,335,557 |
 | check_solvency (implicit burn + freeze) | 3 | 1,530,390 |
 
-`settle_empty`, `close_debt_auction` and `set_engine_params` are single engine executions, `init_config` is 2 (Shared Reference R3; not measured here). The maximum is `liquidate` with 5 executions, half the private-path limit. The engine execution is the largest part of every chain (0.65 to 1.96 M cycles); each token call costs 0.11 to 0.14 M and the host hook 0.27 to 0.81 M.
+`settle_empty`, `close_debt_auction` and `set_engine_params` are single engine executions, `init_config` is 2 (Shared Reference R3; not measured here). The maximum is `liquidate` with 5 executions, half the private-path limit. The engine execution is the largest part of every chain (0.59 to 1.96 M cycles); each token call costs 0.11 to 0.18 M and the host hook 0.27 to 0.81 M.
 
 **Trade-offs**
 Cycle numbers are indicative; Plan 3 re-measures with the real-proof pipeline and owns the regression check. The final bid (`bid_with_settlement`, 1,960,962 cycles) is above the roughly 1.9 M cycle line at which the S6 spike said to revisit ADR-023 (accounting written only at chain end); it exceeds it by about 3 percent, in executor cycles of one scenario. Revisited: ADR-023 stands. Its per-bid `Accounting` update would be added only to non-final bids, because the final bid already writes `Accounting` at chain end. Against the measured non-final `bid` (1,626,443 cycles) the S6 cost of 94,904 cycles is 5.8 percent, still above the 5 percent rule. The 1.9 M line applied to the bid that would carry the update, and the final bid does not need it.

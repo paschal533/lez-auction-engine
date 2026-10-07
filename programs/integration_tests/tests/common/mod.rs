@@ -114,6 +114,8 @@ pub struct World {
     pub block: u64,
     /// Stablecoin force-minted into test holdings (supply invariant, Task 17).
     pub injected_stable: u128,
+    /// Stablecoin donated straight into the surplus buffer (invariant 9 book).
+    pub donated_buffer: u128,
 }
 
 impl World {
@@ -125,6 +127,7 @@ impl World {
             now: T0,
             block: 1,
             injected_stable: 0,
+            donated_buffer: 0,
         };
         w.seed_clock();
         for elf in [
@@ -937,6 +940,9 @@ impl World {
         self.fund_stable(k::DONOR_STABLE, amount);
         self.transfer_tokens(k::DONOR_STABLE, to, amount)
             .expect("donation");
+        if to == buffer() {
+            self.donated_buffer += amount;
+        }
     }
 }
 
@@ -1241,6 +1247,7 @@ impl World {
 }
 
 // ---- chain measurement and raw account access (Task 17) ----
+pub mod checks;
 pub mod measure;
 
 impl World {

@@ -189,6 +189,7 @@ fn every_instruction_fits_the_chain_budget() {
             .expect("measured")
     };
     assert_eq!(get("liquidate"), 5);
+    assert_eq!(get("bid"), 3);
     assert_eq!(get("bid_with_settlement(final)"), 4);
     assert_eq!(get("take_surplus"), 3);
 }

@@ -120,6 +120,7 @@ Plan 3 carry-overs:
 - An oracle price publisher / keeper.
 - Upstream issue for the stablecoin guest function order (spel mis-encodes IDL positions 8-18).
 - Split oversized test files (`tests/common/mod.rs` 1273 lines, `surplus_tests.rs` 958 lines).
+- Make the drift tests catch new variants: an exhaustive `match` over the engine `Instruction` next to `instruction_samples()`, and over `stablecoin_core::Instruction` in `stablecoin_idl_position_maps_to_enum_index` (a variant with no IDL entry currently passes).
 
 ## Test harness
 

@@ -825,7 +825,7 @@ Accepted (Plan 2, Task 18)
 ## ADR-037: Plan 3 Is Split into 3a (Engine Hardening, SDK, CLI) and 3b (CI, Real Proofs, Reproducible Builds, Evidence)
 
 **Context**
-Plan 3 (ADR-018 split: SDK / CLI / CI / real proofs) gathered the spec §6.1, §6.4–§6.6, §9, §11 and §12 obligations plus thirteen carry-overs from Plan 2 (`docs/architecture/programs.md`). Planned as one document it is about 30 tasks in two independent deliverables.
+Plan 3 (ADR-018 split: SDK / CLI / CI / real proofs) gathered the spec §6.1, §6.4–§6.6, §9, §11 and §12 obligations plus eleven carry-overs from Plan 2 (`docs/architecture/programs.md`). Planned as one document it is about 30 tasks in two independent deliverables.
 
 **Options**
 - (A) One Plan 3.

@@ -878,7 +878,7 @@ THREAT_MODEL finding 8 (MEDIUM, accepted in Plan 2): `start_debt_auction` and `c
 (C), `DEBT_RELIST_DELAY_MS = 600_000` (the spec's minimum system TTL). After any end the admin has a guaranteed 10-minute window with no live debt auction. Engine-only: no argument, account list or `auction_core` change.
 
 **Trade-offs**
-Debt auctions are at most one per `system_ttl_ms + 10 min`, which slows recovery negligibly. The delay is not configurable (a parameter can be added in M3 if governance wants one). `AccountingState` grows by one `u64`, so existing localnet state needs a fresh deployment (Task 16 redeploys anyway).
+Debt auctions are at most one per `system_ttl_ms + 10 min`, so a bad-debt backlog that needs many lots clears more slowly; the delay is fixed (a griefer cannot extend it) but the admin cannot shorten it in an emergency either. The delay is not configurable (a parameter can be added in M3 if governance wants one). `AccountingState` grows by one `u64`, so existing localnet state needs a fresh deployment (Task 16 redeploys anyway).
 
 **Status**
 Accepted (Plan 3a, Task 3)

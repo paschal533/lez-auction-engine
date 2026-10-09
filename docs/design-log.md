@@ -846,7 +846,7 @@ Accepted (Plan 3a, Task 1)
 ## ADR-038: The Protocol-Token Slot Is Validated at Config Time
 
 **Context**
-THREAT_MODEL finding 4 (MEDIUM, accepted in Plan 2): `init_config` / `set_engine_params` recorded an enabled protocol-token slot by id only. A non-token account there let `start_surplus_auction` lock the surplus lot until `close_surplus_auction` (every take fails `ProtocolTokenMismatch`), and made `start_debt` fail `ProtocolTokenMismatch`, which `check_solvency` maps to Freeze above the threshold.
+THREAT_MODEL finding 4 (MEDIUM, accepted in Plan 2): `init_config` / `set_engine_params` recorded an enabled protocol-token slot by id only. A non-token account there let `start_surplus_auction` lock the surplus lot until `close_surplus_auction` (every take fails `ProtocolTokenMismatch`), and made `start_debt` fail `ProtocolTokenMismatch`, which `check_solvency` maps to Freeze above the threshold when `freeze_on_bad_debt` is set.
 
 **Options**
 - (A) Require a fungible token definition owned by the config's token program.

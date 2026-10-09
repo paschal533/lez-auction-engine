@@ -1,4 +1,4 @@
-From 45bf4969f342e7776f0334e2baeffc61dab7510d Mon Sep 17 00:00:00 2001
+From d6191c18b837e92d756844951772d4138b2541a5 Mon Sep 17 00:00:00 2001
 From: paschal533 <okwuosahpaschal@gmail.com>
 Date: Tue, 6 Oct 2026 14:48:32 +0100
 Subject: [PATCH] fix(stablecoin): round the proportional seize bound down
@@ -10,8 +10,6 @@ position. The bound now rounds down; full seizure is unaffected (floor(1.25*C) >
 capped at C). ADR-026 amended (spec 5.10 / ADR-016 pointer), hooks.md updated with the
 rounding rationale and the dust note. New tests: exact floor values, projection-only
 liquidatability, and equality-at-threshold is healthy.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  programs/stablecoin/src/liquidation_hooks.rs | 132 +++++++++++++++++--
  1 file changed, 121 insertions(+), 11 deletions(-)

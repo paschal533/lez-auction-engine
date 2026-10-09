@@ -1,10 +1,9 @@
-From 8130d95f0c507a25d49fed36fe7ab3b52d8a54f3 Mon Sep 17 00:00:00 2001
+From 637e954f3654da8aa66c63e820bfcb0ea5d46331 Mon Sep 17 00:00:00 2001
 From: paschal533 <okwuosahpaschal@gmail.com>
 Date: Tue, 6 Oct 2026 13:54:37 +0100
 Subject: [PATCH] feat(stablecoin): engine binding and Variant C freeze hook,
  appended at enum/IDL 19-21; ADR-026
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  programs/stablecoin/core/src/lib.rs           |  98 +++++
  .../core/src/liquidation_engine_state.rs      |  62 +++

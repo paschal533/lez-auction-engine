@@ -1,10 +1,9 @@
-From 79c723b5beadef4e8353fbff3d420f747aab0182 Mon Sep 17 00:00:00 2001
+From 7af0f64845b8dd208b6b4cd0cdcb2fe7a52960d0 Mon Sep 17 00:00:00 2001
 From: paschal533 <okwuosahpaschal@gmail.com>
 Date: Tue, 6 Oct 2026 14:13:08 +0100
 Subject: [PATCH] fix(stablecoin): test setter PDA/owner guards; IDL path
  fallback for upstream; hook hardening
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  programs/stablecoin/core/src/lib.rs          | 57 ++++++++++++-----
  programs/stablecoin/src/liquidation_hooks.rs | 65 ++++++++++++++++++--

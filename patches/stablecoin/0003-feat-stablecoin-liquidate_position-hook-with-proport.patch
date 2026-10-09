@@ -1,4 +1,4 @@
-From d0bea8e8155b4cd4b1420dc2762ca85c11e0a3f0 Mon Sep 17 00:00:00 2001
+From 28603bd7f4cb5e8d0546ec0c8a230caa1c32e4fc Mon Sep 17 00:00:00 2001
 From: paschal533 <okwuosahpaschal@gmail.com>
 Date: Tue, 6 Oct 2026 14:32:56 +0100
 Subject: [PATCH] feat(stablecoin): liquidate_position hook with
@@ -13,8 +13,6 @@ checks::is_position_collateralized (assert_position_is_collateralized delegates 
 Full seizure sweeps the whole vault balance (donations included); partial seizure moves
 exactly the seized amount. Allowed while frozen. Replaces the temporary guest stub and
 regenerates the IDL.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  .../methods/guest/src/bin/stablecoin.rs       |  41 +-
  programs/stablecoin/src/checks.rs             |  30 +-

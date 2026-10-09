@@ -4,7 +4,7 @@ The SDK is the only way the CLI (and, in Plan 4, the FFI) talks to the engine. I
 
 ## Chain
 
-`chain::Chain` = `account`, `nonces`, `last_block_id`, `blocks(from..=to)`, `send`. Implementations: `rpc::RpcChain` (sequencer JSON-RPC, feature `rpc`), `testing::FixtureChain` (in memory, feature `testing`), and `WorldChain` in `programs/integration_tests/tests/common/sdk.rs` (the real guests in an in-process `V03State`). An uninitialised account is `Account::default()`, never an error. `send` success means accepted, not executed (spec §3.2).
+`chain::Chain` = `account`, `nonces`, `last_block_id`, `blocks(from..=to)`, `send`. Implementations: `testing::FixtureChain` (in memory, feature `testing`); planned: `WorldChain` in `programs/integration_tests/tests/common/sdk.rs` (the real guests in an in-process `V03State`, Task 8) and `rpc::RpcChain` (sequencer JSON-RPC, feature `rpc`, Task 12). An uninitialised account is `Account::default()`, never an error. `send` success means accepted, not executed (spec §3.2).
 
 ## Encoding
 

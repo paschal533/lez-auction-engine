@@ -7,7 +7,7 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
     program::{AccountPostState, Claim, PdaSeed, ProgramId, DEFAULT_PROGRAM_ID},
 };
-use token_core::TokenHolding;
+use token_core::{TokenDefinition, TokenHolding};
 
 pub const ZERO_ID: AccountId = AccountId::new([0; 32]);
 
@@ -222,6 +222,22 @@ pub fn check_distinct_slots(
         }
     }
     Ok(())
+}
+
+/// ADR-038 (THREAT_MODEL finding 4): an enabled protocol-token slot must be a fungible token
+/// definition owned by the config's token program. The mint authority is checked at use time
+/// (`system::protocol_token_status`), because the token program lets it be rotated.
+pub fn require_token_definition(
+    acc: &AccountWithMetadata,
+    token_program: &ProgramId,
+) -> Result<(), EngineError> {
+    if acc.account.program_owner != *token_program {
+        return Err(EngineError::ProtocolTokenMismatch);
+    }
+    match TokenDefinition::try_from(&acc.account.data) {
+        Ok(TokenDefinition::Fungible { .. }) => Ok(()),
+        _ => Err(EngineError::ProtocolTokenMismatch),
+    }
 }
 
 /// At use time: the slot account must be exactly the configured one, or the placeholder.

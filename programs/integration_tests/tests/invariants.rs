@@ -626,11 +626,10 @@ fn no_admin_instruction_moves_surplus_or_buffer_funds() {
     );
 }
 
-/// Finding for the controller: with no live system auction nothing but `optional_slot` judges the
-/// protocol-token slot, so an admin can point it at any non-zero id, a fund account included. That only rewrites
-/// the config (no instruction moves funds on that path); the test pins what is observed.
+/// ADR-038 (THREAT_MODEL finding 4): the protocol-token slot is validated at config time, so the admin
+/// can no longer point it at a fund account; the config and every fund stay unchanged.
 #[test]
-fn admin_fund_account_in_protocol_token_slot_without_live_auction() {
+fn admin_cannot_point_the_protocol_token_slot_at_a_fund_account() {
     let mut w = World::with_system(false);
     let pos = w.unsafe_position();
     w.liquidate(pos, 0).unwrap();
@@ -641,38 +640,18 @@ fn admin_fund_account_in_protocol_token_slot_without_live_auction() {
         &admin_params(),
         [buffer(), unused(0)],
         accounting(),
-        None,
+        Some("ProtocolTokenMismatch"),
     );
     run_attempt(&mut w, pos, false, &a);
     let cfg: EngineConfigState = w.read(config());
     assert_eq!(
         cfg.protocol_token,
-        Some(buffer()),
-        "accepted: the config now names the buffer as protocol token"
+        Some(protocol_token_def()),
+        "the configured token is unchanged"
     );
     assert_eq!(
         before,
         fund_snapshot(&w, pos, false),
         "no fund or book moved"
     );
-    // Observed: the repointed config does not stop a permissionless start (it never reads the protocol-token
-    // definition), but a take, which burns protocol tokens, is refused.
-    w.start_surplus(0)
-        .expect("start_surplus does not read the protocol-token slot");
-    assert_err(
-        w.take_surplus(0, 100, u128::MAX),
-        r#"WrongAccount(\"slot\")"#,
-    );
-    // Passing the buffer itself as the definition satisfies the slot id but not the use-time token check.
-    let mut accounts = w.take_surplus_accounts(0);
-    accounts[6] = buffer();
-    let result = w.engine(
-        accounts,
-        &[k::TAKER_PROTOCOL],
-        Ix::TakeSurplus {
-            amount_coin: 100,
-            max_protocol_in: u128::MAX,
-        },
-    );
-    assert_err(result, "ProtocolTokenMismatch");
 }

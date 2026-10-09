@@ -840,3 +840,24 @@ Until 3b, CI still runs only the `auction_core` job, and the ImageIDs in `DEPLOY
 
 **Status**
 Accepted (Plan 3a, Task 1)
+
+---
+
+## ADR-038: The Protocol-Token Slot Is Validated at Config Time
+
+**Context**
+THREAT_MODEL finding 4 (MEDIUM, accepted in Plan 2): `init_config` / `set_engine_params` recorded an enabled protocol-token slot by id only. A non-token account there let `start_surplus_auction` lock the surplus lot until `close_surplus_auction` (every take fails `ProtocolTokenMismatch`), and made `start_debt` fail `ProtocolTokenMismatch`, which `check_solvency` maps to Freeze above the threshold.
+
+**Options**
+- (A) Require a fungible token definition owned by the config's token program.
+- (B) (A) plus `["MINT_AUTH", config]` as its mint authority.
+- (C) Keep use-time checks only.
+
+**Decision**
+(A), checked in `init_config` after the slot checks and in `set_engine_params` after the live-auction lock (so a locked change still reports `ProtocolTokenLocked`). Not (B): the token program can rotate a mint authority (`SetAuthority`), so a config-time authority check would not hold later, and a surplus-only token without a mint authority is legitimate; `MintAuthorityMissing` remains a spec §5.11 freeze reason at use time.
+
+**Trade-offs**
+The mock token must exist before a config names it (fixtures and the localnet runbook create it first). The use-time `ProtocolTokenMismatch` checks remain as defence in depth; tests reach them only through force-inserted accounts.
+
+**Status**
+Accepted (Plan 3a, Task 2)

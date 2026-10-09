@@ -55,6 +55,9 @@ impl World {
     /// tokens in the taker's holding; the taker's stablecoin holding exists (empty).
     pub fn with_system(ref_oracle_enabled: bool) -> Self {
         let mut w = Self::new();
+        // ADR-038: the token must exist before the config names it.
+        w.create_protocol_token(10_000, mint_authority())
+            .expect("mock protocol token");
         let p = EngineParamsArgs {
             protocol_token_enabled: true,
             ref_oracle_enabled,
@@ -67,8 +70,6 @@ impl World {
         w.bind_engine().expect("bind");
         w.set_collateral_config(k::ENGINE_ADMIN, &CollateralArgs::defaults_for_tests())
             .expect("collateral");
-        w.create_protocol_token(10_000, mint_authority())
-            .expect("mock protocol token");
         w.holding(k::TAKER_STABLE, stable_def(), 0);
         w
     }

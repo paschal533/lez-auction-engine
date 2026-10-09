@@ -236,3 +236,20 @@ fn nobody_can_squat_the_admins_config_address() {
     assert_err(r, "PdaMismatch");
     assert_ne!(pda::config_pda(&e, &id(k::ATTACKER), SALT), config());
 }
+
+#[test]
+fn protocol_token_must_be_a_token_definition_at_config_time() {
+    let mut w = World::new();
+    let p = EngineParamsArgs {
+        protocol_token_enabled: true,
+        ..EngineParamsArgs::defaults_for_tests()
+    };
+    // The slot names the mock-token id, but no definition exists there yet.
+    assert_err(w.init_engine_config(&p), "ProtocolTokenMismatch");
+    w.create_protocol_token(10_000, mint_authority())
+        .expect("mock protocol token");
+    w.init_engine_config(&p)
+        .expect("a fungible definition owned by the token program");
+    let cfg: EngineConfigState = w.read(config());
+    assert_eq!(cfg.protocol_token, Some(protocol_token_def()));
+}

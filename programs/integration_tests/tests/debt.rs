@@ -25,12 +25,18 @@ fn acc(w: &World) -> AccountingState {
 /// booked (unbacked 355_049); the taker holds 1_000 stablecoin.
 fn debt_world(authority: Option<AccountId>, params: EngineParamsArgs) -> World {
     let mut w = World::new();
+    // ADR-038: an enabled protocol token must already be a token definition when the config names it.
+    w.create_protocol_token(10_000, authority.unwrap_or_else(mint_authority))
+        .unwrap();
     w.init_engine_config(&params).unwrap();
     w.bind_engine().unwrap();
     w.set_collateral_config(k::ENGINE_ADMIN, &CollateralArgs::defaults_for_tests())
         .unwrap();
-    if let Some(a) = authority {
-        w.create_protocol_token(10_000, a).unwrap();
+    if authority.is_none() {
+        // Defensive path only: a validated slot cannot stop being a token definition on-chain, so the
+        // use-time ProtocolTokenMismatch is reached by force-inserting an empty account over it.
+        w.state
+            .force_insert_account(protocol_token_def(), lee_core::account::Account::default());
     }
     w.book_shortfall();
     w.fund_stable(k::TAKER_STABLE, 1_000);

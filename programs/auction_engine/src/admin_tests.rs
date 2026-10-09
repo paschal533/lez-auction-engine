@@ -11,10 +11,11 @@ use auction_engine_core::{
     EngineError,
 };
 use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Data},
     program::ProgramId,
 };
 use stablecoin_core::ProtocolParameters;
+use token_core::TokenDefinition;
 
 use crate::{
     accounts::{load_config, ZERO_ID},
@@ -463,9 +464,9 @@ fn set_engine_params_locks_a_protocol_token_swap_while_live() {
         a.protocol_token_definition = fresh(OTHER);
         assert_eq!(rejected(set(a, &enabled)), EngineError::ProtocolTokenLocked);
     }
-    // Not live: the same swap is accepted.
+    // Not live: the same swap is accepted when the slot is a real token definition (ADR-038).
     let mut a = plain(ADMIN, true);
-    a.protocol_token_definition = fresh(OTHER);
+    a.protocol_token_definition = token_def(OTHER, TOKEN);
     assert!(set(a, &enabled).is_ok());
 }
 
@@ -552,4 +553,96 @@ fn load_config_rejects_an_id_that_is_not_the_config_pda() {
         load_config(&ENGINE, &acc),
         Err(EngineError::WrongAccount("config"))
     );
+}
+
+pub(crate) fn token_def(id: AccountId, owner: ProgramId) -> AccountWithMetadata {
+    meta(
+        id,
+        Account {
+            program_owner: owner,
+            data: Data::from(&TokenDefinition::Fungible {
+                name: String::from("MOCK"),
+                total_supply: 0,
+                metadata_id: None,
+                authority: None,
+            }),
+            ..Account::default()
+        },
+        false,
+    )
+}
+
+fn nft_def(id: AccountId) -> AccountWithMetadata {
+    meta(
+        id,
+        Account {
+            program_owner: TOKEN,
+            data: Data::from(&TokenDefinition::NonFungible {
+                name: String::from("NFT"),
+                printable_supply: 1,
+                metadata_id: OTHER,
+            }),
+            ..Account::default()
+        },
+        false,
+    )
+}
+
+#[test]
+fn init_config_requires_the_protocol_token_to_be_a_fungible_token_definition() {
+    let enabled = EngineParamsArgs {
+        protocol_token_enabled: true,
+        ..EngineParamsArgs::defaults_for_tests()
+    };
+    for (what, slot) in [
+        ("uninitialised account", fresh(OTHER)),
+        ("owned by another program", token_def(OTHER, HOST)),
+        ("non-fungible definition", nft_def(OTHER)),
+    ] {
+        let mut a = init_accounts(ADMIN);
+        a.protocol_token_definition = slot;
+        assert_eq!(
+            rejected(init(a, &enabled)),
+            EngineError::ProtocolTokenMismatch,
+            "{what}"
+        );
+    }
+    let mut a = init_accounts(ADMIN);
+    a.protocol_token_definition = token_def(OTHER, TOKEN);
+    assert!(
+        init(a, &enabled).is_ok(),
+        "a fungible definition of the token program"
+    );
+}
+
+#[test]
+fn set_engine_params_requires_a_token_definition_for_the_protocol_token() {
+    let enabled = EngineParamsArgs {
+        protocol_token_enabled: true,
+        ..at_price(OLD_REF_PRICE)
+    };
+    let mut a = plain(ADMIN, true);
+    a.protocol_token_definition = fresh(OTHER);
+    assert_eq!(
+        rejected(set(a, &enabled)),
+        EngineError::ProtocolTokenMismatch
+    );
+    let mut a = plain(ADMIN, true);
+    a.protocol_token_definition = token_def(OTHER, TOKEN);
+    assert!(set(a, &enabled).is_ok());
+}
+
+#[test]
+fn a_locked_protocol_token_change_still_reports_the_lock_first() {
+    let live = AccountingState {
+        surplus_live: true,
+        ..AccountingState::new()
+    };
+    let enabled = EngineParamsArgs {
+        protocol_token_enabled: true,
+        ..at_price(OLD_REF_PRICE)
+    };
+    let mut a = set_accounts(ADMIN, true, None, &live);
+    a.protocol_token_definition = fresh(OTHER);
+    assert_eq!(rejected(set(a, &enabled)), EngineError::ProtocolTokenLocked);
 }

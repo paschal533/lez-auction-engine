@@ -95,6 +95,9 @@ pub fn init_config(
         &params.stablecoin_definition_id,
         &params.collateral_definition_id,
     )?;
+    if protocol_token.is_some() {
+        require_token_definition(&a.protocol_token_definition, &token_program_id)?;
+    }
 
     let cfg = EngineConfigState {
         tag: TAG_CONFIG,
@@ -201,6 +204,9 @@ pub fn set_engine_params(
         || system_rec != cfg.system;
     if locked_fields_change && (acc.surplus_live || acc.debt_live) {
         return Err(EngineError::ProtocolTokenLocked);
+    }
+    if protocol_token.is_some() {
+        require_token_definition(&a.protocol_token_definition, &cfg.token_program_id)?;
     }
     let next = EngineConfigState {
         protocol_token,

@@ -24,8 +24,12 @@ mod settle_tests;
 pub mod solvency;
 pub mod surplus;
 #[cfg(test)]
+mod surplus_take_tests;
+#[cfg(test)]
 mod surplus_tests;
 pub mod system;
+#[cfg(test)]
+mod system_tests;
 pub mod token_calls;
 
 use auction_engine_core::EngineError;

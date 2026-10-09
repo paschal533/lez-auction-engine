@@ -819,3 +819,24 @@ A second guest build in the test workspace (one more long first build).
 
 **Status**
 Accepted (Plan 2, Task 18)
+
+---
+
+## ADR-037: Plan 3 Is Split into 3a (Engine Hardening, SDK, CLI) and 3b (CI, Real Proofs, Reproducible Builds, Evidence)
+
+**Context**
+Plan 3 (ADR-018 split: SDK / CLI / CI / real proofs) gathered the spec §6.1, §6.4–§6.6, §9, §11 and §12 obligations plus thirteen carry-overs from Plan 2 (`docs/architecture/programs.md`). Planned as one document it is about 30 tasks in two independent deliverables.
+
+**Options**
+- (A) One Plan 3.
+- (B) 3a = engine hardening (THREAT_MODEL findings 4 and 8), test hygiene, `auction_sdk`, `auction_cli`, CLI-driven localnet smoke; 3b = program CI with risc0, real-proof CI, Docker reproducible builds and the ImageID refresh, `CYCLES.md` and the ADR-023 re-measure, `REQUIREMENTS.md` and its checker, `cargo-fuzz`, coverage gate, red-team pass, oracle publisher/keeper, one-command demo, upstream issue drafts, `SUBMISSION.md`.
+- (C) Split by layer (programs vs clients).
+
+**Decision**
+(B). 3a ships working software on its own (a user drives the engine from the CLI on localnet without spel). 3b depends on 3a (its real-proof end-to-end job and the demo drive the CLI); 3a does not depend on 3b. Both on-chain changes land in 3a, so 3b's reproducible builds refresh the ImageIDs once, after the last guest change.
+
+**Trade-offs**
+Until 3b, CI still runs only the `auction_core` job, and the ImageIDs in `DEPLOYMENTS.md` remain native-build values (THREAT_MODEL I4 residual). The 3a localnet run cannot show F4 or the freeze path: both need a shortfall, which needs a moving oracle price (3b publisher).
+
+**Status**
+Accepted (Plan 3a, Task 1)

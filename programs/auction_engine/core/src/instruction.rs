@@ -123,6 +123,35 @@ pub enum Instruction {
     CheckSolvency,
 }
 
+impl Instruction {
+    /// IDL name of the variant (== guest function name). Exhaustive on purpose: a new variant does not
+    /// compile until it is named here; `instruction_samples` must then gain its sample, which the
+    /// integration test `every_engine_variant_has_a_sample_and_an_idl_entry_at_its_enum_index` checks
+    /// against the regenerated IDL.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::InitConfig { .. } => "init_config",
+            Self::SetEngineParams { .. } => "set_engine_params",
+            Self::SetCollateralConfig { .. } => "set_collateral_config",
+            Self::ObserveFeed => "observe_feed",
+            Self::Liquidate { .. } => "liquidate",
+            Self::Bid { .. } => "bid",
+            Self::BidWithSettlement { .. } => "bid_with_settlement",
+            Self::SettleEmpty => "settle_empty",
+            Self::ClaimLeftover => "claim_leftover",
+            Self::SettleDebt { .. } => "settle_debt",
+            Self::StartSurplusAuction { .. } => "start_surplus_auction",
+            Self::TakeSurplus { .. } => "take_surplus",
+            Self::CloseSurplusAuction => "close_surplus_auction",
+            Self::StartDebtAuction { .. } => "start_debt_auction",
+            Self::TakeDebt { .. } => "take_debt",
+            Self::CloseDebtAuction => "close_debt_auction",
+            Self::CheckSolvency => "check_solvency",
+        }
+    }
+}
+
 /// One sample per `Instruction` variant, in enum order (index `i` is variant `i`).
 ///
 /// Test support: lets tests derive per-variant tables (admin set, enum indices) from the enum
@@ -217,4 +246,27 @@ pub fn instruction_samples() -> Vec<Instruction> {
         Instruction::CloseDebtAuction,
         Instruction::CheckSolvency,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instruction_samples_cover_every_variant_in_order() {
+        let samples = instruction_samples();
+        for (i, ix) in samples.iter().enumerate() {
+            let words = risc0_zkvm::serde::to_vec(ix).expect("serializes");
+            assert_eq!(
+                usize::try_from(words[0]).expect("u32 fits usize"),
+                i,
+                "sample {i} ({}) is variant {i}",
+                ix.name()
+            );
+        }
+        let mut names: Vec<&str> = samples.iter().map(Instruction::name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), samples.len(), "one sample per variant");
+    }
 }

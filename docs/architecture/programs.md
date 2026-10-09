@@ -119,8 +119,8 @@ Plan 3 carry-overs:
 - `REQUIREMENTS.md` plus its checker, `cargo-fuzz`, and a red-team pass.
 - An oracle price publisher / keeper.
 - Upstream issue for the stablecoin guest function order (spel mis-encodes IDL positions 8-18).
-- Split oversized test files (`tests/common/mod.rs` 1273 lines, `surplus_tests.rs` 958 lines).
-- Make the drift tests catch new variants: an exhaustive `match` over the engine `Instruction` next to `instruction_samples()`, and over `stablecoin_core::Instruction` in `stablecoin_idl_position_maps_to_enum_index` (a variant with no IDL entry currently passes).
+- Done (Plan 3a Task 1): `tests/common/mod.rs` split into `mod.rs`/`engine.rs`/`system.rs`, `surplus_tests.rs` into `surplus_tests.rs` (fixtures, `start`/`close` tests and the `live_auction`/`live_accounting` helpers shared with the take tests), `system_tests.rs` and `surplus_take_tests.rs`; the drift tests are exhaustive (`Instruction::name`, `stablecoin_name`) and compare the sample sets with the IDLs.
+- Plan split: 3a (engine hardening, SDK, CLI) and 3b (CI, real proofs, reproducible builds, evidence), ADR-037.
 
 ## Test harness
 

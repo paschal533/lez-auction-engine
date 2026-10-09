@@ -14,6 +14,8 @@ mod bid_tests;
 mod collateral_tests;
 pub mod debt;
 #[cfg(test)]
+mod debt_relist_tests;
+#[cfg(test)]
 mod debt_tests;
 pub mod feed;
 pub mod liquidate;

@@ -255,6 +255,8 @@ pub struct AccountingState {
     pub total_protocol_minted: u128,
     pub total_surplus_lots_out: u128,
     pub total_surplus_returned: u128,
+    /// When the last debt auction ended (close or final take), ms; 0 before the first one (ADR-039).
+    pub last_debt_end_ms: u64,
 }
 account_data!(AccountingState, TAG_ACCOUNTING);
 
@@ -284,6 +286,7 @@ impl AccountingState {
             total_protocol_minted: 0,
             total_surplus_lots_out: 0,
             total_surplus_returned: 0,
+            last_debt_end_ms: 0,
         }
     }
 

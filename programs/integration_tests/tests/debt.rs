@@ -1,7 +1,7 @@
 mod common;
 
 use auction_engine_core::{
-    args::{CollateralArgs, EngineParamsArgs},
+    args::{CollateralArgs, EngineParamsArgs, DEBT_RELIST_DELAY_MS},
     state::{AccountingState, DebtAuctionState},
 };
 use common::*;
@@ -188,6 +188,7 @@ fn start_needs_the_next_nonce_and_a_single_live_auction() {
     assert_err(w.start_debt(0), "AccountAlreadyInitialized");
     assert_eq!(acc(&w).debt_on_auction, 500, "only one reservation");
     take(&mut w, TAKE_ALL, 0).unwrap();
+    w.advance(DEBT_RELIST_DELAY_MS); // ADR-039 relist delay
     w.start_debt(1)
         .expect("a new auction after the first ended");
     assert_eq!((acc(&w).debt_on_auction, acc(&w).debt_nonce), (500, 2));
@@ -329,4 +330,65 @@ fn protocol_token_locked_while_debt_auction_live() {
     take(&mut w, 500, 250).unwrap();
     w.set_engine_params(k::ENGINE_ADMIN, &off)
         .expect("unlocked once the auction ended");
+}
+
+#[test]
+fn a_closed_debt_auction_cannot_be_relisted_before_the_delay_so_the_admin_can_swap_the_token() {
+    let mut w = debt_world(Some(mint_authority()), token_params());
+    w.start_debt(0).unwrap();
+    w.advance(token_params().system_ttl_ms);
+    w.close_debt(0).expect("anyone closes after the ttl");
+    assert_err(w.start_debt(1), "DelayNotElapsed");
+    let off = EngineParamsArgs {
+        protocol_token_enabled: false,
+        ..token_params()
+    };
+    w.set_engine_params(k::ENGINE_ADMIN, &off)
+        .expect("no debt auction is live during the relist delay: the admin may change the token");
+    w.advance(DEBT_RELIST_DELAY_MS);
+    assert_err(w.start_debt(1), "TokenNotConfigured");
+}
+
+#[test]
+fn a_fully_taken_debt_auction_also_starts_the_relist_delay() {
+    let mut w = debt_world(Some(mint_authority()), token_params());
+    w.start_debt(0).unwrap();
+    take(&mut w, 500, 0).expect("take the whole lot");
+    assert_err(w.start_debt(1), "DelayNotElapsed");
+    w.advance(DEBT_RELIST_DELAY_MS - 1);
+    assert_err(w.start_debt(1), "DelayNotElapsed");
+    w.advance(1);
+    w.start_debt(1).expect("relist after the delay");
+    assert!(acc(&w).debt_live);
+}
+
+/// The griefing loop of finding 8: start, wait the ttl, close, relist. The relist is refused for the
+/// delay, so the admin changes a locked system parameter in the window; after the delay the griefer's
+/// next auction locks the parameters again, and its close opens the next window.
+#[test]
+fn the_griefing_loop_leaves_the_admin_a_window_after_every_close() {
+    let mut w = debt_world(Some(mint_authority()), token_params());
+    let ttl = token_params().system_ttl_ms;
+    w.start_debt(0).expect("the griefer lists");
+    w.advance(ttl);
+    w.close_debt(0).expect("and closes after the ttl");
+    assert_err(w.start_debt(1), "DelayNotElapsed");
+    let longer = EngineParamsArgs {
+        system_ttl_ms: ttl + 1_000,
+        ..token_params()
+    };
+    w.set_engine_params(k::ENGINE_ADMIN, &longer)
+        .expect("a locked system parameter changes inside the window");
+
+    w.advance(DEBT_RELIST_DELAY_MS);
+    w.start_debt(1)
+        .expect("the griefer relists after the delay");
+    assert_err(
+        w.set_engine_params(k::ENGINE_ADMIN, &token_params()),
+        "ProtocolTokenLocked",
+    );
+    w.advance(ttl + 1_000);
+    w.close_debt(1).expect("close again");
+    w.set_engine_params(k::ENGINE_ADMIN, &token_params())
+        .expect("the next close opens the next window");
 }

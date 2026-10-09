@@ -28,23 +28,23 @@ use crate::{
     token_calls, EngineResult,
 };
 
-const OTHER_PROGRAM: [u32; 8] = [0x77; 8];
-const LOT: u128 = 500;
-const START_AMOUNT: u128 = 250; // floor(500 / 2)
-const UNBACKED: u128 = 2_000;
-const BUFFER: u128 = 300;
-const TTL: u64 = 14_400_000;
-const MINTED_BEFORE: u128 = 7;
+pub(crate) const OTHER_PROGRAM: [u32; 8] = [0x77; 8];
+pub(crate) const LOT: u128 = 500;
+pub(crate) const START_AMOUNT: u128 = 250; // floor(500 / 2)
+pub(crate) const UNBACKED: u128 = 2_000;
+pub(crate) const BUFFER: u128 = 300;
+pub(crate) const TTL: u64 = 14_400_000;
+pub(crate) const MINTED_BEFORE: u128 = 7;
 
-fn engine_mint_authority() -> AccountId {
+pub(crate) fn engine_mint_authority() -> AccountId {
     mint_authority_pda(&ENGINE, &cfg_id())
 }
 
-fn debt_id(nonce: u64) -> AccountId {
+pub(crate) fn debt_id(nonce: u64) -> AccountId {
     debt_auction_pda(&ENGINE, &cfg_id(), nonce)
 }
 
-fn debt_def(authority: Option<AccountId>, owner: [u32; 8]) -> AccountWithMetadata {
+pub(crate) fn debt_def(authority: Option<AccountId>, owner: [u32; 8]) -> AccountWithMetadata {
     meta(
         PROTOCOL,
         Account {
@@ -61,23 +61,23 @@ fn debt_def(authority: Option<AccountId>, owner: [u32; 8]) -> AccountWithMetadat
     )
 }
 
-fn good_def() -> AccountWithMetadata {
+pub(crate) fn good_def() -> AccountWithMetadata {
     debt_def(Some(engine_mint_authority()), TOKEN)
 }
 
-fn mint_authority_account() -> AccountWithMetadata {
+pub(crate) fn mint_authority_account() -> AccountWithMetadata {
     fresh(engine_mint_authority())
 }
 
-fn debt_account(state: &DebtAuctionState) -> AccountWithMetadata {
+pub(crate) fn debt_account(state: &DebtAuctionState) -> AccountWithMetadata {
     meta(debt_id(state.nonce), engine_owned(state.into()), false)
 }
 
-fn debt_of(p: &AccountPostState) -> DebtAuctionState {
+pub(crate) fn debt_of(p: &AccountPostState) -> DebtAuctionState {
     DebtAuctionState::try_from(&p.account().data).expect("debt auction decodes")
 }
 
-fn live_debt(lot_left: u128) -> DebtAuctionState {
+pub(crate) fn live_debt(lot_left: u128) -> DebtAuctionState {
     DebtAuctionState {
         tag: TAG_DEBT,
         config: cfg_id(),
@@ -91,7 +91,7 @@ fn live_debt(lot_left: u128) -> DebtAuctionState {
 
 // ---- start_debt_auction ----
 
-fn start_accounting() -> AccountingState {
+pub(crate) fn start_accounting() -> AccountingState {
     AccountingState {
         unbacked_debt: UNBACKED,
         total_debt_settled: 11,
@@ -99,7 +99,7 @@ fn start_accounting() -> AccountingState {
     }
 }
 
-fn start_fixture() -> StartDebtAccounts {
+pub(crate) fn start_fixture() -> StartDebtAccounts {
     StartDebtAccounts {
         caller: meta(CALLER, Default::default(), true),
         config: config_account(&protocol_config(false)),
@@ -113,19 +113,19 @@ fn start_fixture() -> StartDebtAccounts {
     }
 }
 
-fn run_start(a: StartDebtAccounts, nonce: u64) -> EngineResult {
+pub(crate) fn run_start(a: StartDebtAccounts, nonce: u64) -> EngineResult {
     start_debt_auction(ENGINE, a, nonce)
 }
 
-fn start_err(a: StartDebtAccounts) -> EngineError {
+pub(crate) fn start_err(a: StartDebtAccounts) -> EngineError {
     rejected(run_start(a, 0))
 }
 
-const S_ACCOUNTING: usize = 2;
-const S_AUCTION: usize = 5;
+pub(crate) const S_ACCOUNTING: usize = 2;
+pub(crate) const S_AUCTION: usize = 5;
 
 #[test]
-fn start_reserves_the_lot_burns_the_implicit_settle_and_creates_the_auction() {
+pub(crate) fn start_reserves_the_lot_burns_the_implicit_settle_and_creates_the_auction() {
     let f = start_fixture();
     let (def, buffer) = (f.stablecoin_definition.clone(), f.buffer.clone());
     let (post, calls) = run_start(f, 0).expect("start");
@@ -169,7 +169,7 @@ fn start_reserves_the_lot_burns_the_implicit_settle_and_creates_the_auction() {
 }
 
 #[test]
-fn start_without_buffer_funds_chains_nothing() {
+pub(crate) fn start_without_buffer_funds_chains_nothing() {
     let mut f = start_fixture();
     f.buffer = holding(buffer_id(), STABLE, 0, false);
     let (post, calls) = run_start(f, 0).expect("start");
@@ -179,7 +179,7 @@ fn start_without_buffer_funds_chains_nothing() {
 }
 
 #[test]
-fn start_eligibility_is_unbacked_minus_the_buffer_at_least_the_lot() {
+pub(crate) fn start_eligibility_is_unbacked_minus_the_buffer_at_least_the_lot() {
     let mut f = start_fixture();
     f.accounting = accounting_account(&AccountingState {
         unbacked_debt: BUFFER + LOT - 1,
@@ -204,7 +204,7 @@ fn start_eligibility_is_unbacked_minus_the_buffer_at_least_the_lot() {
 }
 
 #[test]
-fn start_allows_only_one_live_auction_and_the_next_nonce() {
+pub(crate) fn start_allows_only_one_live_auction_and_the_next_nonce() {
     assert_eq!(
         rejected(run_start(start_fixture(), 1)),
         EngineError::NonceMismatch
@@ -230,7 +230,7 @@ fn start_allows_only_one_live_auction_and_the_next_nonce() {
 }
 
 #[test]
-fn start_rejections_follow_the_freeze_list() {
+pub(crate) fn start_rejections_follow_the_freeze_list() {
     let mut f = start_fixture();
     f.config = config_account(&config_state());
     f.protocol_token_definition = placeholder(SLOT_PROTOCOL_TOKEN);
@@ -261,7 +261,7 @@ fn start_rejections_follow_the_freeze_list() {
 }
 
 #[test]
-fn start_rejects_a_reference_price_that_cannot_mint_usefully() {
+pub(crate) fn start_rejects_a_reference_price_that_cannot_mint_usefully() {
     // 500 coin at 1/100 coin per token = 50_000 tokens > max_mint_per_auction (5_000).
     let mut cfg = protocol_config(false);
     cfg.protocol_token_ref_price = ONE / 100;
@@ -284,7 +284,7 @@ fn start_rejects_a_reference_price_that_cannot_mint_usefully() {
 }
 
 #[test]
-fn start_snapshots_the_clamped_oracle_price_into_the_start_amount() {
+pub(crate) fn start_snapshots_the_clamped_oracle_price_into_the_start_amount() {
     let cfg = protocol_config(true);
     let oracle_id = cfg.protocol_token_oracle_id.expect("oracle configured");
     let run = |price: u128| {
@@ -302,7 +302,7 @@ fn start_snapshots_the_clamped_oracle_price_into_the_start_amount() {
 }
 
 #[test]
-fn start_needs_a_signing_caller_and_validates_every_account() {
+pub(crate) fn start_needs_a_signing_caller_and_validates_every_account() {
     let mut f = start_fixture();
     f.caller.is_authorized = false;
     assert_eq!(start_err(f), EngineError::WrongAccount("caller"));
@@ -345,7 +345,7 @@ fn start_needs_a_signing_caller_and_validates_every_account() {
 
 // ---- take_debt ----
 
-fn take_accounting() -> AccountingState {
+pub(crate) fn take_accounting() -> AccountingState {
     AccountingState {
         unbacked_debt: UNBACKED,
         debt_on_auction: LOT,
@@ -356,7 +356,7 @@ fn take_accounting() -> AccountingState {
     }
 }
 
-fn take_fixture() -> TakeDebtAccounts {
+pub(crate) fn take_fixture() -> TakeDebtAccounts {
     TakeDebtAccounts {
         taker_stable_holding: holding(TAKER_STABLE, STABLE, 1_000, true),
         taker_protocol_holding: holding(TAKER_PROTOCOL, PROTOCOL, 10_000, false),
@@ -370,19 +370,19 @@ fn take_fixture() -> TakeDebtAccounts {
     }
 }
 
-fn run_take(a: TakeDebtAccounts, coin: u128, min_out: u128) -> EngineResult {
+pub(crate) fn run_take(a: TakeDebtAccounts, coin: u128, min_out: u128) -> EngineResult {
     take_debt(ENGINE, a, coin, min_out)
 }
 
-fn take_err(a: TakeDebtAccounts) -> EngineError {
+pub(crate) fn take_err(a: TakeDebtAccounts) -> EngineError {
     rejected(run_take(a, LOT, 0))
 }
 
-const T_ACCOUNTING: usize = 3;
-const T_AUCTION: usize = 4;
+pub(crate) const T_ACCOUNTING: usize = 3;
+pub(crate) const T_AUCTION: usize = 4;
 
 /// The two chained calls of a take: burn the filled coin from the taker, mint under the engine PDA.
-fn burn_and_mint(filled: u128, minted: u128) -> Vec<ChainedCall> {
+pub(crate) fn burn_and_mint(filled: u128, minted: u128) -> Vec<ChainedCall> {
     let f = take_fixture();
     vec![
         token_calls::burn(
@@ -404,7 +404,7 @@ fn burn_and_mint(filled: u128, minted: u128) -> Vec<ChainedCall> {
 }
 
 #[test]
-fn full_take_burns_the_lot_mints_the_start_amount_and_releases_the_reservation() {
+pub(crate) fn full_take_burns_the_lot_mints_the_start_amount_and_releases_the_reservation() {
     let (post, calls) = run_take(take_fixture(), LOT, START_AMOUNT).expect("take");
     assert_eq!(post.len(), 9);
     assert_eq!(calls, burn_and_mint(LOT, START_AMOUNT));
@@ -439,7 +439,7 @@ fn full_take_burns_the_lot_mints_the_start_amount_and_releases_the_reservation()
 }
 
 #[test]
-fn the_burn_is_authorised_by_the_taker_and_only_the_mint_carries_the_engine_seed() {
+pub(crate) fn the_burn_is_authorised_by_the_taker_and_only_the_mint_carries_the_engine_seed() {
     let (_, calls) = run_take(take_fixture(), LOT, 0).expect("take");
     assert!(calls[0].pda_seeds.is_empty(), "no engine seed on the burn");
     assert!(
@@ -459,7 +459,7 @@ fn the_burn_is_authorised_by_the_taker_and_only_the_mint_carries_the_engine_seed
 }
 
 #[test]
-fn max_amount_fills_at_most_the_lot_and_burns_and_records_only_the_fill() {
+pub(crate) fn max_amount_fills_at_most_the_lot_and_burns_and_records_only_the_fill() {
     // Review Focus 4.
     let (post, calls) = run_take(take_fixture(), u128::MAX, 0).expect("max take");
     assert_eq!(calls, burn_and_mint(LOT, START_AMOUNT));
@@ -486,7 +486,7 @@ fn max_amount_fills_at_most_the_lot_and_burns_and_records_only_the_fill() {
 }
 
 #[test]
-fn partial_take_burns_and_records_the_fill_and_keeps_the_rest_reserved() {
+pub(crate) fn partial_take_burns_and_records_the_fill_and_keeps_the_rest_reserved() {
     let (post, calls) = run_take(take_fixture(), 300, 150).expect("partial");
     assert_eq!(
         calls,
@@ -521,7 +521,7 @@ fn partial_take_burns_and_records_the_fill_and_keeps_the_rest_reserved() {
 }
 
 #[test]
-fn take_price_grows_with_time_and_the_absolute_cap_binds() {
+pub(crate) fn take_price_grows_with_time_and_the_absolute_cap_binds() {
     // growth 30% at 1_000 ms: offered = floor(250 x 1.3) = 325.
     let mut f = take_fixture();
     f.clock = clock_at(NOW + 1_000);
@@ -548,7 +548,7 @@ fn take_price_grows_with_time_and_the_absolute_cap_binds() {
 }
 
 #[test]
-fn take_core_rejections() {
+pub(crate) fn take_core_rejections() {
     let rej = |coin, min_out| rejected(run_take(take_fixture(), coin, min_out));
     assert_eq!(rej(495, 0), EngineError::DustRemainder);
     assert_eq!(rej(LOT, START_AMOUNT + 1), EngineError::Slippage);
@@ -562,7 +562,7 @@ fn take_core_rejections() {
 }
 
 #[test]
-fn a_take_that_would_mint_nothing_is_a_zero_fill() {
+pub(crate) fn a_take_that_would_mint_nothing_is_a_zero_fill() {
     // start_amount 1: floor(1 x 10 / 500) = 0 tokens for the smallest allowed fill.
     let mut f = take_fixture();
     f.debt_auction = debt_account(&DebtAuctionState {
@@ -573,7 +573,7 @@ fn a_take_that_would_mint_nothing_is_a_zero_fill() {
 }
 
 #[test]
-fn take_needs_the_taker_signature_and_enough_stablecoin() {
+pub(crate) fn take_needs_the_taker_signature_and_enough_stablecoin() {
     let mut f = take_fixture();
     f.taker_stable_holding.is_authorized = false;
     assert_eq!(
@@ -601,7 +601,7 @@ fn take_needs_the_taker_signature_and_enough_stablecoin() {
 }
 
 #[test]
-fn a_fresh_taker_protocol_holding_must_sign() {
+pub(crate) fn a_fresh_taker_protocol_holding_must_sign() {
     // Review Focus 2 / S7: the token program claims a fresh recipient with `Claim::Authorized`.
     let mut f = take_fixture();
     f.taker_protocol_holding = fresh(TAKER_PROTOCOL);
@@ -623,7 +623,7 @@ fn a_fresh_taker_protocol_holding_must_sign() {
 }
 
 #[test]
-fn take_checks_the_protocol_token_definition_and_the_mint_authority() {
+pub(crate) fn take_checks_the_protocol_token_definition_and_the_mint_authority() {
     let mut f = take_fixture();
     f.protocol_token_definition.account_id = FOREIGN;
     assert_eq!(take_err(f), EngineError::WrongAccount("slot"));
@@ -659,7 +659,7 @@ fn take_checks_the_protocol_token_definition_and_the_mint_authority() {
 }
 
 #[test]
-fn take_pins_the_auction_the_book_and_the_pairing() {
+pub(crate) fn take_pins_the_auction_the_book_and_the_pairing() {
     let mut f = take_fixture();
     f.debt_auction.account_id = debt_id(1);
     assert_eq!(take_err(f), EngineError::WrongAccount("debt_auction"));
@@ -692,7 +692,7 @@ fn take_pins_the_auction_the_book_and_the_pairing() {
 
 // ---- close_debt_auction ----
 
-fn close_fixture(lot_left: u128, now: u64) -> CloseDebtAccounts {
+pub(crate) fn close_fixture(lot_left: u128, now: u64) -> CloseDebtAccounts {
     CloseDebtAccounts {
         caller: meta(CALLER, Default::default(), true),
         config: config_account(&protocol_config(false)),
@@ -705,12 +705,12 @@ fn close_fixture(lot_left: u128, now: u64) -> CloseDebtAccounts {
     }
 }
 
-fn close_err(a: CloseDebtAccounts) -> EngineError {
+pub(crate) fn close_err(a: CloseDebtAccounts) -> EngineError {
     rejected(close_debt_auction(ENGINE, a))
 }
 
 #[test]
-fn close_releases_exactly_the_untaken_reservation_after_the_ttl() {
+pub(crate) fn close_releases_exactly_the_untaken_reservation_after_the_ttl() {
     let (post, calls) = close_debt_auction(ENGINE, close_fixture(200, NOW + TTL)).expect("close");
     assert!(calls.is_empty(), "nothing is minted or burned on close");
     assert_eq!(post.len(), 5);
@@ -738,7 +738,7 @@ fn close_releases_exactly_the_untaken_reservation_after_the_ttl() {
 }
 
 #[test]
-fn close_waits_for_the_ttl_and_needs_a_live_auction() {
+pub(crate) fn close_waits_for_the_ttl_and_needs_a_live_auction() {
     assert_eq!(
         close_err(close_fixture(200, NOW + TTL - 1)),
         EngineError::DelayNotElapsed
@@ -753,7 +753,7 @@ fn close_waits_for_the_ttl_and_needs_a_live_auction() {
 }
 
 #[test]
-fn close_pins_the_accounts_and_the_pairing() {
+pub(crate) fn close_pins_the_accounts_and_the_pairing() {
     let mut f = close_fixture(200, NOW + TTL);
     f.caller.is_authorized = false;
     assert_eq!(close_err(f), EngineError::WrongAccount("caller"));

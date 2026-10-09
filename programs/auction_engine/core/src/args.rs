@@ -14,6 +14,10 @@ use crate::EngineError;
 /// System auction ttl bounds (spec §5.12: 10 min – 7 d).
 pub const MIN_SYSTEM_TTL_MS: u64 = 600_000;
 pub const MAX_SYSTEM_TTL_MS: u64 = 604_800_000;
+/// ADR-039: no debt auction starts within this delay after the previous one ended (close or last
+/// take), so the admin always has a window in which no debt auction is live (THREAT_MODEL finding 8).
+/// Equal to the minimum system-auction TTL (spec §5.12).
+pub const DEBT_RELIST_DELAY_MS: u64 = 600_000;
 
 pub fn bps(v: u32) -> Result<u16, EngineError> {
     if u128::from(v) > BPS {

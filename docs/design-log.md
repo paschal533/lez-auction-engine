@@ -861,3 +861,24 @@ The mock token must exist before a config names it (fixtures and the localnet ru
 
 **Status**
 Accepted (Plan 3a, Task 2)
+
+---
+
+## ADR-039: Fixed Relist Delay Between Debt Auctions
+
+**Context**
+THREAT_MODEL finding 8 (MEDIUM, accepted in Plan 2): `start_debt_auction` and `close_debt_auction` are permissionless and the debt side had no delay, so a griefer could keep `debt_live` true almost all the time; `set_engine_params` then refuses protocol-token, oracle and system-parameter changes (`ProtocolTokenLocked`), and the admin wins only by ordering two transactions (close, change) between the griefer's close and next start.
+
+**Options**
+- (A) A `debt_delay_ms` engine parameter: new instruction argument, `SystemParams` field in `auction_core`, `start_debt` signature change (about 60 edit sites, IDL change).
+- (B) `set_engine_params` closes an expired debt auction atomically: the admin still loses when the griefer's close and start are ordered first at expiry.
+- (C) A fixed program-layer relist delay after any debt-auction end, recorded in `Accounting`.
+
+**Decision**
+(C), `DEBT_RELIST_DELAY_MS = 600_000` (the spec's minimum system TTL). After any end the admin has a guaranteed 10-minute window with no live debt auction. Engine-only: no argument, account list or `auction_core` change.
+
+**Trade-offs**
+Debt auctions are at most one per `system_ttl_ms + 10 min`, which slows recovery negligibly. The delay is not configurable (a parameter can be added in M3 if governance wants one). `AccountingState` grows by one `u64`, so existing localnet state needs a fresh deployment (Task 16 redeploys anyway).
+
+**Status**
+Accepted (Plan 3a, Task 3)

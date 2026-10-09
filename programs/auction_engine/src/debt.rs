@@ -7,7 +7,7 @@
 //! `record_debt_close(lot_left)`. The reservation therefore never exceeds the debt it reserves.
 
 use auction_core::system::{close_debt, start_debt, take_debt as core_take};
-use auction_engine_core::{pda, state::*, EngineError};
+use auction_engine_core::{args::DEBT_RELIST_DELAY_MS, pda, state::*, EngineError};
 use lee_core::{
     account::{AccountId, AccountWithMetadata},
     program::ProgramId,
@@ -61,6 +61,11 @@ pub fn start_debt_auction(program_id: ProgramId, a: StartDebtAccounts, nonce: u6
     let acc = load_accounting(&program_id, &config_id, &a.accounting)?;
     if nonce != acc.debt_nonce {
         return Err(EngineError::NonceMismatch);
+    }
+    // ADR-039: no relisting within DEBT_RELIST_DELAY_MS of the previous debt auction's end. `now` is the
+    // clock account's time; the sum saturates, so an overflow blocks (fails closed) rather than wraps.
+    if acc.last_debt_end_ms > 0 && now < acc.last_debt_end_ms.saturating_add(DEBT_RELIST_DELAY_MS) {
+        return Err(EngineError::DelayNotElapsed);
     }
     let token = cfg.token_program_id;
     expect_id(
@@ -232,6 +237,7 @@ pub fn take_debt(
         .ok_or(EngineError::Math)?;
     if !next.live {
         next_acc.debt_live = false;
+        next_acc.last_debt_end_ms = now; // ADR-039
     }
     let calls = vec![
         token_calls::burn(
@@ -291,6 +297,7 @@ pub fn close_debt_auction(program_id: ProgramId, a: CloseDebtAccounts) -> Engine
     }
     let next_acc = AccountingState {
         debt_live: false,
+        last_debt_end_ms: now, // ADR-039
         ..AccountingState::with_core(&acc, &acc.core().record_debt_close(released))
     };
     Ok((

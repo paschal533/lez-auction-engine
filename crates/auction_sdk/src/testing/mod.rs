@@ -2,6 +2,7 @@
 //! `send` records the transaction and, in `SendMode::Include`, bumps every signer's nonce and appends a
 //! block holding it, which is all the confirmation and scanner logic observe.
 
+pub mod standard;
 #[doc(hidden)]
 pub mod support;
 

@@ -14,13 +14,15 @@ use twap_oracle_core::OraclePriceAccount;
 
 use crate::{
     chain::Chain,
-    deployment::program_id_hex,
+    deployment::{program_id_hex, Deployment},
     error::{SdkError, SdkResult},
 };
 
 pub struct Reader<'a, C: Chain + ?Sized> {
     chain: &'a C,
     engine: ProgramId,
+    /// Expected owner of oracle accounts (the deployment's twap oracle program), when known.
+    oracle_program: Option<ProgramId>,
 }
 
 fn decode_err(what: &'static str, id: &AccountId, e: &std::io::Error) -> SdkError {
@@ -33,7 +35,20 @@ fn decode_err(what: &'static str, id: &AccountId, e: &std::io::Error) -> SdkErro
 
 impl<'a, C: Chain + ?Sized> Reader<'a, C> {
     pub fn new(chain: &'a C, engine: ProgramId) -> Self {
-        Self { chain, engine }
+        Self {
+            chain,
+            engine,
+            oracle_program: None,
+        }
+    }
+
+    /// A reader that also pins oracle accounts to the deployment's twap oracle program (when set).
+    pub fn for_deployment(chain: &'a C, d: &Deployment) -> Self {
+        Self {
+            chain,
+            engine: d.engine_program,
+            oracle_program: d.twap_oracle_program,
+        }
     }
 
     fn initialised(&self, id: &AccountId, what: &'static str) -> SdkResult<Account> {
@@ -104,15 +119,38 @@ impl<'a, C: Chain + ?Sized> Reader<'a, C> {
         self.owned(id, host, what)
     }
 
-    /// The engine pins the oracle id; its owner is the oracle program, which the SDK does not assume.
+    /// The engine pins the oracle id. When the reader knows the twap oracle program (`for_deployment`
+    /// with `twap_oracle_program` set) the account must be owned by it; otherwise the owner is not
+    /// checked (the on-chain engine pins the id).
     pub fn oracle(&self, id: &AccountId) -> SdkResult<OraclePriceAccount> {
         let acc = self.initialised(id, "OraclePriceAccount")?;
+        if let Some(expected) = self.oracle_program {
+            if acc.program_owner != expected {
+                return Err(SdkError::Mismatch {
+                    what: "oracle account owner (twap oracle program)",
+                    expected: program_id_hex(&expected),
+                    found: program_id_hex(&acc.program_owner),
+                });
+            }
+        }
         OraclePriceAccount::try_from(&acc.data)
             .map_err(|e| decode_err("OraclePriceAccount", id, &e))
     }
 
-    pub fn token_definition(&self, id: &AccountId) -> SdkResult<TokenDefinition> {
+    /// A token definition owned by the deployment's token program.
+    pub fn token_definition(
+        &self,
+        id: &AccountId,
+        token: &ProgramId,
+    ) -> SdkResult<TokenDefinition> {
         let acc = self.initialised(id, "TokenDefinition")?;
+        if acc.program_owner != *token {
+            return Err(SdkError::Mismatch {
+                what: "token definition owner (token program)",
+                expected: program_id_hex(token),
+                found: program_id_hex(&acc.program_owner),
+            });
+        }
         TokenDefinition::try_from(&acc.data).map_err(|e| decode_err("TokenDefinition", id, &e))
     }
 
@@ -213,5 +251,38 @@ mod tests {
             r.balance(&id(98), &TOKEN, &COLLATERAL).expect("fresh"),
             None
         );
+    }
+
+    #[test]
+    fn oracle_and_token_definition_owners_are_checked() {
+        let fx = standard::standard();
+        let r = Reader::for_deployment(&fx.chain, &fx.deployment);
+        // The fixture oracle is owned by ORACLE_OWNER, not by the deployment's twap program.
+        assert!(matches!(
+            r.oracle(&standard::ORACLE),
+            Err(SdkError::Mismatch { .. })
+        ));
+        let mut d = fx.deployment.clone();
+        d.twap_oracle_program = Some(standard::ORACLE_OWNER);
+        let ok = Reader::for_deployment(&fx.chain, &d);
+        assert_eq!(
+            ok.oracle(&standard::ORACLE).expect("owned").price,
+            standard::R
+        );
+        // No twap program in the deployment: owner unchecked.
+        d.twap_oracle_program = None;
+        let any = Reader::for_deployment(&fx.chain, &d);
+        assert!(any.oracle(&standard::ORACLE).is_ok());
+
+        let def = fx.host.stablecoin_definition;
+        assert!(r.token_definition(&def, &TOKEN).is_ok());
+        assert!(matches!(
+            r.token_definition(&def, &[0xB2; 8]),
+            Err(SdkError::Mismatch { .. })
+        ));
+        assert!(matches!(
+            r.token_definition(&id(98), &TOKEN),
+            Err(SdkError::Missing { .. })
+        ));
     }
 }

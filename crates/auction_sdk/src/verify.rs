@@ -308,6 +308,16 @@ mod tests {
         );
         let e = verify_binding(&fx.chain, &v).expect_err("bound elsewhere");
         assert!(what_of(e).contains("engine authority"));
+        fx.chain.put_state(
+            v.host.liquidation_engine_state,
+            HOST,
+            &stablecoin_core::LiquidationEngineState {
+                engine_program_id: [0xEE; 8],
+                engine_authority_id: v.engine.engine_authority,
+            },
+        );
+        let e = verify_binding(&fx.chain, &v).expect_err("another engine program");
+        assert!(what_of(e).contains("engine program bound"));
     }
 
     #[test]
@@ -318,8 +328,12 @@ mod tests {
         )
         .expect("parses");
         let md = include_str!("../../../DEPLOYMENTS.md");
+        let twap = d
+            .twap_oracle_program
+            .expect("localnet.json names the twap oracle");
         for (name, id) in [
             ("token", d.token_program),
+            ("twap_oracle", twap),
             ("stablecoin (+ hooks)", d.host_program),
             ("auction_engine", d.engine_program),
         ] {

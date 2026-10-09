@@ -1,0 +1,29 @@
+[package]
+name = "auction_sdk"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Client SDK of the RFP-014 auction engine on LEZ v0.2.4: own encoders, quotes, plans, confirmation, discovery."
+
+[features]
+default = []
+# In-memory FixtureChain and shared test support, used by SDK, CLI and integration tests.
+testing = []
+
+[dependencies]
+auction_core = { workspace = true }
+auction_engine_core = { workspace = true }
+stablecoin_core = { workspace = true }
+token_core = { workspace = true }
+twap_oracle_core = { workspace = true }
+lee = { workspace = true }
+lee_core = { workspace = true }
+clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4" }
+borsh = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = "0.4"
+thiserror = "2"
+
+[dev-dependencies]
+risc0-zkvm = { workspace = true }

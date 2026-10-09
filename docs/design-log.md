@@ -882,3 +882,24 @@ Debt auctions are at most one per `system_ttl_ms + 10 min`, so a bad-debt backlo
 
 **Status**
 Accepted (Plan 3a, Task 3)
+
+---
+
+## ADR-040: SDK Architecture: Synchronous `Chain` Trait, Own Enum-Index Encoders, Handler-Mirroring Quotes
+
+**Context**
+Spec §6.1 asks for an SDK with its own encoders (spel-cli encodes IDL positions and mis-encodes the stablecoin, spec §3.2), PDAs, decoders, quotes that call the same `auction_core` functions as the program, plan builders, discovery and confirmation. The CLI is synchronous and the Plan 4 FFI is a synchronous `char* op(const char* json)`.
+
+**Options**
+- (A) Async SDK over the jsonrpsee client.
+- (B) Synchronous SDK over a `Chain` trait; the RPC implementation owns a current-thread tokio runtime.
+- (C) Wrap spel-cli.
+
+**Decision**
+(B). Encoders are `lee::program::Program::serialize_instruction` of each program's own enum (the path `Message::try_new` uses), so the first word is the enum index by construction. Quotes call `auction_engine_program::feed::{redemption_price, observe, require_live}` and the `auction_core` functions in the handler's order (ADR-024 `observed()` simulation included) instead of re-implementing them; `programs/integration_tests` proves quote == on-chain result on the real guests (Task 8). Every transaction for an engine config starts with `verify::verify_config` against a deployment file (I4); `admin init-config` and host/dev commands, which have no config to verify yet, do not.
+
+**Trade-offs**
+The SDK depends on the pure handler crate `auction_engine_program` (no zkVM), which ties it to the program's source revision; that is the point (same code). A blocking runtime per `RpcChain` is fine for a CLI, not for a server.
+
+**Status**
+Accepted (Plan 3a, Task 4)

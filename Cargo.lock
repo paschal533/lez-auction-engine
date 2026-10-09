@@ -704,6 +704,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "auction_sdk"
+version = "0.1.0"
+dependencies = [
+ "auction_core",
+ "auction_engine_core",
+ "borsh",
+ "clock_core",
+ "hex",
+ "lee",
+ "lee_core",
+ "risc0-zkvm",
+ "serde",
+ "serde_json",
+ "stablecoin_core",
+ "thiserror 2.0.20",
+ "token_core",
+ "twap_oracle_core",
+]
+
+[[package]]
 name = "authenticated_transfer_core"
 version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-execution-zone.git?tag=v0.2.4#47eba256479f6f785acbd138834340703cd03401"
@@ -1947,6 +1967,7 @@ dependencies = [
  "auction-engine-methods",
  "auction_core",
  "auction_engine_core",
+ "auction_sdk",
  "clock_core",
  "lee",
  "lee_core",

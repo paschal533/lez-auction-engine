@@ -4,6 +4,8 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 
 ## Status
 
+**Plan 3a in progress: engine hardening, SDK and CLI.** See `docs/superpowers/plans/2026-10-09-plan-3a-engine-hardening-sdk-cli.md` and [docs/architecture/sdk.md](docs/architecture/sdk.md).
+
 **Plan 2 complete: on-chain programs.**
 
 - Stablecoin hooks: the vendored stablecoin (lez-programs `64c01210`) gains `set_liquidation_engine`, `liquidate_position` and `engine_freeze_new_debt`, exported as a patch series for upstream (ADR-025) and guarded by Variant C, caller program id plus the bound engine-authority PDA (ADR-026, [hooks](docs/architecture/hooks.md)).

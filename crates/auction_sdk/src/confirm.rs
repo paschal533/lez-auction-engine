@@ -627,6 +627,53 @@ mod tests {
         }
     }
 
+    /// Delegates to a fixture, but every `nonces` call after the first (the pre-send read) fails.
+    struct FlakyPolling<'a>(&'a crate::testing::FixtureChain, std::cell::Cell<u32>);
+
+    impl Chain for FlakyPolling<'_> {
+        fn account(&self, i: &AccountId) -> SdkResult<lee_core::account::Account> {
+            self.0.account(i)
+        }
+        fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<lee_core::account::Nonce>> {
+            self.1.set(self.1.get() + 1);
+            if self.1.get() > 1 {
+                return Err(SdkError::Chain("connection lost".into()));
+            }
+            self.0.nonces(ids)
+        }
+        fn last_block_id(&self) -> SdkResult<u64> {
+            self.0.last_block_id()
+        }
+        fn blocks(&self, a: u64, b: u64) -> SdkResult<Vec<crate::chain::BlockSummary>> {
+            self.0.blocks(a, b)
+        }
+        fn send(&self, tx: &lee::PublicTransaction) -> SdkResult<[u8; 32]> {
+            self.0.send(tx)
+        }
+    }
+
+    #[test]
+    fn a_polling_failure_after_the_send_is_unconfirmed_and_keeps_the_lock() {
+        let fx = standard::standard();
+        let dir = tempfile::tempdir().expect("tmp");
+        let chain = FlakyPolling(&fx.chain, std::cell::Cell::new(0));
+        let e = submit(
+            &chain,
+            &TestKeys::of(&[k::CALLER]),
+            &observe_plan(&fx),
+            dir.path(),
+            &fast(),
+            &|_| {},
+        )
+        .expect_err("polling fails");
+        assert!(
+            matches!(&e, SdkError::Unconfirmed(m) if m.contains("connection lost")),
+            "{e}"
+        );
+        assert_eq!(fx.chain.sent().len(), 1);
+        assert!(dir.path().join(format!("{}.lock", id(k::CALLER))).exists());
+    }
+
     #[test]
     fn an_ambiguous_send_error_keeps_the_lock() {
         let fx = standard::standard();

@@ -59,6 +59,12 @@ impl<C: Chain> Env<C> {
         }
     }
 
+    /// The chain's `CLOCK_01`, never `--at-ms`: transactions execute under the chain clock, so their
+    /// slippage bounds and pre-checks must be quoted against it.
+    pub fn chain_now(&self) -> Result<u64, CliError> {
+        Ok(clock_ms(&self.chain)?)
+    }
+
     pub fn keystore(&self) -> Result<Keystore, CliError> {
         let path = Keystore::default_path(self.wallet_home.as_deref())?;
         Ok(Keystore::open(&path)?)

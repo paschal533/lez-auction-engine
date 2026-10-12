@@ -7,6 +7,7 @@ use lee_core::account::AccountId;
 
 use auction_sdk::{
     chain::Chain,
+    decode::Reader,
     deployment::program_id_hex,
     error::SdkError,
     quote::{self, AuctionView},
@@ -19,6 +20,7 @@ use crate::{
     env::Env,
     error::CliError,
     output::{bps, kv, yes_no},
+    tx_report,
 };
 
 pub fn config<C: Chain>(env: &Env<C>, out: &mut dyn Write) -> Result<(), CliError> {
@@ -37,7 +39,22 @@ pub fn config<C: Chain>(env: &Env<C>, out: &mut dyn Write) -> Result<(), CliErro
     kv(out, "protocol token", &protocol_token)?;
     kv(out, "global cap", &s.global_cap.to_string())?;
     kv(out, "global reserved", &s.global_reserved.to_string())?;
-    kv(out, "bad-debt freeze", yes_no(s.freeze_on_bad_debt))
+    kv(out, "bad-debt freeze", yes_no(s.freeze_on_bad_debt))?;
+    system_state(env, &v, out)
+}
+
+/// What a user needs to judge a system transaction whose outcome is unknown (take/start/close).
+fn system_state<C: Chain>(
+    env: &Env<C>,
+    v: &VerifiedConfig,
+    out: &mut dyn Write,
+) -> Result<(), CliError> {
+    let r = Reader::new(&env.chain, v.engine.program);
+    kv(out, "accounting", &tx_report::accounting(&r, v)?)?;
+    for (key, value) in tx_report::system_lots(&r, v)? {
+        kv(out, key, &value)?;
+    }
+    Ok(())
 }
 
 pub fn quote_liquidation<C: Chain>(

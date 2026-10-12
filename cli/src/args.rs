@@ -33,6 +33,11 @@ pub struct Cli {
     pub command: Command,
 }
 
+/// Slippage below 100% (10000 bps would remove the bound).
+fn slippage_bps_parser() -> clap::builder::RangedI64ValueParser<u32> {
+    clap::value_parser!(u32).range(0..10_000)
+}
+
 /// Options of every command that scans blocks.
 #[derive(Debug, Clone, Copy, Default, Args)]
 pub struct ScanArgs {
@@ -57,7 +62,7 @@ pub enum Command {
         auction: String,
         #[arg(long)]
         coin_in_max: u128,
-        #[arg(long, default_value_t = 50)]
+        #[arg(long, default_value_t = 50, value_parser = slippage_bps_parser())]
         slippage_bps: u32,
     },
     /// Scan new blocks, then list live auctions (settled ones too with --all).
@@ -177,9 +182,10 @@ pub struct BidCmd {
     pub bidder_stable: String,
     #[arg(long)]
     pub bidder_collateral: String,
-    #[arg(long, default_value_t = 50)]
+    #[arg(long, default_value_t = 50, value_parser = slippage_bps_parser())]
     pub slippage_bps: u32,
-    /// Explicit minimum collateral out (overrides --slippage-bps for the bound).
+    /// Explicit minimum collateral out (replaces the bound derived from --slippage-bps; the choice
+    /// of bid vs bid_with_settlement still uses --slippage-bps for its near-empty margin).
     #[arg(long)]
     pub min_out: Option<u128>,
 }
@@ -192,7 +198,7 @@ pub struct TakeCmd {
     pub receiver: String,
     #[arg(long)]
     pub amount: u128,
-    #[arg(long, default_value_t = 50)]
+    #[arg(long, default_value_t = 50, value_parser = slippage_bps_parser())]
     pub slippage_bps: u32,
 }
 
@@ -215,6 +221,37 @@ mod tests {
         assert_eq!(usage_exit_code(&missing), 1);
         let help = Cli::try_parse_from(["auction-cli", "--help"]).unwrap_err();
         assert_eq!(usage_exit_code(&help), 0);
+    }
+
+    #[test]
+    fn slippage_must_stay_below_100_percent() {
+        let args = |bps: &str| {
+            Cli::try_parse_from([
+                "auction-cli",
+                "take-debt",
+                "--payer",
+                "a",
+                "--receiver",
+                "b",
+                "--amount",
+                "1",
+                "--slippage-bps",
+                bps,
+            ])
+        };
+        assert!(args("9999").is_ok());
+        assert!(args("10000").is_err());
+        assert!(Cli::try_parse_from([
+            "auction-cli",
+            "quote-bid",
+            "--auction",
+            "a",
+            "--coin-in-max",
+            "1",
+            "--slippage-bps",
+            "10000",
+        ])
+        .is_err());
     }
 
     #[test]

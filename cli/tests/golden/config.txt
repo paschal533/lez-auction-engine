@@ -10,4 +10,7 @@ protocol token    AoErkfXUkF4rE8GbFKJEBvucQ2WBfDYu2Ae9T7VsLJmW
 global cap        10000000
 global reserved   660000
 bad-debt freeze   yes
+accounting        unbacked debt 1000, debt on auction 500, surplus live yes (next nonce 1), debt live yes (next nonce 1)
+surplus lot left  500
+debt lot left     500
 exit: 0

@@ -31,6 +31,11 @@ const CHECK_CONFIG: &str = "config";
 
 /// I4 first, then the admin the user is about to sign against (before any signing).
 fn begin<C: Chain>(env: &Env<C>, out: &mut dyn Write) -> Result<VerifiedConfig, CliError> {
+    if env.at_ms.is_some() {
+        return Err(CliError::Usage(
+            "--at-ms is for read commands; transactions quote at the chain clock".into(),
+        ));
+    }
     let v = env.verified()?;
     env.announce_admin(&v, out)?;
     Ok(v)
@@ -80,12 +85,14 @@ pub fn liquidate<C: Chain>(
     let keeper = env.account(&a.keeper)?;
     let holding = env.account(&a.keeper_holding)?;
     let q =
-        quote::quote_liquidation(&env.chain, &v, &position, env.now()?).map_err(|e| match e {
-            SdkError::HostReject(m) => CliError::Usage(format!(
-                "refusing before signing: the host would reject this liquidation ({m})"
-            )),
-            other => other.into(),
-        })?;
+        quote::quote_liquidation(&env.chain, &v, &position, env.chain_now()?).map_err(
+            |e| match e {
+                SdkError::HostReject(m) => CliError::Usage(format!(
+                    "refusing before signing: the host would reject this liquidation ({m})"
+                )),
+                other => other.into(),
+            },
+        )?;
     kv(out, "nonce", &q.nonce.to_string())?;
     kv(out, "auction", &q.auction.to_string())?;
     kv(out, "keeper reward", &q.quote.keeper_reward.to_string())?;
@@ -116,7 +123,7 @@ pub fn bid<C: Chain>(env: &Env<C>, a: &BidCmd, out: &mut dyn Write) -> Result<()
     let auction = env.account(&a.auction)?;
     let stable = env.account(&a.bidder_stable)?;
     let collateral = env.account(&a.bidder_collateral)?;
-    let now = env.now()?;
+    let now = env.chain_now()?;
     let q = quote::quote_bid(&env.chain, &v, &auction, a.coin_in_max, 0, now)?;
     let min_out = a
         .min_out
@@ -283,7 +290,7 @@ pub fn take_surplus<C: Chain>(
 ) -> Result<(), CliError> {
     let v = begin(env, out)?;
     let nonce = latest(accounting(env, &v)?.surplus_nonce, "surplus")?;
-    let q = quote::quote_take_surplus(&env.chain, &v, nonce, a.amount, env.now()?)?;
+    let q = quote::quote_take_surplus(&env.chain, &v, nonce, a.amount, env.chain_now()?)?;
     let limit = quote::max_in(q.tokens, a.slippage_bps);
     kv(out, "quoted tokens", &q.tokens.to_string())?;
     kv(out, "max protocol in", &limit.to_string())?;
@@ -328,7 +335,7 @@ pub fn start_debt<C: Chain>(
         )));
     }
     if let Some(earliest) = quote::earliest_debt_start(&acc) {
-        if env.now()? < earliest {
+        if env.chain_now()? < earliest {
             return Err(CliError::Usage(format!(
                 "relist delay (ADR-039): the next debt auction may start at {earliest} ms"
             )));
@@ -341,7 +348,7 @@ pub fn start_debt<C: Chain>(
 pub fn take_debt<C: Chain>(env: &Env<C>, a: &TakeCmd, out: &mut dyn Write) -> Result<(), CliError> {
     let v = begin(env, out)?;
     let nonce = latest(accounting(env, &v)?.debt_nonce, "debt")?;
-    let q = quote::quote_take_debt(&env.chain, &v, nonce, a.amount, env.now()?)?;
+    let q = quote::quote_take_debt(&env.chain, &v, nonce, a.amount, env.chain_now()?)?;
     let limit = quote::min_out(q.tokens, a.slippage_bps);
     kv(out, "quoted tokens", &q.tokens.to_string())?;
     kv(out, "min protocol out", &limit.to_string())?;

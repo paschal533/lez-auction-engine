@@ -1,0 +1,2 @@
+error: --at-ms is for read commands; transactions quote at the chain clock
+exit: 1

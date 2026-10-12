@@ -107,7 +107,8 @@ fn auction<C: Chain>(r: &Reader<'_, C>, id: &AccountId) -> SdkResult<String> {
     ))
 }
 
-fn accounting<C: Chain>(r: &Reader<'_, C>, v: &VerifiedConfig) -> SdkResult<String> {
+/// One line of the engine accounting; shared by `config` and the post-inclusion report.
+pub(crate) fn accounting<C: Chain>(r: &Reader<'_, C>, v: &VerifiedConfig) -> SdkResult<String> {
     let a = r.accounting(&v.engine.accounting)?;
     Ok(format!(
         "unbacked debt {}, debt on auction {}, surplus live {} (next nonce {}), debt live {} (next nonce {})",
@@ -118,4 +119,79 @@ fn accounting<C: Chain>(r: &Reader<'_, C>, v: &VerifiedConfig) -> SdkResult<Stri
         yes_no(a.debt_live),
         a.debt_nonce
     ))
+}
+
+/// Lot left of the latest surplus and debt auctions that are live, for `config`.
+pub(crate) fn system_lots<C: Chain>(
+    r: &Reader<'_, C>,
+    v: &VerifiedConfig,
+) -> SdkResult<Vec<(&'static str, String)>> {
+    let a = r.accounting(&v.engine.accounting)?;
+    let mut lots = Vec::new();
+    if let (true, Some(n)) = (a.surplus_live, a.surplus_nonce.checked_sub(1)) {
+        let s = r.surplus_auction(&v.engine.surplus_auction(n))?;
+        lots.push(("surplus lot left", s.lot_left.to_string()));
+    }
+    if let (true, Some(n)) = (a.debt_live, a.debt_nonce.checked_sub(1)) {
+        let d = r.debt_auction(&v.engine.debt_auction(n))?;
+        lots.push(("debt lot left", d.lot_left.to_string()));
+    }
+    Ok(lots)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use auction_sdk::{
+        confirm::ConfirmSettings,
+        testing::{
+            id,
+            standard::{self, k},
+        },
+    };
+
+    use super::*;
+
+    #[test]
+    fn the_report_reads_the_chain_each_time_it_is_printed() {
+        let fx = standard::standard();
+        let dir = tempfile::tempdir().expect("tmp");
+        let env = Env {
+            chain: &fx.chain,
+            deployment: fx.deployment.clone(),
+            config: None,
+            wallet_home: None,
+            state_dir: dir.path().to_path_buf(),
+            at_ms: None,
+            confirm: ConfirmSettings {
+                poll_interval: Duration::ZERO,
+                drop_after_blocks: 5,
+                max_polls: 1,
+            },
+            sleep: |_| {},
+        };
+        let v = env.verified().expect("verifies");
+        let holding = id(k::BIDDER_STABLE);
+        let touch = [Touch::Holding {
+            label: "bidder",
+            id: holding,
+            definition: v.state.stablecoin_definition_id,
+        }];
+        let print = || {
+            let mut out = Vec::new();
+            print_applied(&env, &v, &touch, &mut out).expect("prints");
+            String::from_utf8(out).expect("utf-8")
+        };
+        let before = print();
+        fx.chain.put_holding(
+            holding,
+            v.state.token_program_id,
+            v.state.stablecoin_definition_id,
+            424_242,
+        );
+        let after = print();
+        assert!(after.contains("balance 424242"), "{after}");
+        assert_ne!(before, after);
+    }
 }

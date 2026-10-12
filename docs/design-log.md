@@ -951,3 +951,24 @@ After a send is attempted the lock is released only on a definite verdict (Inclu
 
 **Status**
 Accepted (Plan 3a, Task 10)
+
+---
+
+## ADR-043: Scanner Cursor Stores the Block Hash and the Discoveries
+
+**Context**
+Spec §6.4: positions and auctions are found by a `getBlockRange` scan with a persisted cursor ("Scanned to block N · Rescan"). A localnet can be restarted (block N then has another hash), the node can fail to return a block, and the process can die mid-write.
+
+**Options**
+- (A) Cursor = last block number only; discoveries recomputed each run.
+- (B) Cursor = `{last_block, last_hash, auctions, positions}`; rewind `reorg_depth` blocks when the stored hash no longer matches; atomic tmp+rename writes.
+
+**Decision**
+(B). Discoveries are sets of ids, so a rescan never duplicates; list commands read each discovered account and drop ids that no longer decode. A missing or non-extending block is an error and the cursor is not advanced.
+
+**Trade-offs**
+A rewind deeper than `reorg_depth` (10) needs `rescan --from 1`. Ids discovered in rebuilt blocks that no longer exist stay in the set until they fail to decode (harmless). Production uses the indexer's `getTransactionsByAccount`, then v0.3 events (spec §6.4).
+
+**Status**
+Accepted (Plan 3a, Task 11)
+

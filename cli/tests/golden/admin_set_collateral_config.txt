@@ -1,0 +1,7 @@
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+admin source      deployment file (checked)
+plan              set_collateral_config (8 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+after collateral config min bid 25, type cap 5000000, paused no
+exit: 0

@@ -1,0 +1,7 @@
+protocol parameters i1jnQjpnPGqHaveQi7zr5p1qAasZr62JorjQXQ1bNSX
+stablecoin definition EAo22rU5j1DBkVcgibu3R27v2aHdcfcrQHK3L5hcALbs
+stablecoin master BaMuTBZxXTtb9yshMbVgT3RpyJHBrTGBNQwuVmZe1jof
+stability fee acc DLRYZncH3D6VxnLjHLcXM5ybb4HvhrPLh2Y5u8kCRVyd
+redemption state  8JzycXi162opGqLo8EuBL4GCGieJSQA2ytq9F1WjfMVg
+engine binding    ALgiifgbB7JjWVCtuyxBYUxqPYjpA7XGcJeBPWYJi8vc
+exit: 0

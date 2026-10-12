@@ -31,11 +31,7 @@ const CHECK_CONFIG: &str = "config";
 
 /// I4 first, then the admin the user is about to sign against (before any signing).
 fn begin<C: Chain>(env: &Env<C>, out: &mut dyn Write) -> Result<VerifiedConfig, CliError> {
-    if env.at_ms.is_some() {
-        return Err(CliError::Usage(
-            "--at-ms is for read commands; transactions quote at the chain clock".into(),
-        ));
-    }
+    env.refuse_at_ms()?;
     let v = env.verified()?;
     env.announce_admin(&v, out)?;
     Ok(v)

@@ -1,0 +1,6 @@
+oracle            6z4Dr9NQZ9pd6s7ABGeHQvmMq4oimiqgqYRnTMqKSmyL
+plan              create_oracle_price_account (3 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+after oracle      uninitialised
+exit: 0

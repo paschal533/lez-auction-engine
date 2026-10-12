@@ -1,0 +1,19 @@
+{
+  "global_cap": "10000000",
+  "freeze_on_bad_debt": true,
+  "bad_debt_freeze_threshold": "1000",
+  "protocol_token_ref_price": "2000000000000000000000000000",
+  "ref_oracle_max_age_ms": 3600000,
+  "surplus_buffer_target": "1000",
+  "surplus_lot": "500",
+  "surplus_delay_ms": 0,
+  "surplus_premium_bps": 500,
+  "surplus_max_discount_bps": 2000,
+  "debt_lot": "500",
+  "debt_initial_discount_bps": 0,
+  "debt_growth": [0, 0, 1000, 3000],
+  "surplus_decay": [0, 0, 1000, 2500],
+  "max_mint_per_auction": "5000",
+  "min_take": "10",
+  "system_ttl_ms": 14400000
+}

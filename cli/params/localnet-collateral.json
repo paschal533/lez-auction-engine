@@ -1,0 +1,16 @@
+{
+  "oracle_scale": 0,
+  "max_oracle_age_ms": 3600000,
+  "max_conf_bps": 100,
+  "band_lo_bps": 9000,
+  "band_hi_bps": 11000,
+  "penalty_bps": 1000,
+  "tip": "5",
+  "chip_bps": 10,
+  "reward_cap": "50",
+  "debt_floor": "100",
+  "min_bid": "25",
+  "type_cap": "5000000",
+  "schedule": [0, 200, 2700000, 1000],
+  "admin_paused": false
+}

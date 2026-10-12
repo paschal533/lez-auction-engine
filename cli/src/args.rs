@@ -159,6 +159,15 @@ pub enum Command {
         #[arg(long)]
         caller: String,
     },
+    /// Engine admin commands: config creation and parameters.
+    #[command(subcommand)]
+    Admin(AdminCommand),
+    /// Host (stablecoin) commands: bind, setup and parameters.
+    #[command(subcommand)]
+    Host(HostCommand),
+    /// Localnet setup helpers (tokens, oracle, balances).
+    #[command(subcommand)]
+    Dev(DevCommand),
 }
 
 #[derive(Debug, Args)]
@@ -207,6 +216,176 @@ pub struct TakeCmd {
 #[must_use]
 pub fn usage_exit_code(e: &clap::Error) -> u8 {
     u8::from(e.use_stderr())
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AdminCommand {
+    /// Print the PDAs of the config `["CONFIG", admin, salt]` (no transaction).
+    Addresses {
+        #[arg(long)]
+        admin: String,
+        #[arg(long, default_value_t = 1)]
+        salt: u64,
+    },
+    /// init_config: the signer becomes the config's admin (ADR-027).
+    InitConfig {
+        #[arg(long)]
+        admin: String,
+        #[arg(long, default_value_t = 1)]
+        salt: u64,
+        #[arg(long)]
+        params: PathBuf,
+        #[arg(long)]
+        protocol_token: Option<String>,
+        #[arg(long)]
+        ref_oracle: Option<String>,
+    },
+    SetEngineParams {
+        #[arg(long)]
+        admin: String,
+        #[arg(long)]
+        params: PathBuf,
+        #[arg(long)]
+        protocol_token: Option<String>,
+        #[arg(long)]
+        ref_oracle: Option<String>,
+    },
+    SetCollateralConfig {
+        #[arg(long)]
+        admin: String,
+        #[arg(long)]
+        params: PathBuf,
+    },
+    /// Verify the config against the deployment file and print what a host admin must check (ADR-027).
+    Verify,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HostCommand {
+    /// Print the host PDAs (no transaction).
+    Addresses,
+    /// set_liquidation_engine, only after verify_config accepts the config (ADR-027).
+    Bind {
+        #[arg(long)]
+        admin: String,
+    },
+    InitProgram(InitProgramCmd),
+    OpenPosition {
+        #[arg(long)]
+        owner: String,
+        #[arg(long)]
+        owner_collateral: String,
+        #[arg(long, default_value_t = 0)]
+        nonce: u64,
+        #[arg(long)]
+        amount: u128,
+    },
+    GenerateDebt {
+        #[arg(long)]
+        owner: String,
+        #[arg(long)]
+        position: String,
+        #[arg(long)]
+        owner_stable: String,
+        #[arg(long)]
+        amount: u128,
+    },
+    SetMinCr {
+        #[arg(long)]
+        admin: String,
+        #[arg(long)]
+        ratio: u128,
+    },
+    /// Signed gains (spel cannot encode i128, ADR-018).
+    SetControllerGains {
+        #[arg(long)]
+        admin: String,
+        #[arg(long, allow_hyphen_values = true)]
+        kp: i128,
+        #[arg(long, allow_hyphen_values = true)]
+        ki: i128,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct InitProgramCmd {
+    #[arg(long)]
+    pub admin: String,
+    #[arg(long)]
+    pub freeze: String,
+    #[arg(long)]
+    pub collateral_def: String,
+    #[arg(long)]
+    pub oracle: String,
+    #[arg(long, allow_hyphen_values = true, default_value_t = 0)]
+    pub kp: i128,
+    #[arg(long, allow_hyphen_values = true, default_value_t = 0)]
+    pub ki: i128,
+    #[arg(long, default_value = "1500000000000000000000000000")]
+    pub min_cr: u128,
+    #[arg(long, default_value = "1000000000000000000000000000")]
+    pub redemption_price: u128,
+    #[arg(long, default_value = "1000000000000000000000000000")]
+    pub stability_fee: u128,
+    #[arg(long, default_value_t = 60_000)]
+    pub min_ms_between_updates: u64,
+    #[arg(long, default_value_t = 3_600_000)]
+    pub max_oracle_age_ms: u64,
+    #[arg(long, default_value = "LSC")]
+    pub name: String,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DevCommand {
+    /// Print the base58 id of a wallet label.
+    Resolve {
+        #[arg(long)]
+        label: String,
+    },
+    TokenNew {
+        #[arg(long)]
+        definition: String,
+        #[arg(long)]
+        holding: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        supply: u128,
+        #[arg(long)]
+        mint_authority: Option<String>,
+    },
+    TokenInitAccount {
+        #[arg(long)]
+        definition: String,
+        #[arg(long)]
+        account: String,
+    },
+    TokenTransfer {
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        amount: u128,
+    },
+    /// twap_oracle CreateOraclePriceAccount (needs `twap_oracle_program_id` in the deployment file).
+    OracleCreate {
+        #[arg(long)]
+        price_source: String,
+        #[arg(long)]
+        base: String,
+        #[arg(long)]
+        quote: String,
+        #[arg(long)]
+        price: u128,
+        #[arg(long, default_value_t = 3_600_000)]
+        window_ms: u64,
+    },
+    /// Token-holding balance (no transaction).
+    Balance {
+        #[arg(long)]
+        account: String,
+    },
 }
 
 #[cfg(test)]
@@ -260,6 +439,48 @@ mod tests {
         let ok = Cli::try_parse_from(["auction-cli", "list-auctions", "--batch", "5"]).unwrap();
         match ok.command {
             Command::ListAuctions { scan, .. } => assert_eq!(scan.batch, Some(5)),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn controller_gains_accept_negative_values() {
+        for (kp, ki) in [("-5", "-1"), ("=-5", "=-1")] {
+            let mut argv = vec![
+                "auction-cli".to_owned(),
+                "host".into(),
+                "set-controller-gains".into(),
+                "--admin".into(),
+                "a".into(),
+            ];
+            if kp.starts_with('=') {
+                argv.push(format!("--kp{kp}"));
+                argv.push(format!("--ki{ki}"));
+            } else {
+                argv.extend(["--kp".into(), kp.into(), "--ki".into(), ki.into()]);
+            }
+            match Cli::try_parse_from(argv).unwrap().command {
+                Command::Host(HostCommand::SetControllerGains { kp, ki, .. }) => {
+                    assert_eq!((kp, ki), (-5, -1));
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        let min = i128::MIN.to_string();
+        let cli = Cli::try_parse_from([
+            "auction-cli",
+            "host",
+            "set-controller-gains",
+            "--admin",
+            "a",
+            "--kp",
+            &min,
+            "--ki",
+            "0",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Host(HostCommand::SetControllerGains { kp, .. }) => assert_eq!(kp, i128::MIN),
             other => panic!("unexpected {other:?}"),
         }
     }

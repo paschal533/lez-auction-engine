@@ -734,6 +734,7 @@ dependencies = [
  "stablecoin_core",
  "tempfile",
  "thiserror 2.0.20",
+ "token_core",
 ]
 
 [[package]]

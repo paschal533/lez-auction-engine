@@ -1,0 +1,2 @@
+error: verification failed: host program id stored in the config: expected a2000000a2000000a2000000a2000000a2000000a2000000a2000000a2000000, found a1000000a1000000a1000000a1000000a1000000a1000000a1000000a1000000; refusing to build a transaction (I4, ADR-027)
+exit: 2

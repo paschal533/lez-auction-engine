@@ -1,0 +1,7 @@
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+admin source      deployment file (checked)
+plan              set_engine_params (6 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+after config      global cap 10000000, ref price 2000000000000000000000000000
+exit: 0

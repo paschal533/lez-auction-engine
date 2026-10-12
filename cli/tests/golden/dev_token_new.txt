@@ -1,0 +1,6 @@
+definition        5HSaTMUz6UMtMRwx8yH7Z9dHWLNF9G4op6dh8DM5KKeE
+plan              new_fungible_definition (2 accounts, 2 signer(s))
+submitted         <hash>
+included          signer nonce 1
+after holding     not a fungible token holding
+exit: 0

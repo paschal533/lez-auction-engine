@@ -1,0 +1,9 @@
+config            Fso6kWuyJQwkkinkNF9p3p5VgySdEvEi9VvmaJSihD6Y
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+ref price (RAY)   2000000000000000000000000000
+record            the initial reference price in DEPLOYMENTS.md (ADR-017)
+plan              init_config (8 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+after config      unreadable: account Fso6kWuyJQwkkinkNF9p3p5VgySdEvEi9VvmaJSihD6Y (engine config) is not initialised
+exit: 0

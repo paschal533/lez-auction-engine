@@ -1,0 +1,5 @@
+plan              initialize_program (9 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+after protocol parameters frozen no
+exit: 0

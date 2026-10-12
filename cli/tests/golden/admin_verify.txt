@@ -1,0 +1,13 @@
+verified          config owner, address, host and token program ids, admin, host ProtocolParameters
+config            Ab7yzBXVajkLwXV5x2m1bo6qLj8Bw6iaFyyvRgr5spSu
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+salt              1
+host program      a1000000a1000000a1000000a1000000a1000000a1000000a1000000a1000000
+token program     b1000000b1000000b1000000b1000000b1000000b1000000b1000000b1000000
+protocol token    AoErkfXUkF4rE8GbFKJEBvucQ2WBfDYu2Ae9T7VsLJmW
+ref price (RAY)   2000000000000000000000000000
+freeze threshold  1000
+freeze on bad debt yes
+global cap        10000000
+bound by the host yes
+exit: 0

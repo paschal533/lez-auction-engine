@@ -1,0 +1,153 @@
+//! Dev commands: the localnet setup steps (tokens, oracle, balances) that used to need spel.
+
+use std::io::Write;
+
+use auction_sdk::{chain::Chain, error::SdkResult, plan_host};
+use lee_core::account::{Account, AccountId};
+use token_core::TokenHolding;
+
+use crate::{
+    admin_cmds::{optional, print_after},
+    args::DevCommand,
+    env::Env,
+    error::CliError,
+    output::kv,
+};
+
+const CHECK_BALANCE: &str = "dev balance --account <account>";
+
+pub fn dev<C: Chain>(env: &Env<C>, cmd: &DevCommand, out: &mut dyn Write) -> Result<(), CliError> {
+    if !matches!(cmd, DevCommand::Resolve { .. } | DevCommand::Balance { .. }) {
+        env.refuse_at_ms()?;
+    }
+    match cmd {
+        DevCommand::Resolve { label } => {
+            kv(out, "id", &env.keystore()?.resolve(label)?.to_string())
+        }
+        DevCommand::TokenNew {
+            definition,
+            holding,
+            name,
+            supply,
+            mint_authority,
+        } => token_new(
+            env,
+            (definition, holding),
+            (name, *supply, mint_authority.as_ref()),
+            out,
+        ),
+        DevCommand::TokenInitAccount {
+            definition,
+            account,
+        } => {
+            let account = env.account(account)?;
+            let plan = plan_host::token_initialize_account(
+                env.deployment.token_program,
+                env.account(definition)?,
+                account,
+            )?;
+            env.send_plain(&plan, "initialize_account", CHECK_BALANCE, out)?;
+            print_after(out, "account", describe(env, &account))
+        }
+        DevCommand::TokenTransfer { from, to, amount } => {
+            let (from, to) = (env.account(from)?, env.account(to)?);
+            let plan = plan_host::token_transfer(env.deployment.token_program, from, to, *amount)?;
+            env.send_plain(&plan, "transfer", CHECK_BALANCE, out)?;
+            print_after(out, "from", describe(env, &from))?;
+            print_after(out, "to", describe(env, &to))
+        }
+        DevCommand::OracleCreate {
+            price_source,
+            base,
+            quote,
+            price,
+            window_ms,
+        } => oracle_create(env, (price_source, base, quote), (*price, *window_ms), out),
+        DevCommand::Balance { account } => balance(env, account, out),
+    }
+}
+
+fn token_new<C: Chain>(
+    env: &Env<C>,
+    (definition, holding): (&str, &str),
+    (name, supply, mint_authority): (&str, u128, Option<&String>),
+    out: &mut dyn Write,
+) -> Result<(), CliError> {
+    let definition = env.account(definition)?;
+    let holding = env.account(holding)?;
+    let authority = optional(env, mint_authority)?;
+    kv(out, "definition", &definition.to_string())?;
+    let plan = plan_host::token_new_fungible(
+        env.deployment.token_program,
+        definition,
+        holding,
+        name,
+        supply,
+        authority,
+    )?;
+    env.send_plain(&plan, "new_fungible_definition", CHECK_BALANCE, out)?;
+    print_after(out, "holding", describe(env, &holding))
+}
+
+fn oracle_create<C: Chain>(
+    env: &Env<C>,
+    (price_source, base, quote): (&str, &str, &str),
+    (price, window_ms): (u128, u64),
+    out: &mut dyn Write,
+) -> Result<(), CliError> {
+    let twap = env.deployment.twap_oracle_program.ok_or_else(|| {
+        CliError::Usage("the deployment file has no twap_oracle_program_id".into())
+    })?;
+    let (plan, oracle) = plan_host::create_oracle_price_account(
+        twap,
+        env.account(price_source)?,
+        env.account(base)?,
+        env.account(quote)?,
+        price,
+        window_ms,
+    )?;
+    kv(out, "oracle", &oracle.to_string())?;
+    env.send_plain(&plan, "create_oracle_price_account", CHECK_BALANCE, out)?;
+    let initialised = env.chain.account(&oracle).map(|a| {
+        if a == Account::default() {
+            "uninitialised".to_owned()
+        } else {
+            "initialised".to_owned()
+        }
+    });
+    print_after(out, "oracle", initialised)
+}
+
+fn balance<C: Chain>(env: &Env<C>, account: &str, out: &mut dyn Write) -> Result<(), CliError> {
+    let id = env.account(account)?;
+    kv(out, "account", &id.to_string())?;
+    let acc = env.chain.account(&id)?;
+    if acc == Account::default() {
+        return kv(out, "state", "uninitialised");
+    }
+    match TokenHolding::try_from(&acc.data) {
+        Ok(TokenHolding::Fungible {
+            definition_id,
+            balance,
+        }) => {
+            kv(out, "definition", &definition_id.to_string())?;
+            kv(out, "balance", &balance.to_string())
+        }
+        _ => kv(out, "state", "not a fungible token holding"),
+    }
+}
+
+/// One-line description of a token holding, for the post-inclusion re-read.
+fn describe<C: Chain>(env: &Env<C>, id: &AccountId) -> SdkResult<String> {
+    let acc = env.chain.account(id)?;
+    if acc == Account::default() {
+        return Ok("uninitialised".to_owned());
+    }
+    Ok(match TokenHolding::try_from(&acc.data) {
+        Ok(TokenHolding::Fungible {
+            definition_id,
+            balance,
+        }) => format!("balance {balance} of {definition_id}"),
+        _ => "not a fungible token holding".to_owned(),
+    })
+}

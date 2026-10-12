@@ -1,0 +1,5 @@
+position          GFfqN9vMkMgtJq3BVZicFNogswX4EipEuSpPV3bi1pgX
+plan              open_position (7 accounts, 2 signer(s))
+submitted         <hash>
+included          signer nonce 1
+exit: 0

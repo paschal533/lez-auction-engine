@@ -67,3 +67,26 @@ Every one verifies the config (exit 2 on mismatch), prints the config's admin an
 `bid` quotes first and sets `min_collateral_out` from the quote and the slippage (so a stale quote reverts with `Slippage` instead of filling worse); it sends `bid_with_settlement` when the fill may end the auction (ADR-029). `liquidate` refuses, before signing, a position the host would not liquidate. `start-surplus` / `start-debt` refuse while one is live, and `start-debt` refuses inside the relist delay (ADR-039). A fresh (never initialised) recipient holding must also be in the wallet: it signs (`RecipientMustSign`). Signers that sign more than one stablecoin-program transaction must be `wallet auth-transfer init`-ed first (ADR-018). Never unfreeze the host, or advise it, while settled bad debt is above the freeze threshold (THREAT_MODEL); `host_frozen_by_engine` means "has ever frozen".
 
 `watch --observe-with` stops on the first observe that fails or is dropped (exit code as mapped above); a keeper should run it under a supervisor or restart loop. `--at-ms` is for read commands only: a transaction command refuses it (exit 1, nothing sent), because its slippage bounds must come from the chain clock. `--slippage-bps` must be below 10000. With an explicit `--min-out`, `--slippage-bps` still sets the near-empty margin that chooses `bid_with_settlement`. `config` shows the engine accounting and the live system auctions, which is what to check after an unknown outcome of a take, start or close.
+
+## Admin, host and dev commands (localnet setup without spel)
+
+    auction-cli admin addresses --admin <label> [--salt 1]
+    auction-cli admin init-config --admin <label> [--salt 1] --params cli/params/localnet-engine.json [--protocol-token <id|label>] [--ref-oracle <id>]
+    auction-cli admin set-engine-params --admin <label> --params <json> [--protocol-token ...] [--ref-oracle ...]
+    auction-cli admin set-collateral-config --admin <label> --params cli/params/localnet-collateral.json
+    auction-cli admin verify
+    auction-cli host addresses
+    auction-cli host bind --admin <host admin>      # refuses unless the config verifies (ADR-027)
+    auction-cli host init-program --admin <l> --freeze <l> --collateral-def <l> --oracle <id> [--kp <i128>] [--ki <i128>] ...
+    auction-cli host open-position --owner <l> --owner-collateral <l> [--nonce 0] --amount <n>
+    auction-cli host generate-debt --owner <l> --position <id> --owner-stable <l> --amount <n>
+    auction-cli host set-min-cr --admin <l> --ratio <RAY>
+    auction-cli host set-controller-gains --admin <l> --kp <i128> --ki <i128>   # negative values allowed
+    auction-cli dev resolve --label <l>
+    auction-cli dev token-new --definition <l> --holding <l> --name <s> --supply <n> [--mint-authority <id>]
+    auction-cli dev token-init-account --definition <id|l> --account <l>
+    auction-cli dev token-transfer --from <l> --to <id|l> --amount <n>
+    auction-cli dev oracle-create --price-source <l> --base <id> --quote <id|l> --price <n> [--window-ms 3600000]
+    auction-cli dev balance --account <id|l>
+
+Parameter files hold `u128` values as decimal strings; the protocol-token and reference-oracle flags come from `--protocol-token` / `--ref-oracle`. An enabled protocol token must already exist as a fungible token definition (ADR-038): create it first with `dev token-new ... --mint-authority <mint authority from admin addresses>`. Every reference-price change printed by `set-engine-params` goes into `DEPLOYMENTS.md` (ADR-017).

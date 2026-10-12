@@ -106,11 +106,49 @@ impl<C: Chain> Env<C> {
         kv(out, "admin source", source)
     }
 
-    /// Lock, sign with the wallet, send, confirm (spec §6.5). Dropped is an error (exit 3); an unknown
-    /// outcome (send uncertain, no verdict) keeps the lock, says how to check, and is never resent.
+    /// Transactions execute under the chain clock, so `--at-ms` is for read commands only.
+    pub fn refuse_at_ms(&self) -> Result<(), CliError> {
+        if self.at_ms.is_some() {
+            return Err(CliError::Usage(
+                "--at-ms is for read commands; transactions quote at the chain clock".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Lock, sign with the wallet, send, confirm (spec §6.5), then print the touched accounts as
+    /// re-read from the chain. Dropped is an error (exit 3); an unknown outcome (send uncertain, no
+    /// verdict) keeps the lock, says how to check, and is never resent.
     pub fn send(
         &self,
         v: &VerifiedConfig,
+        plan: &Plan,
+        meta: &TxMeta,
+        out: &mut dyn Write,
+    ) -> Result<(), CliError> {
+        self.submit_and_report(plan, meta, out)?;
+        print_applied(self, v, &meta.touched, out)
+    }
+
+    /// `send` for commands that have no verified config (config creation, host and dev setup): the
+    /// caller prints whatever it re-reads after inclusion.
+    pub fn send_plain(
+        &self,
+        plan: &Plan,
+        what: &'static str,
+        check: &'static str,
+        out: &mut dyn Write,
+    ) -> Result<(), CliError> {
+        let meta = TxMeta {
+            what,
+            check,
+            touched: Vec::new(),
+        };
+        self.submit_and_report(plan, &meta, out)
+    }
+
+    fn submit_and_report(
+        &self,
         plan: &Plan,
         meta: &TxMeta,
         out: &mut dyn Write,
@@ -138,8 +176,7 @@ impl<C: Chain> Env<C> {
         kv(out, "submitted", &hex::encode(s.hash))?;
         match s.outcome {
             Outcome::Included { nonce_after } => {
-                kv(out, "included", &format!("signer nonce {nonce_after}"))?;
-                print_applied(self, v, &meta.touched, out)
+                kv(out, "included", &format!("signer nonce {nonce_after}"))
             }
             Outcome::Dropped { height } => Err(CliError::Dropped { height }),
         }

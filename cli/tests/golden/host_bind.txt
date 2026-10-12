@@ -1,0 +1,11 @@
+verified          config owner, address, host and token program ids, admin, host ProtocolParameters
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+admin source      deployment file (checked)
+config            Ab7yzBXVajkLwXV5x2m1bo6qLj8Bw6iaFyyvRgr5spSu
+binds engine      e1000000e1000000e1000000e1000000e1000000e1000000e1000000e1000000
+engine authority  8yRTCGrNqAWUJCyK2Tm6iETTAhaPGLKbFC68CCiPduBf
+plan              set_liquidation_engine (3 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+after binding     bound by the host: yes
+exit: 0

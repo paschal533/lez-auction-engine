@@ -2,10 +2,14 @@
 //! golden tests drive every command against `FixtureChain`; `main.rs` plugs in `RpcChain`.
 #![forbid(unsafe_code)]
 
+mod admin_cmds;
 pub mod args;
+mod dev_cmds;
 pub mod env;
 pub mod error;
+mod host_cmds;
 pub mod output;
+mod params;
 mod read_cmds;
 mod tx_cmds;
 mod tx_report;
@@ -74,5 +78,8 @@ pub fn run_with<C: Chain>(
         }
         Command::CloseSurplus { caller } => tx_cmds::close_surplus(env, caller, out),
         Command::CloseDebt { caller } => tx_cmds::close_debt(env, caller, out),
+        Command::Admin(c) => admin_cmds::admin(env, c, out),
+        Command::Host(c) => host_cmds::host(env, c, out),
+        Command::Dev(c) => dev_cmds::dev(env, c, out),
     }
 }

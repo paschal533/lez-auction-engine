@@ -1,0 +1,5 @@
+plan              set_controller_gains (2 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+after protocol parameters kp 0, ki 0
+exit: 0

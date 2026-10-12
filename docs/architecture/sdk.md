@@ -25,6 +25,8 @@ Drift tests: `encode::tests` (SDK) and `programs/integration_tests/tests/idl.rs`
 | `deployment`, `verify` | 5 | `deployments/<network>.json` (must match `DEPLOYMENTS.md`); `verify_config` refuses a config not owned by the engine ImageID, not at `["CONFIG", admin, salt]`, or storing another host/token program, admin, `ProtocolParameters` or stablecoin definition, or whose host `ProtocolParameters` has another owner (I4, ADR-027); `verify_binding` checks the host binds this config |
 | `testing::standard` | 5 | the "standard world" fixture (`standard()`, `deployment()`, `config_id()` and the shared constants) used by SDK, CLI and golden tests; built from direct account inserts, no program runs |
 | `quote` | 6 | liquidation, bid, surplus-take and debt-take quotes on the handler's own path; auction view (held at max discount, paused reason); slippage helpers; next debt start (ADR-039) |
+| `plan` (builders) | 7 | one builder per engine instruction (Shared Reference S1 lists, checked against `idl/auction_engine-idl.json`); fresh recipient holdings added as signers; slots from the config (ADR-030); `bid` vs `bid_with_settlement` chosen by the caller from `BidQuote::needs_settlement` (ADR-029) |
+| `plan_host` | 7 | stablecoin (incl. signed `i128` controller gains), token and twap_oracle builders used by the CLI admin/host/dev commands; encoded by enum index, never the IDL position |
 
 ## Program-id verification (I4)
 

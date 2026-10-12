@@ -10,6 +10,7 @@ pub mod deployment;
 pub mod encode;
 pub mod error;
 pub mod plan;
+pub mod plan_host;
 pub mod quote;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

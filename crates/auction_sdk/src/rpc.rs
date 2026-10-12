@@ -26,7 +26,10 @@ use crate::{
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Most blocks one `blocks` call may ask for.
 pub const MAX_BLOCK_RANGE: u64 = 256;
-/// Largest response the client accepts.
+/// Largest response the client accepts. A `getBlockRange` reply is `batch` blocks of up to the
+/// sequencer's `max_block_size` (1 MiB on LEZ v0.2.4), so `scan` batch x block size must stay under
+/// this on a busy chain: the default batch of 100 can exceed it, and a response-size error is then
+/// reported as a `Chain` error; lower the scan batch (the CLI's `--batch`) to recover.
 const MAX_RESPONSE_BYTES: u32 = 16 * 1024 * 1024;
 /// Largest JSON request body the client writes.
 const MAX_REQUEST_BYTES: u32 = 2 * 1024 * 1024;
@@ -80,6 +83,7 @@ impl RpcChain {
     where
         F: Future<Output = Result<T, ClientError>>,
     {
+        ensure_no_runtime()?;
         self.rt.block_on(f).map_err(|e| {
             SdkError::Chain(format!(
                 "{what} at {}: {}",
@@ -88,6 +92,16 @@ impl RpcChain {
             ))
         })
     }
+}
+
+/// `block_on` panics inside another tokio runtime; refuse instead.
+fn ensure_no_runtime() -> SdkResult<()> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(SdkError::Chain(
+            "RpcChain used inside a tokio runtime".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn truncated(s: &str) -> String {
@@ -208,6 +222,8 @@ impl Chain for RpcChain {
     }
 
     fn send(&self, tx: &PublicTransaction) -> SdkResult<[u8; 32]> {
+        // Pre-send, so a definite error is correct.
+        ensure_no_runtime()?;
         let wire = LeeTransaction::Public(tx.clone());
         let size = borsh::to_vec(&wire)
             .map_err(|e| SdkError::Encode(format!("transaction serialisation: {e}")))?

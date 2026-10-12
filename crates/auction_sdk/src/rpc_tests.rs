@@ -104,7 +104,10 @@ fn mock(behavior: Behavior) -> Mock {
             Behavior::CloseAfterRead => {}
             Behavior::Stall => {
                 let mut sink = [0u8; 16];
-                // Returns when the client closes the connection after its timeout.
+                // Returns when the client closes the connection, or after a short bound.
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("read timeout");
                 let _ = stream.read(&mut sink);
             }
         }
@@ -129,6 +132,7 @@ fn send_via(behavior: Behavior) -> (SdkResult<[u8; 32]>, serde_json::Value) {
     let m = mock(behavior);
     let chain = RpcChain::connect_with_timeout(&m.url, SHORT).expect("connect");
     let result = chain.send(&tx());
+    drop(chain);
     (result, m.join())
 }
 
@@ -274,6 +278,61 @@ fn blocks_refuses_an_empty_or_oversized_range_without_a_request() {
             other => panic!("expected range error, got {other:?}"),
         }
     }
+}
+
+fn block_json(id: u64) -> serde_json::Value {
+    use common::block::HashableBlockData;
+    let data = HashableBlockData {
+        block_id: id,
+        prev_block_hash: common::HashType([0; 32]),
+        timestamp: 1,
+        transactions: vec![],
+    };
+    serde_json::to_value(data.into_pending_block(&key(1))).expect("block json")
+}
+
+#[test]
+fn blocks_with_a_wrong_count_or_wrong_ids_are_typed_errors() {
+    let cases = [
+        (serde_json::json!([block_json(5)]), "asked for 2"),
+        (
+            serde_json::json!([block_json(5), block_json(9)]),
+            "expected block 6",
+        ),
+    ];
+    for (reply, expect) in cases {
+        let m = mock(Behavior::Result(reply));
+        let chain = RpcChain::connect_with_timeout(&m.url, SHORT).expect("connect");
+        match chain.blocks(5, 6) {
+            Err(SdkError::Chain(msg)) => assert!(msg.contains(expect), "{msg}"),
+            other => panic!("expected Chain, got {other:?}"),
+        }
+        assert_eq!(m.join()["method"], "getBlockRange");
+    }
+    let m = mock(Behavior::Result(serde_json::json!([
+        block_json(5),
+        block_json(6)
+    ])));
+    let chain = RpcChain::connect_with_timeout(&m.url, SHORT).expect("connect");
+    let got = chain.blocks(5, 6).expect("blocks");
+    assert_eq!(got.iter().map(|b| b.id).collect::<Vec<_>>(), vec![5, 6]);
+    m.join();
+}
+
+#[test]
+fn use_inside_a_tokio_runtime_is_an_error_not_a_panic() {
+    let chain = RpcChain::connect_with_timeout("http://127.0.0.1:9", SHORT).expect("connect");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("rt");
+    rt.block_on(async {
+        assert!(
+            matches!(chain.last_block_id(), Err(SdkError::Chain(m)) if m.contains("tokio runtime"))
+        );
+        assert!(
+            matches!(chain.send(&tx()), Err(SdkError::Chain(m)) if m.contains("tokio runtime"))
+        );
+    });
 }
 
 /// Needs a running localnet sequencer started by `scripts/localnet-smoke.sh step_sequencer` (port

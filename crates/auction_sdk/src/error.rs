@@ -38,6 +38,12 @@ pub enum SdkError {
         lock: String,
         blocks: u64,
     },
+    /// The send may or may not have reached the sequencer (e.g. a transport failure after the request
+    /// was written). Chain implementations return this, and only this, for an unknown result; any
+    /// other send error means the transaction was definitely not accepted. `submit` keeps the
+    /// in-flight lock on it.
+    #[error("the send result is unknown: {0}; check the nonce before sending again")]
+    SendUncertain(String),
     #[error("scanner: {0}")]
     Scan(String),
     #[error("{path}: {reason}")]

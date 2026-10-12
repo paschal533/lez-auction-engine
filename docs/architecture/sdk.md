@@ -101,3 +101,7 @@ Lock: `<state dir>/locks/<signer>.lock` holds `{nonce, height, owner}`. It is cr
 - If the block at `cursor.last_block` no longer has `cursor.last_hash`, the scan rewinds to `last_block - reorg_depth` (floor 0, default 10) and rescans. A cursor above the node's head rewinds to `min(last_block - reorg_depth, head)`. A cursor block within the head that the node cannot return fails the scan (cursor unchanged) with an error that names `rescan`. Discoveries are sets, so a rescan never duplicates.
 - Within a scan every block must extend the previous one (`prev_hash`) and the node must return every requested block; otherwise the scan fails and the cursor is not advanced. Work is bounded per request by `batch` (default 100 blocks).
 - `save_cursor` writes a uniquely named temp file next to the cursor (fsynced) and renames it over the cursor; a failed write removes the temporary file. `load_cursor` returns the genesis cursor for a missing file and `SdkError::Io` for an unparsable one.
+
+## Localnet
+
+The CLI-driven run on a real standalone sequencer (every program instruction sent by `auction-cli`) is recorded in the Plan 3a section of [localnet.md](localnet.md); the runbook is `scripts/localnet-smoke.sh`.

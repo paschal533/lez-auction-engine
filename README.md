@@ -4,7 +4,12 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 
 ## Status
 
-**Plan 3a in progress: engine hardening, SDK and CLI.** See `docs/superpowers/plans/2026-10-09-plan-3a-engine-hardening-sdk-cli.md` and [docs/architecture/sdk.md](docs/architecture/sdk.md). CLI: [cli/README.md](cli/README.md).
+**Plan 3a complete: engine hardening, SDK and CLI.** See `docs/superpowers/plans/2026-10-09-plan-3a-engine-hardening-sdk-cli.md`.
+
+- Two engine fixes: config-time validation of the protocol-token slot (ADR-038) and a fixed relist delay between debt auctions (ADR-039).
+- `auction_sdk`: own enum-index encoders, quotes on the program's pricing path, plans, verification, confirmation, scanner, keystore ([sdk.md](docs/architecture/sdk.md)).
+- `auction-cli` and the CLI-driven localnet smoke ([cli/README.md](cli/README.md), [localnet.md](docs/architecture/localnet.md)).
+- Next: Plan 3b (CI with risc0 and real proofs, reproducible builds, CYCLES.md, REQUIREMENTS.md, fuzzing, red team, oracle publisher, one-command demo), then Plan 4 (FFI, module, thin GUI).
 
 **Plan 2 complete: on-chain programs.**
 
@@ -48,7 +53,7 @@ MSYS_NO_PATHCONV=1 wsl -d Ubuntu-20.04 -e bash -lc   'cd /mnt/c/Users/user/Docum
 - Spec: [docs/superpowers/specs/2026-10-01-rfp014-auction-engine-poc-design.md](docs/superpowers/specs/2026-10-01-rfp014-auction-engine-poc-design.md)
 - Design log (ADRs): [docs/design-log.md](docs/design-log.md)
 - Spikes: [docs/spikes/](docs/spikes/) ([S1](docs/spikes/S1.md), [S2](docs/spikes/S2.md), [S3](docs/spikes/S3.md), [S4](docs/spikes/S4.md), [S5](docs/spikes/S5.md), [S6](docs/spikes/S6.md), [S7](docs/spikes/S7.md)); spike code in [spikes/](spikes/)
-- Architecture: [docs/architecture/core.md](docs/architecture/core.md) (auction state machine), [docs/architecture/math.md](docs/architecture/math.md) (fixed-point arithmetic), [docs/architecture/hooks.md](docs/architecture/hooks.md) (stablecoin hooks), [docs/architecture/programs.md](docs/architecture/programs.md) (engine program, Plan 3 interfaces), [docs/architecture/security-checklist.md](docs/architecture/security-checklist.md) (per-instruction checklist)
+- Architecture: [docs/architecture/core.md](docs/architecture/core.md) (auction state machine), [docs/architecture/math.md](docs/architecture/math.md) (fixed-point arithmetic), [docs/architecture/hooks.md](docs/architecture/hooks.md) (stablecoin hooks), [docs/architecture/programs.md](docs/architecture/programs.md) (engine program, Plan 3 interfaces), [docs/architecture/sdk.md](docs/architecture/sdk.md) (SDK), [docs/architecture/security-checklist.md](docs/architecture/security-checklist.md) (per-instruction checklist)
 - Localnet smoke test: [docs/architecture/localnet.md](docs/architecture/localnet.md); deployed program ids and reference-price log: [DEPLOYMENTS.md](DEPLOYMENTS.md)
 - Threat model: [THREAT_MODEL.md](THREAT_MODEL.md)
 - Plans: [docs/superpowers/plans/](docs/superpowers/plans/)

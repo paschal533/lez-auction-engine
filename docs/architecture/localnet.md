@@ -1,4 +1,97 @@
-# Localnet smoke (Plan 2, Task 20)
+# Localnet smoke
+
+## Plan 3a run (auction-cli, no spel)
+
+Run of 2026-10-12 on a fresh standalone LEZ v0.2.4 sequencer (`RISC0_DEV_MODE=1`, dev-mode proofs), every program
+instruction sent by `auction-cli` (`scripts/localnet-smoke.sh`, Plan 3a Task 16). The wallet binary only creates keys,
+runs `auth-transfer init` and deploys programs. Scope decision: the run goes through liquidation, partial and final
+bids, claim, `observe_feed`, `settle_debt`, `check_solvency` and the surplus auction. It stops before the debt
+auction (F4) and the freeze path: both need a shortfall, which needs a moving oracle price, and the localnet oracle
+has no publisher until Plan 3b.
+
+**Result: complete.** Every step was `included`, `no failed execution check` in the sequencer log, and the final
+balances equal the expected end state. A first run of the same script lost part of its console log (the script's
+`tee /dev/stderr` truncated the log file it was redirected to; fixed in the script), so the whole run was repeated
+on a fresh sequencer; the figures below are from that second run. The first run reached the same end state.
+
+### Commands run (inside WSL, from the repo root)
+
+```bash
+scripts/localnet-smoke.sh step_build        # auction-cli; localnet_tool export-guests (engine + stablecoin only); deployment.json
+scripts/localnet-smoke.sh step_sequencer    # port 3040 must be free; state under $HOME/lez-target/plan3a-localnet/
+scripts/localnet-smoke.sh step_accounts     # 14 public accounts (labels in the script), wallet in plan3a-localnet/wallet-home
+scripts/localnet-smoke.sh step_auth         # 5 x auth-transfer init (ADR-018)
+scripts/localnet-smoke.sh step_deploy       # 5 ProgramDeploymentTransactions
+scripts/localnet-smoke.sh step_host         # dev token-new COLL, dev oracle-create, host init-program
+scripts/localnet-smoke.sh step_engine       # dev token-new MOCK (mint authority = the config's MINT_AUTH PDA), admin init-config
+scripts/localnet-smoke.sh step_bind         # host bind: verifies the config first, then set_liquidation_engine
+scripts/localnet-smoke.sh step_collateral   # admin set-collateral-config
+scripts/localnet-smoke.sh step_holdings     # dev token-init-account x3
+scripts/localnet-smoke.sh step_flow         # open-position x2, generate-debt x2, set-min-cr, liquidate, bid, bid, claim-leftover
+scripts/localnet-smoke.sh step_system       # observe-feed, settle-debt, check-solvency, start-surplus, take-surplus
+scripts/localnet-smoke.sh step_check        # admin verify and final balances
+scripts/localnet-smoke.sh step_stop
+```
+
+### ImageIDs of this run (native build, see `DEPLOYMENTS.md`)
+
+| Program | ImageID |
+|---|---|
+| stablecoin | `91c790a23cadc2aa72be1533a4f4daa8ab6734e0dad5165fb9303cb438736953` (unchanged since Plan 2: Plan 3a did not touch the guest) |
+| auction_engine | `de82967436371542ea2aa862b967af1776ef3fa3f4c5ae5033ea30f27253fc68` (limbs `1956020958,1108686646,1655188202,397371321,2738876278,1353631220,4063291955,1761366898`; changed from Plan 2's `3d0d15fa...` by Tasks 1-3) |
+
+### Step, transactions, outcome
+
+| Step | Transaction(s) | Outcome |
+|---|---|---|
+| `step_build` | `STABLECOIN_ID` and `AUCTION_ENGINE_ID` as above | ok |
+| `step_sequencer` | port 3040 listening, pid recorded | ok |
+| `step_accounts` | 14 public accounts | created |
+| `step_auth` | 5 x `auth-transfer init`: `661107ea...`, `1dd27977...`, `2d724b5e...`, `9b73c482...`, `7b2ebe8a...` (blocks 3-11) | included |
+| `step_deploy` | token `43fab3ef...`, twap_oracle `32e65707...`, token_mint_authority `fb9a2082...`, stablecoin `26e36c34...`, auction_engine `21e1bd6e...` (blocks 13-20) | included |
+| `step_host` | COLL `new_fungible_definition` `45f95d96...`; `create_oracle_price_account` `e98ddd7e...`; `initialize_program` `c5b9e0ba...` | included |
+| `step_engine` | MOCK `new_fungible_definition` `3a1c4ae7...`; `init_config` `148c286b...` (`ref price (RAY)` printed `2000000000000000000000000000`) | included; config verified |
+| `step_bind` | `host bind`: `verified config owner, address, host and token program ids, admin, host ProtocolParameters`, then `set_liquidation_engine` `bf99fccc...` | included; `bound by the host: yes` |
+| `step_collateral` | `set_collateral_config` `63fe3c42...` | included (min bid 25, type cap 5000000) |
+| `step_holdings` | 3 x `initialize_account`: `b6d6a508...`, `e7f21c67...`, `d91ac6b1...` | included |
+| `step_flow` positions | nonce 0: `open_position` `a96c37a3...` (500_000), `generate_debt` `2721c393...` (300_000); nonce 1: `open_position` `f6de7b2a...` (1_000_000), `generate_debt` `1ce42eb5...` (100_000) | included |
+| `step_flow` min CR | `set_minimum_collateralization_ratio` `c9dda4cb...` (1.5 to 2.0); `list-at-risk` shows position 0 only | included |
+| `quote-liquidation` | amount to raise 330000, keeper reward 50, lot 499950 | as expected |
+| `liquidate` | `cdb6611b...` | included; auction live, lot 499950, keeper balance 50 |
+| `bid` (partial) | `724852bb...`, quoted out 102093, `bid (11 accounts, 1 signer(s))` | included; remaining target 230000, collateral left 397857 |
+| `bid_with_settlement` (final) | `733146e2...`, quoted out 234930, `bid_with_settlement (12 accounts, 1 signer(s))` | included; auction settled, collateral left 162927 |
+| `claim_leftover` | `2ae987f3...` | included; `list-auctions --all`: settled, sold 337023, raised 330000/330000, leftover 162927 (claimed 162927) |
+| `observe_feed` | `c5b8164d...` | included |
+| `settle_debt` | `0ddf0dde...` (nothing to burn) | included; unbacked debt 0 |
+| `check_solvency` | `a34bf56a...` | included; healthy |
+| `start_surplus_auction` | `eb201ebf...` | included; surplus live, next nonce 1 |
+| `take_surplus` | `2e91c0cc...`, quoted tokens 200, max protocol in 201 | included; surplus no longer live |
+| `step_check` | `admin verify` shows `bound by the host yes`; balances below | `no failed execution check` |
+
+### Final balances (`step_check`)
+
+| Account | Balance |
+|---|---|
+| owner-coll (COLL) | 99_998_999_950 (100_000_000_000 minted - 1_500_000 deposited + 499_950 back: bid proceeds plus claimed leftover) |
+| owner-stable | 70_000 (400_000 minted - 330_000 paid in the bids) |
+| keeper-coll (COLL) | 50 (keeper reward) |
+| taker-stable | 500 |
+| taker-protocol (MOCK) | 9_800 (10_000 minted - 200 paid for the surplus lot) |
+| buffer (stablecoin) | 29_500 (30_000 penalty - 500 sold in the surplus auction) |
+
+All program instructions are encoded by `auction_sdk` (enum index, ADR-040): the Plan 2 workarounds are gone (sorted
+host IDL copy, finding 1; IDL copy without `pda` markings, finding 3; u128 copy of the i128 gains, finding 6).
+Bind-time verification is `auction-cli host bind` itself (ADR-027), replacing Plan 2's `step_verify_and_bind` marker
+and `decode-config` check. Not covered on localnet: F4 and the freeze path (they need a shortfall, hence a moving
+price: Plan 3b oracle publisher), `settle_empty`, `close_*` (TTL 4 h), the private path.
+
+Cleanup: state lives under `$HOME/lez-target/plan3a-localnet/` (sequencer home, wallet, CLI state, logs, exported
+guests, `deployment.json` of the run); `step_stop` stops only the sequencer that `step_sequencer` started. The
+committed `deployments/localnet.json` keeps `engine_admin` and `config` `null` (they are keys of one machine's wallet).
+
+## Plan 2 run (spel)
+
+History, kept unchanged below. Its engine ImageID `3d0d15fa...` is superseded by the one above.
 
 Proof that the stablecoin (with the engine hooks) and the auction engine deploy to and run on a real standalone
 LEZ v0.2.4 sequencer (`RISC0_DEV_MODE=1`, dev-mode proofs) and that the core flow works end to end:

@@ -76,6 +76,8 @@ Arguments use spel-encodable types only (ADR-030): bps as `u32` (≤ 10_000; col
 
 ## Interfaces for Plan 3 (SDK, CLI, CI)
 
+Implemented by `crates/auction_sdk` (docs/architecture/sdk.md) and `cli/` (cli/README.md), Plan 3a.
+
 - Instruction encoding: risc0 serde of `auction_engine_core::Instruction` (`risc0_zkvm::serde::to_vec`, first word = variant index = IDL index). Stablecoin hooks: `stablecoin_core::Instruction` indices 19–21.
 - Stablecoin instructions: encode by ENUM index (`risc0_zkvm::serde::to_vec(&ix)[0]`), never by IDL position. `idl/stablecoin-idl.json` follows the upstream guest function order, which differs from `stablecoin_core::Instruction` for IDL positions 8–18 (spec §3.2, known upstream fact; the IDL is pinned to upstream and is not reordered). The table below is pinned by `stablecoin_idl_position_maps_to_enum_index` (`programs/integration_tests/tests/idl.rs`).
 - Account layouts: borsh of the `auction_engine_core::state` structs, each starting with its 8-byte tag (`TAG_*`). Decoders must check the tag.
@@ -111,7 +113,7 @@ Stablecoin IDL position to enum index (the enum index is what the guest decodes 
 Plan 3 carry-overs:
 
 - Program CI with the risc0 toolchain: engine and stablecoin suites, the hook order test, and an `idl-gen` diff against the committed IDLs.
-- SDK encoders keyed by enum index, using the table above.
+- Done (Plan 3a Tasks 4–8): SDK encoders keyed by enum index (`encode.rs`), proven on the real guests (`sdk_plans.rs`).
 - Done (Plan 3a Task 2, ADR-038): config-time check that an enabled `protocol_token` is a fungible token definition owned by the token program.
 - Done (Plan 3a Task 3, ADR-039): fixed relist delay between debt auctions.
 - Reproducible Docker builds, then refresh the ImageIDs in `DEPLOYMENTS.md`.

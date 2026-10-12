@@ -924,3 +924,26 @@ A future wallet storage format change breaks the reader (pinned to LEZ v0.2.4; t
 
 **Status**
 Accepted (Plan 3a, Task 9)
+
+---
+
+## ADR-042: Confirmation Without a Target-Account Check; Lock File for One In-Flight Transaction per Signer
+
+**Context**
+Spec §6.5: record the signer nonce `n0` and height `h0`; poll the nonce about every 2 s "checking that the target account changed"; `nonce > n0` is Included, still `n0` at `h0 + 5` is Dropped; one in-flight transaction per signer.
+
+**Options**
+- (A) Also compare a target account before and after.
+- (B) Nonce only; per-signer lock file in the CLI state directory.
+- (C) Nonce only; in-process lock only.
+
+**Decision**
+(B). On v0.2.4 the signer nonce advances only when the transaction is applied, so a nonce above `n0` already proves application; a target-account comparison adds a read and can be confused by unrelated writes to the same account. Verified in the v0.2.4 source (`lee/state_machine/src/state/mod.rs`, `V03State::apply_state_diff`): `public_account_nonce_increment()` is called there for every signer, and `apply_state_diff` is reached only with a `ValidatedStateDiff`, which `ValidatedStateDiff::from_public_transaction` (`validated_state_diff/mod.rs`) returns only after signatures, nonces, program execution and every post-state check passed; the sequencer (`lez/sequencer/core/src/lib.rs`, transaction validation in block build) logs an `Err` from `validate_on_state` and skips the transaction without touching state. So the nonce cannot advance without the transaction's effects.
+
+The lock is a file `<state>/locks/<signer>.lock` holding `{nonce, height, owner}`, created with `create_new`, so of two racing processes exactly one succeeds. A lock is stale, and replaced, when the signer's nonce moved past its nonce, or the height reached `height + 5`, or it does not parse (torn write after a crash), so a crashed CLI never blocks a signer for more than 5 blocks. Staleness is decided on chain facts only, not on process liveness or file age: pids are not comparable across WSL, Windows, containers and machines, are reused, and a liveness probe needs platform-specific code (and `unsafe` or an extra crate); a file age is a wall-clock guess against block time. The cost is that a lock outlives a crashed holder by up to 5 blocks, and that a live holder that stalls past its window loses its lock, which is correct because its transaction is by then either applied or dropped. Replacement re-reads the file and removes it only if unchanged, and a holder removes its lock on drop only if the file still carries its `owner`, so a takeover is never undone by the old holder.
+
+**Trade-offs**
+Replacing a stale lock is remove-then-create, so two processes judging the same stale lock at the same instant can both end up holding a lock (the window is the time between one process's re-read and its create). Two CLIs with different state directories can also race the same signer. In both cases the second transaction carries the same nonce, so the sequencer drops one of them for a stale nonce and it is reported as Dropped; funds are never at risk and nothing is resent. A torn lock that is really a live writer between create and write is retried briefly when empty. `poll_transaction_status` replaces all of this after the v0.3 port.
+
+**Status**
+Accepted (Plan 3a, Task 10)

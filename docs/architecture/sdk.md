@@ -31,6 +31,7 @@ The `*_is_fresh` flags of the builders (`keeper_holding_is_fresh`, `bidder_colla
 | `plan_host` | 7 | stablecoin (incl. signed `i128` controller gains), token and twap_oracle builders used by the CLI admin/host/dev commands; encoded by enum index, never the IDL position |
 | `keystore` | 9 | the wallet's `storage.json` read directly; labels or base58 ids; keys verified against their ids; private accounts refused |
 | `tx` | 9 | `KeySource`, `sign(plan, nonces, keys)` |
+| `confirm` | 10 | nonce-polling confirmation (Included / Dropped after 5 blocks), one in-flight transaction per signer via a lock file, `submit` = lock + sign + send + confirm |
 
 ## Program-id verification (I4)
 
@@ -59,3 +60,9 @@ The SDK reads the LEZ wallet's `storage.json` itself (ADR-041); the `wallet` cra
 Private accounts are recorded only to be refused (`PrivateAccount`). Upstream `ImportedPrivate` entries carry no `account_id`, so the parser skips them: an unlabelled imported private account fails as `NoKey`, a labelled one as `PrivateAccount`. A base58 account id resolves without a key (recipients); signing needs one.
 
 The v0.2.4 wallet keeps keys unencrypted on disk, so protect the wallet home like a key file. Errors are typed (`KeystoreError`: `HomeNotSet`, `NotFound`, `Unreadable`, `Malformed`, `UnknownLabel`, `NoKey`, `PrivateAccount`, `KeyMismatch`; the CLI exits 4) and "Debug never prints key material": `Keystore`'s `Debug` lists the path, public account ids and labels only, and no error, `Display`, `Debug` or log contains a private key, seed, mnemonic or password (pinned by `keystore_formats_never_contain_key_bytes_in_any_error_or_debug`). `lee::PrivateKey` has no `Zeroize` upstream, so keys cannot be wiped from memory by this crate; nothing is written to disk.
+
+## Confirmation
+
+`sendTransaction` success means accepted, not executed (spec §3.2). `submit` records the primary signer's nonce `n0` and the height `h0`, takes the signer's lock, signs, sends, then polls the nonce through `Chain` (the sleeper is injected, so tests do no real sleeping): a nonce above `n0` is `Included { nonce_after }`; still `n0` when the height reaches `h0 + 5` is `Dropped { height }`; no verdict after `max_polls` (default 900 at 2 s) is an error that says to check the nonce before sending again. A `Dropped` transaction was not applied and is never resent by the SDK: re-quote first (the CLI prints "nothing was applied; re-quote and resend" and exits 3). The spec's "target account changed" check is not implemented (ADR-042): on v0.2.4 the signer nonce advances only in `State::apply_state_diff`, after the transaction validated and executed, so a higher nonce already proves application.
+
+Lock: `<state dir>/locks/<signer>.lock` holds `{nonce, height, owner}` and is created with `create_new` (atomic across processes on Linux and Windows). It is released on drop, including on a rejected send, a dropped transaction and a timeout; only by the process that still owns it. A lock is stale when the signer's nonce moved past its nonce or the height reached its `height + 5`, or it does not parse; a live, in-window lock is never replaced and the second submission fails with `InFlight` before anything is signed or sent. Staleness uses chain facts, not process ids or file ages, because pids do not transfer between WSL, Windows, containers and machines and are reused.

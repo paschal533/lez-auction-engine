@@ -225,8 +225,9 @@ pub struct InFlightLock {
 }
 
 impl InFlightLock {
-    /// `n0`/`h0` are the signer's current nonce and the current height. The lock file is created with
-    /// `create_new` (`O_EXCL` / `CREATE_NEW`), so of two racing processes exactly one creates it. A
+    /// `n0`/`h0` are the signer's current nonce and the current height. The lock file is written to a
+    /// temp file and hard-linked into place (`create_new` where hard links are unavailable), so of two
+    /// racing processes exactly one creates it, with its full content. A
     /// stale or torn lock is removed first, and only after re-reading it unchanged, so a lock another
     /// process has just taken is not removed.
     pub fn acquire(

@@ -57,6 +57,27 @@ fn sdk_addresses_and_account_lists_equal_the_harness() {
         w.liquidate_accounts(pos, 0, id(k::KEEPER_COLL)),
         "SDK liquidate list == harness list"
     );
+    for with_settlement in [false, true] {
+        let bid = plan::bid(
+            &v,
+            &plan::BidArgs {
+                bidder_stable: id(k::BIDDER_STABLE),
+                bidder_collateral: id(k::BIDDER_COLL),
+                bidder_collateral_is_fresh: false,
+                auction: auction(pos, 0),
+                coin_in_max: 1,
+                min_collateral_out: 0,
+                with_settlement,
+                oracle: oracle(),
+            },
+        )
+        .expect("plan");
+        assert_eq!(
+            bid.account_ids,
+            w.bid_accounts(pos, 0, k::BIDDER_STABLE, k::BIDDER_COLL, with_settlement),
+            "SDK bid list (settlement: {with_settlement}) == harness list"
+        );
+    }
 }
 
 #[test]

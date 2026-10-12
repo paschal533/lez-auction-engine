@@ -4,7 +4,9 @@
 //! Clock: `World::submit` and `run_plan` seed `CLOCK_01` with `World.now` before executing, so a
 //! transaction executes under exactly `World.now` (on a real chain: the previous block's timestamp).
 //! `World::advance` moves `now` and re-seeds the clock; quotes in these tests are taken at `w.now`,
-//! which equals `auction_sdk::chain::clock_ms(&WorldChain(&w))`.
+//! which equals `auction_sdk::chain::clock_ms(&WorldChain(&w))`. On a real chain `clock_ms` is the clock
+//! the transaction executes under only if it lands in the very next block; otherwise the clock has
+//! moved, which the slippage bound derived from the quote covers.
 use super::*;
 use auction_sdk::{
     chain::{BlockSummary, Chain},

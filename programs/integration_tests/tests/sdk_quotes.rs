@@ -89,6 +89,7 @@ fn a_collateralized_position_is_refused_by_the_quote_and_by_the_real_host() {
         LIQ_DEBT,
     );
     let v = w.sdk_config();
+    let before: stablecoin_core::Position = w.read(pos);
     let e = quote::quote_liquidation(&WorldChain(&w), &v, &pos, w.now)
         .expect_err("collateralized: the quote refuses");
     assert!(matches!(e, SdkError::HostReject(_)), "{e}");
@@ -97,6 +98,15 @@ fn a_collateralized_position_is_refused_by_the_quote_and_by_the_real_host() {
         w.read::<AccountingState>(accounting()).unbacked_debt,
         0,
         "nothing was applied"
+    );
+    assert_eq!(
+        w.raw(auction(pos, 0)),
+        lee_core::account::Account::default()
+    );
+    let after: stablecoin_core::Position = w.read(pos);
+    assert_eq!(
+        (after.collateral_amount, after.normalized_debt_amount),
+        (before.collateral_amount, before.normalized_debt_amount)
     );
 }
 
@@ -169,11 +179,20 @@ fn stale_quote_is_protected_by_min_collateral_out() {
         quote::min_out(q.fill.collateral_out, 50),
         false,
     );
+    let stable_before = w.balance(id(k::BIDDER_STABLE));
+    let coll_before = w.balance(id(k::BIDDER_COLL));
+    let auction_before: AuctionState = w.read(a);
     assert_err(w.run_plan(&tight, &[k::BIDDER_STABLE]), "Slippage");
     assert_eq!(
         w.balance(id(k::BIDDER_STABLE)),
-        1_000_000,
+        stable_before,
         "the reverted bid charged nothing"
+    );
+    assert_eq!(w.balance(id(k::BIDDER_COLL)), coll_before);
+    let auction_after: AuctionState = w.read(a);
+    assert_eq!(
+        (auction_after.collateral_sold, auction_after.debt_raised),
+        (auction_before.collateral_sold, auction_before.debt_raised)
     );
     let loose = bid_plan(
         &v,

@@ -8,7 +8,8 @@
 //!
 //! Imported private wallet entries (`ImportedPrivate`) carry no `account_id` upstream, so they are
 //! skipped: an unlabelled imported private account fails as `NoKey`, not `PrivateAccount`. A labelled
-//! one (`labels: {l: {"Private": id}}`) is refused as `PrivateAccount`.
+//! one (`labels: {l: {"Private": id}}`) is refused as `PrivateAccount`. Shared private accounts
+//! (`key_chain.shared_private_accounts`, keyed by account id) are refused as `PrivateAccount` too.
 //!
 //! Key hygiene: `lee::PrivateKey` does not implement `Zeroize` upstream, so the in-memory keys cannot
 //! be wiped by this crate; the file text is dropped as soon as it is parsed and nothing is written to
@@ -154,16 +155,27 @@ impl Keystore {
                     )?;
                 }
                 // `ImportedPrivate` has no `account_id` upstream: it parses to nothing here.
-                "Private" | "ImportedPrivate" => {
-                    if let Ok(id) = account("account_id") {
-                        private.insert(id);
-                    }
+                "Private" => {
+                    private.insert(account("account_id")?);
                 }
+                "ImportedPrivate" => {}
                 other => {
                     return Err(malformed(format!(
                         "account entry {i}: unknown kind {other}"
                     )))
                 }
+            }
+        }
+        // `shared_private_accounts` is a map keyed by account id (upstream `SharedAccountEntry`).
+        if let Some(shared) = v
+            .pointer("/key_chain/shared_private_accounts")
+            .and_then(Value::as_object)
+        {
+            for raw in shared.keys() {
+                let id: AccountId = raw
+                    .parse()
+                    .map_err(|_| malformed("shared_private_accounts: invalid account id".into()))?;
+                private.insert(id);
             }
         }
         let mut labels = BTreeMap::new();
@@ -329,6 +341,14 @@ mod tests {
                 }
             }
         }
+        // The Public entry's raw `sk` (not the signing key) must not leak either.
+        for n in [150, 151] {
+            for secret in key_encodings(n) {
+                for text in &rendered {
+                    assert!(!text.contains(&secret), "sk {n} leaked in: {text}");
+                }
+            }
+        }
         assert!(rendered.iter().any(|t| t.contains("storage.json")));
     }
 
@@ -344,5 +364,33 @@ mod tests {
         assert!(matches!(ks.key(&id(34)), Err(KeystoreError::NoKey(_))));
         let wrong = imported.replace(&id(33).to_string(), &id(34).to_string());
         assert!(matches!(store(&wrong), Err(KeystoreError::KeyMismatch(_))));
+    }
+
+    #[test]
+    fn shared_private_accounts_are_refused_and_a_malformed_private_entry_fails() {
+        let shared = format!(
+            "{{\"key_chain\":{{\"accounts\":[],\"shared_private_accounts\":{{\"{}\":{{}}}}}},\"labels\":{{}}}}",
+            id(80)
+        );
+        let ks = store(&shared).expect("parses");
+        assert!(matches!(
+            ks.resolve(&id(80).to_string()),
+            Err(KeystoreError::PrivateAccount(_))
+        ));
+        assert!(matches!(
+            ks.key(&id(80)),
+            Err(KeystoreError::PrivateAccount(_))
+        ));
+        let bad_shared = shared.replace(&id(80).to_string(), "not-an-id");
+        assert!(matches!(
+            store(&bad_shared),
+            Err(KeystoreError::Malformed { .. })
+        ));
+        let bad_private =
+            "{\"key_chain\":{\"accounts\":[{\"Private\":{\"account_id\":\"nope\"}}]},\"labels\":{}}";
+        assert!(matches!(
+            store(bad_private),
+            Err(KeystoreError::Malformed { .. })
+        ));
     }
 }

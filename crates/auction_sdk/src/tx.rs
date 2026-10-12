@@ -34,6 +34,14 @@ pub fn sign(plan: &Plan, nonces: &[Nonce], keys: &dyn KeySource) -> SdkResult<Pu
             plan.signing_requirements.len()
         )));
     }
+    let mut seen = std::collections::BTreeSet::new();
+    if let Some(dup) = plan
+        .signing_requirements
+        .iter()
+        .find(|id| !seen.insert(**id))
+    {
+        return Err(SdkError::Encode(format!("signer {dup} is listed twice")));
+    }
     let signing: Vec<&PrivateKey> = plan
         .signing_requirements
         .iter()
@@ -100,5 +108,14 @@ mod tests {
         assert_eq!(signers, plan.signing_requirements);
         let other = sign(&plan, &[Nonce(8)], &ks).expect("signed");
         assert!(!tx.witness_set().is_valid_for(other.message()));
+    }
+
+    #[test]
+    fn sign_rejects_a_duplicate_signer() {
+        let mut plan = caller_plan();
+        let signer = plan.signing_requirements[0];
+        plan.signing_requirements.push(signer);
+        let e = sign(&plan, &[Nonce(0), Nonce(0)], &TestKeys::of(&[k::CALLER])).expect_err("dup");
+        assert!(matches!(e, SdkError::Encode(m) if m.contains("twice")));
     }
 }

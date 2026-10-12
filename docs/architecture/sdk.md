@@ -4,7 +4,7 @@ The SDK is the only way the CLI (and, in Plan 4, the FFI) talks to the engine. I
 
 ## Chain
 
-`chain::Chain` = `account`, `nonces`, `last_block_id`, `blocks(from..=to)`, `send`. Implementations: `testing::FixtureChain` (in memory, feature `testing`); planned: `WorldChain` in `programs/integration_tests/tests/common/sdk.rs` (the real guests in an in-process `V03State`, Task 8) and `rpc::RpcChain` (sequencer JSON-RPC, feature `rpc`, Task 12). An uninitialised account is `Account::default()`, never an error. `send` success means accepted, not executed (spec §3.2).
+`chain::Chain` = `account`, `nonces`, `last_block_id`, `blocks(from..=to)`, `send`. Implementations: `testing::FixtureChain` (in memory, feature `testing`); `WorldChain` in `programs/integration_tests/tests/common/sdk.rs` (the real guests in an in-process `V03State`, Task 8); `rpc::RpcChain` (sequencer JSON-RPC, feature `rpc`, Task 12). An uninitialised account is `Account::default()`, never an error. `send` success means accepted, not executed (spec §3.2).
 
 ## Encoding
 
@@ -17,6 +17,29 @@ Drift tests: `encode::tests` (SDK) and `programs/integration_tests/tests/idl.rs`
 `plan::Plan { program_id, account_ids, signing_requirements, instruction_words }`; `Plan::new` rejects duplicate accounts, unlisted signers and signer-less plans.
 
 The `*_is_fresh` flags of the builders (`keeper_holding_is_fresh`, `bidder_collateral_is_fresh`, `receiver_is_fresh`, `owner_holding_is_fresh`) are caller-trusted: the builder cannot know whether a holding exists, so a wrong flag produces a plan the chain rejects (`RecipientMustSign` for a missing signature, or a signature on an initialised account), never a silently wrong transfer.
+
+## RpcChain (feature `rpc`)
+
+`rpc::RpcChain` is the LEZ v0.2.4 `sequencer_service_rpc` HTTP client (jsonrpsee 0.26 `HttpClient`) behind `Chain`, with its own current-thread tokio runtime; every call blocks, so it must not run inside another tokio runtime. The default SDK build pulls no HTTP stack: `rpc` enables the optional `sequencer_service_rpc`, `common` and `tokio` dependencies (all already in `Cargo.lock` through LEZ, except the jsonrpsee tree that `sequencer_service_rpc` brings; same git tag, nothing re-pinned).
+
+Methods used (verified in `lez/sequencer/service/rpc/src/lib.rs`): `getAccount`, `getAccountsNonces`, `getLastBlockId`, `getBlockRange`, `sendTransaction`. Hardening: one overall request timeout (default 30 s; the HTTP client has no separate connect timeout, so it bounds the connect too), response limit 16 MiB, request limit 2 MiB, `blocks` ranges of at most 256 blocks, replies checked against the request (nonce count, block count and ids), server text copied into errors truncated to 200 characters. Reads are never retried and `send` is never retried.
+
+`send` error mapping. `SendUncertain` keeps the in-flight lock and says to check the nonce before resending; a plain `Chain` error means the transaction was definitely not accepted.
+
+| Outcome of `sendTransaction` | `SdkError` |
+|---|---|
+| JSON-RPC success | `Ok(hash)` |
+| JSON-RPC error code -32602 (`InvalidParams`: stateless check failed, transaction too large, sequencer-only program), answered before the mempool | `Chain` (definite rejection) |
+| TCP connect refused, or host name did not resolve (found in the transport error's source chain) | `Chain` (provably never sent) |
+| Transaction over 1 MiB borsh, refused locally | `Chain` (nothing written) |
+| Any other JSON-RPC error (e.g. -32603 internal) | `SendUncertain` |
+| HTTP 4xx/5xx status | `SendUncertain` |
+| Garbled or unparsable response | `SendUncertain` |
+| Connection closed or reset after the request was written | `SendUncertain` |
+| Timeout (cannot tell connect from after-write) | `SendUncertain` |
+| Any transport error not proven pre-send | `SendUncertain` |
+
+Each row has a test against a local mock HTTP server (`rpc_tests.rs`, no external network; the DNS case uses the reserved `.invalid` name). The live test `live_rpc_reads_height_clock_and_blocks` is `#[ignore]`d; against the localnet of `scripts/localnet-smoke.sh` (sequencer on 127.0.0.1:3040, started by `step_sequencer`), run inside WSL: `LEZ_RPC_URL=http://127.0.0.1:3040 scripts/wsl-cargo.sh test -p auction_sdk --features rpc,testing -- --ignored live_rpc`.
 
 ## Module map
 
@@ -33,6 +56,7 @@ The `*_is_fresh` flags of the builders (`keeper_holding_is_fresh`, `bidder_colla
 | `tx` | 9 | `KeySource`, `sign(plan, nonces, keys)` |
 | `confirm` | 10 | nonce-polling confirmation (Included / Dropped after 5 blocks), one in-flight transaction per signer via a lock file, `submit` = lock + sign + send + confirm |
 | `scan` | 11 | block scan with a persisted, atomically written cursor; rewinds when the cursor's block hash changed; fails (cursor unchanged) on a missing or non-extending block |
+| `rpc` | 12 | RpcChain over sequencer_service_rpc (getAccount, getAccountsNonces, getLastBlockId, getBlockRange, sendTransaction); blocks summarised to their public transactions |
 
 ## Program-id verification (I4)
 

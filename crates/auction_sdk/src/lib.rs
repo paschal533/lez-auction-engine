@@ -14,6 +14,8 @@ pub mod keystore;
 pub mod plan;
 pub mod plan_host;
 pub mod quote;
+#[cfg(feature = "rpc")]
+pub mod rpc;
 pub mod scan;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

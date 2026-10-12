@@ -9,6 +9,8 @@ description = "Client SDK of the RFP-014 auction engine on LEZ v0.2.4: own encod
 default = []
 # In-memory FixtureChain and shared test support, used by SDK, CLI and integration tests.
 testing = []
+# Sequencer JSON-RPC client (LEZ v0.2.4 `sequencer_service_rpc` + `common`, current-thread tokio).
+rpc = ["dep:sequencer_service_rpc", "dep:common", "dep:tokio"]
 
 [dependencies]
 auction_core = { workspace = true }
@@ -27,6 +29,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 hex = "0.4"
 thiserror = "2"
+sequencer_service_rpc = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4", features = ["client"], optional = true }
+common = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4", optional = true }
+tokio = { version = "1", features = ["rt", "net", "time"], optional = true }
 
 [dev-dependencies]
 risc0-zkvm = { workspace = true }

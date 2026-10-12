@@ -24,6 +24,8 @@ pub enum SdkError {
     },
     #[error("the engine would reject this: {name} (code {code})")]
     Engine { name: String, code: u32 },
+    #[error("the host would reject this: {0}")]
+    HostReject(String),
     #[error("deployment file {path}: {reason}")]
     Deployment { path: String, reason: String },
     #[error("chain: {0}")]

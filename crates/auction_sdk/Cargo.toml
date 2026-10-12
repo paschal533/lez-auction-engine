@@ -13,7 +13,7 @@ testing = []
 [dependencies]
 auction_core = { workspace = true }
 auction_engine_core = { workspace = true }
-auction_engine_program = { path = "../../programs/auction_engine" }
+auction_engine_program = { workspace = true }
 stablecoin_program = { workspace = true }
 alloy-primitives = { version = "1", default-features = false }
 stablecoin_core = { workspace = true }

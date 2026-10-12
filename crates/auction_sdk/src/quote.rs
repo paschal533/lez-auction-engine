@@ -3,6 +3,14 @@
 //! order, as its handler (`liquidate.rs`, `bid.rs`, `surplus.rs`, `debt.rs`), and simulates
 //! `observed()` before any `t_eff` (ADR-024). A quote is a pure function of (chain state, `now`).
 //! `programs/integration_tests/tests/sdk_quotes.rs` proves quote == on-chain result on the real guests.
+//!
+//! `now_ms` must be the `CLOCK_01` value the transaction will execute under (`chain::clock_ms`: the
+//! previous block's timestamp), never wall-clock time.
+//!
+//! Quotes predict pricing and the engine/host state checks, NOT the caller's balances or recipient
+//! shape. Reverts a quote does not predict: takes: `InsufficientBalance`, `VaultBelowBook`,
+//! `RecipientMustSign`; bid: `VaultBelowBook`, `InsufficientBalance`, `RecipientMustSign`, and
+//! `ChainEndAccountsMissing` (avoided by listing `Accounting` per `BidQuote::needs_settlement`).
 
 use alloy_primitives::U512;
 use auction_core::{
@@ -221,6 +229,19 @@ pub fn quote_liquidation<C: Chain + ?Sized>(
         },
     )
     .map_err(eng)?;
+    // Engine errors above take precedence, as on-chain. Then the host hook (`liquidate_position`
+    // in programs/stablecoin/src/liquidation_hooks.rs) asserts the position is not collateralized
+    // and the redemption price is non-zero; `health_of` is its exact predicate.
+    if redemption_wide(&r, v, now_ms)?.is_zero() {
+        return Err(SdkError::HostReject(
+            "redemption price projected to zero (host hook)".into(),
+        ));
+    }
+    if !health.unsafe_at_min_cr {
+        return Err(SdkError::HostReject(
+            "position is collateralized, not liquidatable (host hook)".into(),
+        ));
+    }
     let nonce = r.record_count(&v.engine.record(position))?;
     Ok(LiquidationQuoteView {
         health,
@@ -504,6 +525,7 @@ mod tests {
     use crate::testing::standard::{self, oracle_state, ORACLE, ORACLE_OWNER, R, T0};
     use crate::verify::verify_config;
     use auction_core::units::bps_to_ray;
+    use stablecoin_core::Position;
 
     fn setup() -> (standard::Fixture, VerifiedConfig) {
         let fx = standard::standard();
@@ -531,6 +553,76 @@ mod tests {
         let next = quote_liquidation(&fx.chain, &v, &fx.auction_position, T0)
             .expect_err("a zero-debt position is not liquidatable");
         assert!(matches!(next, SdkError::Engine { ref name, .. } if name == "ZeroDebt"));
+    }
+
+    #[test]
+    fn liquidating_a_safe_position_is_the_host_rejection() {
+        let (fx, v) = setup();
+        let mut pos: Position = Reader::new(&fx.chain, standard::ENGINE)
+            .host(&fx.unsafe_position, &standard::HOST, "Position")
+            .expect("position");
+        pos.normalized_debt_amount = 100_000;
+        fx.chain.put_state(fx.unsafe_position, standard::HOST, &pos);
+        let h = position_health(&fx.chain, &v, &fx.unsafe_position, T0).expect("health displays");
+        assert!(!h.unsafe_at_min_cr);
+        let e = quote_liquidation(&fx.chain, &v, &fx.unsafe_position, T0).expect_err("safe");
+        assert!(matches!(e, SdkError::HostReject(ref m) if m.contains("collateralized")));
+    }
+
+    #[test]
+    fn system_take_token_checks_follow_the_handler_order() {
+        use auction_engine_core::state::EngineConfigState;
+        use token_core::TokenDefinition;
+        let name = |e: SdkError| match e {
+            SdkError::Engine { name, .. } => name,
+            other => panic!("unexpected {other}"),
+        };
+        // Not configured.
+        let (fx, v) = setup();
+        let r = Reader::new(&fx.chain, standard::ENGINE);
+        let mut cfg: EngineConfigState = r.config(&v.config_id).expect("cfg");
+        cfg.protocol_token = None;
+        fx.chain.put_state(v.config_id, standard::ENGINE, &cfg);
+        let s = quote_take_surplus(&fx.chain, &v, 0, 500, T0).expect_err("unset");
+        let d = quote_take_debt(&fx.chain, &v, 0, 500, T0).expect_err("unset");
+        assert_eq!(
+            (name(s), name(d)),
+            ("TokenNotConfigured".into(), "TokenNotConfigured".into())
+        );
+        // Definition owned by the wrong program.
+        let (fx, v) = setup();
+        let def = fx.chain.account(&standard::PROTOCOL).expect("def");
+        fx.chain.put(
+            standard::PROTOCOL,
+            lee_core::account::Account {
+                program_owner: [7; 8],
+                ..def
+            },
+        );
+        let s = quote_take_surplus(&fx.chain, &v, 0, 500, T0).expect_err("owner");
+        let d = quote_take_debt(&fx.chain, &v, 0, 500, T0).expect_err("owner");
+        assert_eq!(
+            (name(s), name(d)),
+            (
+                "ProtocolTokenMismatch".into(),
+                "ProtocolTokenMismatch".into()
+            )
+        );
+        // No engine mint authority: the surplus take does not need it, the debt take does.
+        let (fx, v) = setup();
+        fx.chain.put_state(
+            standard::PROTOCOL,
+            standard::TOKEN,
+            &TokenDefinition::Fungible {
+                name: "MOCK".into(),
+                total_supply: 10_000_000,
+                metadata_id: None,
+                authority: None,
+            },
+        );
+        quote_take_surplus(&fx.chain, &v, 0, 500, T0).expect("surplus needs no mint authority");
+        let d = quote_take_debt(&fx.chain, &v, 0, 500, T0).expect_err("authority");
+        assert_eq!(name(d), "MintAuthorityMissing");
     }
 
     #[test]

@@ -16,9 +16,15 @@ pub fn idl_instruction_names(file: &str) -> Vec<String> {
 }
 
 /// Asserts a plan lists exactly the accounts of the IDL entry `name` in `file` and that every account the
-/// IDL marks as signer is a signing requirement. Any further signer must be a fresh recipient holding
-/// (ADR-018), which sits at account index 1 in every engine instruction that allows one.
-pub fn assert_matches_idl(file: &str, name: &str, plan: &crate::plan::Plan) {
+/// IDL marks as signer is a signing requirement. A signer the IDL does not mark is accepted only when
+/// `allow_fresh_at_1` is set and it sits at account index 1: the fresh recipient holding of ADR-018
+/// (`RecipientMustSign`). With `allow_fresh_at_1 == false` the signing set must equal the IDL's exactly.
+pub fn assert_matches_idl(
+    file: &str,
+    name: &str,
+    plan: &crate::plan::Plan,
+    allow_fresh_at_1: bool,
+) {
     let path = format!("{}/../../idl/{file}", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("IDL file {path}: {e}"));
     let idl: serde_json::Value = serde_json::from_str(&text).expect("IDL json");
@@ -50,8 +56,8 @@ pub fn assert_matches_idl(file: &str, name: &str, plan: &crate::plan::Plan) {
             .position(|a| a == s)
             .expect("listed");
         assert!(
-            accounts[idx]["signer"] == true || idx == 1,
-            "{name}: extra signer at index {idx} is not a fresh recipient holding"
+            accounts[idx]["signer"] == true || (allow_fresh_at_1 && idx == 1),
+            "{name}: extra signer at index {idx} is not allowed (IDL signers only unless a fresh recipient holding at index 1 is expected)"
         );
     }
 }

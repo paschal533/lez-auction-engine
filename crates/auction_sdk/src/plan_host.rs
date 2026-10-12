@@ -330,7 +330,7 @@ mod tests {
         for plan in plans {
             let plan = plan.expect("plan");
             let ix: stablecoin_core::Instruction = decode(&plan);
-            assert_matches_idl("stablecoin-idl.json", stablecoin_name(&ix), &plan);
+            assert_matches_idl("stablecoin-idl.json", stablecoin_name(&ix), &plan, false);
             assert_eq!(plan.program_id, standard::HOST);
         }
     }

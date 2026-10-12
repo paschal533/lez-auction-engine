@@ -37,54 +37,10 @@ pub fn auction_vault(pos: AccountId, nonce: u64) -> AccountId {
     pda::vault_pda(&engine_program(), &auction(pos, nonce))
 }
 
-pub fn init_config_ix(salt: u64, p: &EngineParamsArgs) -> Ix {
-    Ix::InitConfig {
-        salt,
-        global_cap: p.global_cap,
-        freeze_on_bad_debt: p.freeze_on_bad_debt,
-        bad_debt_freeze_threshold: p.bad_debt_freeze_threshold,
-        protocol_token_enabled: p.protocol_token_enabled,
-        protocol_token_ref_price: p.protocol_token_ref_price,
-        ref_oracle_enabled: p.ref_oracle_enabled,
-        ref_oracle_max_age_ms: p.ref_oracle_max_age_ms,
-        surplus_buffer_target: p.surplus_buffer_target,
-        surplus_lot: p.surplus_lot,
-        surplus_delay_ms: p.surplus_delay_ms,
-        surplus_premium_bps: p.surplus_premium_bps,
-        surplus_max_discount_bps: p.surplus_max_discount_bps,
-        debt_lot: p.debt_lot,
-        debt_initial_discount_bps: p.debt_initial_discount_bps,
-        debt_growth: p.debt_growth.clone(),
-        surplus_decay: p.surplus_decay.clone(),
-        max_mint_per_auction: p.max_mint_per_auction,
-        min_take: p.min_take,
-        system_ttl_ms: p.system_ttl_ms,
-    }
-}
-
-pub fn set_engine_params_ix(p: &EngineParamsArgs) -> Ix {
-    Ix::SetEngineParams {
-        global_cap: p.global_cap,
-        freeze_on_bad_debt: p.freeze_on_bad_debt,
-        bad_debt_freeze_threshold: p.bad_debt_freeze_threshold,
-        protocol_token_enabled: p.protocol_token_enabled,
-        protocol_token_ref_price: p.protocol_token_ref_price,
-        ref_oracle_enabled: p.ref_oracle_enabled,
-        ref_oracle_max_age_ms: p.ref_oracle_max_age_ms,
-        surplus_buffer_target: p.surplus_buffer_target,
-        surplus_lot: p.surplus_lot,
-        surplus_delay_ms: p.surplus_delay_ms,
-        surplus_premium_bps: p.surplus_premium_bps,
-        surplus_max_discount_bps: p.surplus_max_discount_bps,
-        debt_lot: p.debt_lot,
-        debt_initial_discount_bps: p.debt_initial_discount_bps,
-        debt_growth: p.debt_growth.clone(),
-        surplus_decay: p.surplus_decay.clone(),
-        max_mint_per_auction: p.max_mint_per_auction,
-        min_take: p.min_take,
-        system_ttl_ms: p.system_ttl_ms,
-    }
-}
+// Instruction encoders are the SDK's (Plan 3a Task 8): the harness no longer keeps its own copies.
+pub use auction_sdk::encode::{
+    init_config_ix, set_collateral_config_ix as collateral_ix, set_engine_params_ix,
+};
 
 pub fn slot_account(slot: u64, enabled: bool) -> AccountId {
     match (slot, enabled) {
@@ -143,25 +99,6 @@ impl World {
 }
 
 // ---- collateral config and feed observation (Task 9) ----
-
-pub fn collateral_ix(c: &CollateralArgs) -> Ix {
-    Ix::SetCollateralConfig {
-        oracle_scale: c.oracle_scale,
-        max_oracle_age_ms: c.max_oracle_age_ms,
-        max_conf_bps: c.max_conf_bps,
-        band_lo_bps: c.band_lo_bps,
-        band_hi_bps: c.band_hi_bps,
-        penalty_bps: c.penalty_bps,
-        tip: c.tip,
-        chip_bps: c.chip_bps,
-        reward_cap: c.reward_cap,
-        debt_floor: c.debt_floor,
-        min_bid: c.min_bid,
-        type_cap: c.type_cap,
-        schedule: c.schedule.clone(),
-        admin_paused: c.admin_paused,
-    }
-}
 
 impl World {
     pub fn set_collateral_config(
@@ -286,21 +223,16 @@ impl World {
         self.engine(accounts, &[k::KEEPER], Ix::Liquidate { nonce })
     }
 
-    /// A plain `Token::Transfer` signed by holding `id(from)` (donations in tests).
+    /// A plain `Token::Transfer` signed by holding `id(from)` (donations in tests), built by the SDK.
     pub fn transfer_tokens(
         &mut self,
         from: u8,
         to: AccountId,
         amount: u128,
     ) -> Result<(), LeeError> {
-        self.submit(
-            token_program(),
-            vec![id(from), to],
-            &[from],
-            token_core::Instruction::Transfer {
-                amount_to_transfer: amount,
-            },
-        )
+        let plan = auction_sdk::plan_host::token_transfer(token_program(), id(from), to, amount)
+            .expect("transfer plan");
+        self.run_plan(&plan, &[from])
     }
 }
 

@@ -217,7 +217,7 @@ fn every_engine_builder_encodes_its_own_variant() {
 fn every_engine_builder_matches_its_idl_entry() {
     let (fx, v) = v();
     for (plan, name) in all_plans(&fx, &v) {
-        assert_matches_idl("auction_engine-idl.json", name, &plan.expect(name));
+        assert_matches_idl("auction_engine-idl.json", name, &plan.expect(name), false);
     }
     let pos = fx.unsafe_position;
     let liq = liquidate(
@@ -232,7 +232,7 @@ fn every_engine_builder_matches_its_idl_entry() {
         },
     )
     .expect("plan");
-    assert_matches_idl("auction_engine-idl.json", "liquidate", &liq);
+    assert_matches_idl("auction_engine-idl.json", "liquidate", &liq, true);
     let args = BidArgs {
         bidder_stable: id(k::BIDDER_STABLE),
         bidder_collateral: id(k::BIDDER_COLL),
@@ -247,6 +247,7 @@ fn every_engine_builder_matches_its_idl_entry() {
         "auction_engine-idl.json",
         "bid",
         &bid(&v, &args).expect("plan"),
+        true,
     );
     let settle = bid(
         &v,
@@ -256,7 +257,12 @@ fn every_engine_builder_matches_its_idl_entry() {
         },
     )
     .expect("plan");
-    assert_matches_idl("auction_engine-idl.json", "bid_with_settlement", &settle);
+    assert_matches_idl(
+        "auction_engine-idl.json",
+        "bid_with_settlement",
+        &settle,
+        true,
+    );
 }
 
 #[test]
@@ -295,4 +301,92 @@ fn set_engine_params_slots_carry_the_new_values() {
         set_engine_params(&v, id(k::ENGINE_ADMIN), &params, Some(PROTOCOL), None).expect("plan");
     assert_eq!(p.account_ids[4], PROTOCOL);
     assert_eq!(p.account_ids[5], v.engine.unused_ref_oracle);
+}
+
+#[test]
+fn a_spurious_signer_at_index_one_does_not_pass_the_idl_check() {
+    let (_, v) = v();
+    let plan = take_surplus(&v, &take_args()).expect("plan");
+    let mut spurious = plan.clone();
+    spurious.signing_requirements.push(plan.account_ids[1]);
+    let caught = std::panic::catch_unwind(|| {
+        assert_matches_idl("auction_engine-idl.json", "take_surplus", &spurious, false);
+    });
+    assert!(caught.is_err(), "extra signer at index 1 must be refused");
+    assert_matches_idl("auction_engine-idl.json", "take_surplus", &spurious, true);
+}
+
+#[test]
+fn system_and_admin_builders_list_their_accounts_in_the_documented_order() {
+    let (_, v) = v();
+    let (caller, admin) = (id(k::CALLER), id(k::ENGINE_ADMIN));
+    let take = take_args();
+    let p = take_surplus(&v, &take).expect("plan");
+    assert_eq!(
+        p.account_ids,
+        vec![
+            take.payer,
+            take.receiver,
+            v.config_id,
+            v.engine.accounting,
+            v.engine.surplus_auction(0),
+            v.engine.surplus_vault(0),
+            PROTOCOL,
+            CLOCK,
+        ]
+    );
+    let p = take_debt(
+        &v,
+        &TakeArgs {
+            payer: id(k::TAKER_STABLE),
+            receiver: id(k::TAKER_PROTOCOL),
+            ..take
+        },
+    )
+    .expect("plan");
+    assert_eq!(
+        p.account_ids,
+        vec![
+            id(k::TAKER_STABLE),
+            id(k::TAKER_PROTOCOL),
+            v.config_id,
+            v.engine.accounting,
+            v.engine.debt_auction(0),
+            v.state.stablecoin_definition_id,
+            PROTOCOL,
+            v.engine.mint_authority,
+            CLOCK,
+        ]
+    );
+    let p = check_solvency(&v, caller).expect("plan");
+    assert_eq!(
+        p.account_ids,
+        vec![
+            caller,
+            v.config_id,
+            v.engine.accounting,
+            v.engine.buffer,
+            v.state.stablecoin_definition_id,
+            PROTOCOL,
+            v.engine.unused_ref_oracle,
+            v.engine.engine_authority,
+            v.host.liquidation_engine_state,
+            v.host.protocol_parameters,
+            CLOCK,
+        ]
+    );
+    let mut params = EngineParamsArgs::defaults_for_tests();
+    params.protocol_token_enabled = true;
+    let p = set_engine_params(&v, admin, &params, Some(PROTOCOL), None).expect("plan");
+    assert_eq!(
+        p.account_ids,
+        vec![
+            admin,
+            v.config_id,
+            v.engine.accounting,
+            v.coll_config_id(),
+            PROTOCOL,
+            v.engine.unused_ref_oracle,
+        ]
+    );
 }

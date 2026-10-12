@@ -3,6 +3,10 @@
 //! `OpenPosition` + `GenerateDebt`. Fixture accounts are force-inserted like the upstream tests.
 #![allow(dead_code)]
 
+use auction_sdk::{
+    addresses::HostAddresses,
+    plan_host::{self, InitializeProgramArgs},
+};
 use clock_core::{ClockAccountData, CLOCK_01_PROGRAM_ACCOUNT_ID};
 use lee::{
     error::LeeError,
@@ -18,7 +22,7 @@ use stablecoin_core::{
     compute_liquidation_engine_state_pda, compute_position_pda, compute_position_vault_pda,
     compute_protocol_parameters_pda, compute_redemption_price_state_pda,
     compute_stability_fee_accumulator_pda, compute_stablecoin_definition_pda,
-    compute_stablecoin_master_holding_pda, math::FIXED_POINT_ONE, RedemptionPriceState,
+    math::FIXED_POINT_ONE, RedemptionPriceState,
 };
 use token_core::{TokenDefinition, TokenHolding};
 use twap_oracle_core::OraclePriceAccount;
@@ -163,33 +167,26 @@ impl World {
             },
         );
         w.set_oracle(R, T0);
-        let init = stablecoin_core::Instruction::InitializeProgram {
-            freeze_authority_account_id: id(k::FREEZE),
-            initial_stability_fee_per_millisecond: ONE,
-            initial_controller_proportional_gain: 0,
-            initial_controller_integral_gain: 0,
-            initial_minimum_collateralization_ratio: ONE * 3 / 2,
-            minimum_milliseconds_between_rate_updates: 300_000,
-            maximum_oracle_price_age_milliseconds: 900_000,
-            initial_redemption_price: R,
-            stablecoin_name: String::from("LSC"),
-        };
-        w.host(
-            vec![
-                id(k::HOST_ADMIN),
-                protocol_parameters(),
-                accumulator(),
-                redemption_state(),
-                stable_def(),
-                compute_stablecoin_master_holding_pda(host_program()),
-                collateral_def(),
-                oracle(),
-                CLOCK_01_PROGRAM_ACCOUNT_ID,
-            ],
-            &[k::HOST_ADMIN],
-            init,
+        let init = auction_sdk::plan_host::initialize_program(
+            &HostAddresses::new(host_program()),
+            &InitializeProgramArgs {
+                admin: id(k::HOST_ADMIN),
+                freeze_authority: id(k::FREEZE),
+                collateral_definition: collateral_def(),
+                market_price_oracle: oracle(),
+                stability_fee_per_ms: ONE,
+                proportional_gain: 0,
+                integral_gain: 0,
+                min_collateralization_ratio: ONE * 3 / 2,
+                min_ms_between_rate_updates: 300_000,
+                max_oracle_age_ms: 900_000,
+                redemption_price: R,
+                stablecoin_name: String::from("LSC"),
+            },
         )
-        .expect("initialize_program must succeed");
+        .expect("initialize_program plan");
+        w.run_plan(&init, &[k::HOST_ADMIN])
+            .expect("initialize_program must succeed");
         w
     }
 
@@ -395,52 +392,42 @@ impl World {
             self.holding(stable_holding, stable_def(), 0);
         }
         let pos = position(owner, nonce);
-        self.host(
-            vec![
-                id(owner),
-                pos,
-                host_vault(pos),
-                id(coll_holding),
-                collateral_def(),
-                protocol_parameters(),
-                CLOCK_01_PROGRAM_ACCOUNT_ID,
-            ],
-            &[owner, coll_holding],
-            stablecoin_core::Instruction::OpenPosition {
-                position_nonce: nonce,
-                initial_collateral_amount: collateral,
-            },
+        let host = HostAddresses::new(host_program());
+        let open = plan_host::open_position(
+            &host,
+            id(owner),
+            id(coll_holding),
+            collateral_def(),
+            nonce,
+            collateral,
         )
-        .expect("open_position must succeed");
+        .expect("open_position plan");
+        assert_eq!(
+            open.account_ids[1], pos,
+            "SDK position address == harness PDA"
+        );
+        self.run_plan(&open, &[owner, coll_holding])
+            .expect("open_position must succeed");
         if debt > 0 {
-            self.host(
-                vec![
-                    id(owner),
-                    pos,
-                    stable_def(),
-                    id(stable_holding),
-                    accumulator(),
-                    redemption_state(),
-                    oracle(),
-                    protocol_parameters(),
-                    CLOCK_01_PROGRAM_ACCOUNT_ID,
-                ],
-                &[owner],
-                stablecoin_core::Instruction::GenerateDebt { amount: debt },
-            )
-            .expect("generate_debt must succeed");
+            let generate =
+                plan_host::generate_debt(&host, id(owner), pos, id(stable_holding), oracle(), debt)
+                    .expect("generate_debt plan");
+            self.run_plan(&generate, &[owner])
+                .expect("generate_debt must succeed");
         }
         pos
     }
 
     /// Host admin retunes the minimum collateralisation ratio (used to make positions unsafe).
     pub fn set_min_cr(&mut self, ratio: u128) {
-        self.host(
-            vec![id(k::HOST_ADMIN), protocol_parameters()],
-            &[k::HOST_ADMIN],
-            stablecoin_core::Instruction::SetMinimumCollateralizationRatio { new_ratio: ratio },
+        let plan = plan_host::set_minimum_collateralization_ratio(
+            &HostAddresses::new(host_program()),
+            id(k::HOST_ADMIN),
+            ratio,
         )
-        .expect("set_minimum_collateralization_ratio must succeed");
+        .expect("set_minimum_collateralization_ratio plan");
+        self.run_plan(&plan, &[k::HOST_ADMIN])
+            .expect("set_minimum_collateralization_ratio must succeed");
     }
 
     /// Host admin binds an engine (program id, authority) through the real guest (ADR-026).
@@ -449,14 +436,14 @@ impl World {
         engine_program_id: ProgramId,
         engine_authority_id: AccountId,
     ) -> Result<(), LeeError> {
-        self.host(
-            vec![id(k::HOST_ADMIN), protocol_parameters(), les()],
-            &[k::HOST_ADMIN],
-            stablecoin_core::Instruction::SetLiquidationEngine {
-                engine_program_id,
-                engine_authority_id,
-            },
+        let plan = plan_host::set_liquidation_engine(
+            &HostAddresses::new(host_program()),
+            id(k::HOST_ADMIN),
+            engine_program_id,
+            engine_authority_id,
         )
+        .expect("set_liquidation_engine plan");
+        self.run_plan(&plan, &[k::HOST_ADMIN])
     }
 }
 
@@ -469,9 +456,12 @@ use auction_engine_core::{
 };
 
 mod engine;
+mod sdk;
 mod system;
 #[allow(unused_imports)]
 pub use engine::*;
+#[allow(unused_imports)]
+pub use sdk::*;
 #[allow(unused_imports)]
 pub use system::*;
 

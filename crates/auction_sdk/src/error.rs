@@ -44,6 +44,10 @@ pub enum SdkError {
     /// in-flight lock on it.
     #[error("the send result is unknown: {0}; check the nonce before sending again")]
     SendUncertain(String),
+    /// The transaction was sent but no verdict was reached (timeout, or the confirmation polling
+    /// failed). The in-flight lock stays; nothing may be resent until the drop window has passed.
+    #[error("no verdict: {0}")]
+    Unconfirmed(String),
     #[error("scanner: {0}")]
     Scan(String),
     #[error("{path}: {reason}")]

@@ -1,0 +1,9 @@
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+admin source      deployment file (checked)
+plan              settle_empty (5 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+note              the figures below are read from the chain after inclusion (ADR-042)
+after auction     settled no, collateral left 475000, remaining target 660000
+after accounting  unbacked debt 1000, debt on auction 500, surplus live yes (next nonce 1), debt live yes (next nonce 1)
+exit: 0

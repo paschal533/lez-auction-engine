@@ -96,7 +96,7 @@ pub fn confirm<C: Chain + ?Sized>(
         }
         sleep(s.poll_interval);
     }
-    Err(SdkError::Chain(format!(
+    Err(SdkError::Unconfirmed(format!(
         "no confirmation after {} polls; the transaction may still land: check the nonce of {signer} before sending again",
         s.max_polls
     )))
@@ -345,7 +345,11 @@ pub fn submit<C: Chain + ?Sized>(
             return Err(e);
         }
     };
-    let outcome = confirm(chain, &primary, n0, h0, s, sleep)?;
+    // The send is done: any failure to reach a verdict is an unknown outcome, never a rejection.
+    let outcome = confirm(chain, &primary, n0, h0, s, sleep).map_err(|e| match e {
+        e @ SdkError::Unconfirmed(_) => e,
+        other => SdkError::Unconfirmed(format!("sent, but confirming failed: {other}")),
+    })?;
     lock.set_keep_on_drop(false);
     Ok(Submitted { hash, outcome })
 }
@@ -586,7 +590,7 @@ mod tests {
             ..fast()
         };
         let e = run_observe(&fx, dir.path(), &few).expect_err("no verdict");
-        assert!(matches!(e, SdkError::Chain(m) if m.contains("no confirmation")));
+        assert!(matches!(e, SdkError::Unconfirmed(m) if m.contains("no confirmation")));
         assert!(
             !is_empty_dir(dir.path()),
             "an ambiguous outcome keeps the lock: the transaction may still land"

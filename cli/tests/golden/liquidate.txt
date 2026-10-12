@@ -1,0 +1,12 @@
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+admin source      deployment file (checked)
+nonce             0
+auction           7hT7bjKCoiP2fsCtwpHUUt8qDVDPVGHmeQKWTH1EzQTn
+keeper reward     25
+plan              liquidate (17 accounts, 2 signer(s))
+submitted         <hash>
+included          signer nonce 1
+note              the figures below are read from the chain after inclusion (ADR-042)
+after auction     unreadable: account 7hT7bjKCoiP2fsCtwpHUUt8qDVDPVGHmeQKWTH1EzQTn (Auction) is not initialised
+after keeper      uninitialised
+exit: 0

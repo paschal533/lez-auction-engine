@@ -1,0 +1,121 @@
+//! What a transaction command prints after `Included`: the accounts it touched, re-read from the chain.
+//! Inclusion means a transaction of this signer applied at the sent nonce, not necessarily this very
+//! hash (ADR-042), so the figures come from the chain and are never computed from the quote.
+
+use std::io::Write;
+
+use lee_core::{account::AccountId, program::ProgramId};
+
+use auction_sdk::{chain::Chain, decode::Reader, error::SdkResult, verify::VerifiedConfig};
+
+use crate::{
+    env::Env,
+    error::CliError,
+    output::{kv, yes_no},
+};
+
+/// An account a command touches, read back after inclusion.
+#[derive(Debug, Clone, Copy)]
+pub enum Touch {
+    /// A token holding (balance); `definition` is the token the holding must be of.
+    Holding {
+        label: &'static str,
+        id: AccountId,
+        definition: AccountId,
+    },
+    /// A liquidation auction.
+    Auction(AccountId),
+    /// The engine's accounting account.
+    Accounting,
+}
+
+/// How a command describes itself to `Env::send`.
+#[derive(Debug, Clone)]
+pub struct TxMeta {
+    /// Instruction name for the `plan` line.
+    pub what: &'static str,
+    /// Read command that shows the outcome when it is unknown (`auction-cli <check>`).
+    pub check: &'static str,
+    pub touched: Vec<Touch>,
+}
+
+/// Prints the applied result of every touched account. A failed read is reported, never fatal: the
+/// transaction is already included.
+pub fn print_applied<C: Chain>(
+    env: &Env<C>,
+    v: &VerifiedConfig,
+    touched: &[Touch],
+    out: &mut dyn Write,
+) -> Result<(), CliError> {
+    if touched.is_empty() {
+        return Ok(());
+    }
+    kv(
+        out,
+        "note",
+        "the figures below are read from the chain after inclusion (ADR-042)",
+    )?;
+    let r = Reader::new(&env.chain, v.engine.program);
+    for t in touched {
+        let (key, value) = match t {
+            Touch::Holding {
+                label,
+                id,
+                definition,
+            } => (
+                format!("after {label}"),
+                describe(holding(env, &r, v, id, definition)),
+            ),
+            Touch::Auction(id) => ("after auction".to_owned(), describe(auction(&r, id))),
+            Touch::Accounting => ("after accounting".to_owned(), describe(accounting(&r, v))),
+        };
+        kv(out, &key, &value)?;
+    }
+    Ok(())
+}
+
+fn describe(r: SdkResult<String>) -> String {
+    r.unwrap_or_else(|e| format!("unreadable: {e}"))
+}
+
+fn holding<C: Chain>(
+    env: &Env<C>,
+    r: &Reader<'_, C>,
+    v: &VerifiedConfig,
+    id: &AccountId,
+    definition: &AccountId,
+) -> SdkResult<String> {
+    // A never-initialised recipient (it only signed) has no token owner yet.
+    if env.chain.account(id)?.program_owner == ProgramId::default() {
+        return Ok("uninitialised".to_owned());
+    }
+    Ok(
+        match r.balance(id, &v.state.token_program_id, definition)? {
+            Some(b) => format!("balance {b}"),
+            None => "uninitialised".to_owned(),
+        },
+    )
+}
+
+fn auction<C: Chain>(r: &Reader<'_, C>, id: &AccountId) -> SdkResult<String> {
+    let st = r.auction(id)?;
+    let remaining = st.to_core()?.remaining_target();
+    Ok(format!(
+        "settled {}, collateral left {}, remaining target {remaining}",
+        yes_no(st.settled),
+        st.collateral_left
+    ))
+}
+
+fn accounting<C: Chain>(r: &Reader<'_, C>, v: &VerifiedConfig) -> SdkResult<String> {
+    let a = r.accounting(&v.engine.accounting)?;
+    Ok(format!(
+        "unbacked debt {}, debt on auction {}, surplus live {} (next nonce {}), debt live {} (next nonce {})",
+        a.unbacked_debt,
+        a.debt_on_auction,
+        yes_no(a.surplus_live),
+        a.surplus_nonce,
+        yes_no(a.debt_live),
+        a.debt_nonce
+    ))
+}

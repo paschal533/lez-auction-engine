@@ -7,6 +7,8 @@ pub mod env;
 pub mod error;
 pub mod output;
 mod read_cmds;
+mod tx_cmds;
+mod tx_report;
 
 use std::io::Write;
 
@@ -42,7 +44,35 @@ pub fn run_with<C: Chain>(
         Command::Watch {
             interval_ms,
             iterations,
+            observe_with,
             scan,
-        } => read_cmds::watch(env, *interval_ms, *iterations, scan, out, err),
+        } => read_cmds::watch(
+            env,
+            *interval_ms,
+            *iterations,
+            observe_with.as_deref(),
+            scan,
+            out,
+            err,
+        ),
+        Command::Liquidate(a) => tx_cmds::liquidate(env, a, out),
+        Command::Bid(a) => tx_cmds::bid(env, a, out),
+        Command::SettleDebt { caller, amount } => tx_cmds::settle_debt(env, caller, *amount, out),
+        Command::CheckSolvency { caller } => tx_cmds::check_solvency(env, caller, out),
+        Command::StartSurplus { caller } => tx_cmds::start_surplus(env, caller, out),
+        Command::TakeSurplus(a) => tx_cmds::take_surplus(env, a, out),
+        Command::StartDebt { caller } => tx_cmds::start_debt(env, caller, out),
+        Command::TakeDebt(a) => tx_cmds::take_debt(env, a, out),
+        Command::ObserveFeed { caller } => tx_cmds::observe_feed(env, caller, out),
+        Command::ClaimLeftover {
+            owner,
+            owner_holding,
+            auction,
+        } => tx_cmds::claim_leftover(env, owner, owner_holding, auction, out),
+        Command::SettleEmpty { caller, auction } => {
+            tx_cmds::settle_empty(env, caller, auction, out)
+        }
+        Command::CloseSurplus { caller } => tx_cmds::close_surplus(env, caller, out),
+        Command::CloseDebt { caller } => tx_cmds::close_debt(env, caller, out),
     }
 }

@@ -81,15 +81,119 @@ pub enum Command {
         #[command(flatten)]
         scan: ScanArgs,
     },
-    /// Refresh periodically: scan and list auctions.
+    /// Refresh periodically: scan and list auctions; with --observe-with, send observe_feed first
+    /// each round (keepers and apps refresh the pause clock, THREAT_MODEL S5 residual).
     Watch {
         #[arg(long, default_value_t = 15_000)]
         interval_ms: u64,
         #[arg(long)]
         iterations: Option<u32>,
+        #[arg(long)]
+        observe_with: Option<String>,
         #[command(flatten)]
         scan: ScanArgs,
     },
+    /// Liquidate an unsafe position (quotes first; refuses a safe position).
+    Liquidate(LiquidateCmd),
+    /// Bid; picks bid or bid_with_settlement from the quote (ADR-029).
+    Bid(BidCmd),
+    /// Burn buffer coin against unbacked debt (default: as much as possible).
+    SettleDebt {
+        #[arg(long)]
+        caller: String,
+        #[arg(long)]
+        amount: Option<u128>,
+    },
+    /// Freeze new debt if bad debt exceeds the threshold and no working protocol token exists.
+    CheckSolvency {
+        #[arg(long)]
+        caller: String,
+    },
+    /// Start a surplus auction (refused while one is live).
+    StartSurplus {
+        #[arg(long)]
+        caller: String,
+    },
+    /// Pay protocol tokens (--payer), receive stablecoin (--receiver).
+    TakeSurplus(TakeCmd),
+    /// Start a debt auction (refused while one is live or inside the relist delay).
+    StartDebt {
+        #[arg(long)]
+        caller: String,
+    },
+    /// Pay stablecoin (--payer), receive minted protocol tokens (--receiver).
+    TakeDebt(TakeCmd),
+    /// Persist a pause-clock observation (never reverts on a bad feed).
+    ObserveFeed {
+        #[arg(long)]
+        caller: String,
+    },
+    /// Claim the leftover collateral of a settled auction.
+    ClaimLeftover {
+        #[arg(long)]
+        owner: String,
+        #[arg(long)]
+        owner_holding: String,
+        #[arg(long)]
+        auction: String,
+    },
+    /// Settle an auction whose lot is already 0.
+    SettleEmpty {
+        #[arg(long)]
+        caller: String,
+        #[arg(long)]
+        auction: String,
+    },
+    /// Close the latest surplus auction after its TTL.
+    CloseSurplus {
+        #[arg(long)]
+        caller: String,
+    },
+    /// Close the latest debt auction after its TTL.
+    CloseDebt {
+        #[arg(long)]
+        caller: String,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct LiquidateCmd {
+    #[arg(long)]
+    pub position: String,
+    #[arg(long)]
+    pub keeper: String,
+    /// Collateral holding that receives the keeper reward (signs too if it is fresh).
+    #[arg(long)]
+    pub keeper_holding: String,
+}
+
+#[derive(Debug, Args)]
+pub struct BidCmd {
+    #[arg(long)]
+    pub auction: String,
+    #[arg(long)]
+    pub coin_in_max: u128,
+    #[arg(long)]
+    pub bidder_stable: String,
+    #[arg(long)]
+    pub bidder_collateral: String,
+    #[arg(long, default_value_t = 50)]
+    pub slippage_bps: u32,
+    /// Explicit minimum collateral out (overrides --slippage-bps for the bound).
+    #[arg(long)]
+    pub min_out: Option<u128>,
+}
+
+#[derive(Debug, Args)]
+pub struct TakeCmd {
+    #[arg(long)]
+    pub payer: String,
+    #[arg(long)]
+    pub receiver: String,
+    #[arg(long)]
+    pub amount: u128,
+    #[arg(long, default_value_t = 50)]
+    pub slippage_bps: u32,
 }
 
 /// Exit code for an argument-parsing outcome. clap's own default for a usage error is 2, which S4

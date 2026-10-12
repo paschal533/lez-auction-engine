@@ -1,0 +1,4 @@
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+admin source      deployment file (checked)
+error: refusing before signing: the host would reject this liquidation (position is collateralized, not liquidatable (host hook))
+exit: 1

@@ -1,0 +1,6 @@
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+admin source      deployment file (checked)
+plan              observe_feed (6 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+exit: 0

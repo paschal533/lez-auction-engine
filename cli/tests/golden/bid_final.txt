@@ -1,0 +1,12 @@
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+admin source      deployment file (checked)
+quoted out        342956
+min out           341241
+plan              bid_with_settlement (12 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+note              the figures below are read from the chain after inclusion (ADR-042)
+after auction     settled no, collateral left 475000, remaining target 660000
+after bidder coll balance 0
+after bidder stable balance 1000000
+exit: 0

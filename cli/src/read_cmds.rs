@@ -311,12 +311,16 @@ pub fn watch<C: Chain>(
     env: &Env<C>,
     interval_ms: u64,
     iterations: Option<u32>,
+    observe_with: Option<&str>,
     args: &ScanArgs,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<(), CliError> {
     let mut round = 0u32;
     loop {
+        if let Some(caller) = observe_with {
+            crate::tx_cmds::observe_feed(env, caller, out)?;
+        }
         list_auctions(env, false, args, out, err)?;
         round = round.saturating_add(1);
         if iterations.is_some_and(|n| round >= n) {

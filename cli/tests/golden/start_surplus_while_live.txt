@@ -1,0 +1,4 @@
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+admin source      deployment file (checked)
+error: a surplus auction is live (nonce 0); take it, or close it after its TTL, first
+exit: 1

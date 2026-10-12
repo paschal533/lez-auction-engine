@@ -11,6 +11,9 @@ pub enum CliError {
     Verify(SdkError),
     #[error("transaction dropped (not applied by block {height}): nothing was applied; re-quote and resend (spec §6.5)")]
     Dropped { height: u64 },
+    /// Sent, but no verdict: the lock is kept and nothing is resent (exit 1, S4).
+    #[error("{0}")]
+    Unknown(String),
     #[error("keystore: {0}")]
     Keystore(KeystoreError),
     #[error("{0}")]
@@ -24,7 +27,7 @@ impl CliError {
     #[must_use]
     pub fn exit_code(&self) -> u8 {
         match self {
-            Self::Usage(_) | Self::Sdk(_) | Self::Output(_) => 1,
+            Self::Usage(_) | Self::Sdk(_) | Self::Unknown(_) | Self::Output(_) => 1,
             Self::Verify(_) => 2,
             Self::Dropped { .. } => 3,
             Self::Keystore(_) => 4,
@@ -37,6 +40,7 @@ impl From<SdkError> for CliError {
         match e {
             SdkError::Keystore(k) => Self::Keystore(k),
             e @ SdkError::Mismatch { .. } => Self::Verify(e),
+            SdkError::SendUncertain(m) | SdkError::Unconfirmed(m) => Self::Unknown(m),
             other => Self::Sdk(other),
         }
     }
@@ -73,6 +77,11 @@ mod tests {
         assert_eq!(CliError::from(SdkError::Chain("x".into())).exit_code(), 1);
         assert_eq!(CliError::from(mismatch()).exit_code(), 2);
         assert_eq!(CliError::Dropped { height: 7 }.exit_code(), 3);
+        assert_eq!(CliError::Unknown("x".into()).exit_code(), 1);
+        let uncertain = SdkError::SendUncertain("reset".into());
+        assert!(matches!(CliError::from(uncertain), CliError::Unknown(_)));
+        let timeout = SdkError::Unconfirmed("late".into());
+        assert!(matches!(CliError::from(timeout), CliError::Unknown(_)));
         assert_eq!(
             CliError::from(SdkError::Keystore(KeystoreError::HomeNotSet)).exit_code(),
             4

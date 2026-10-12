@@ -1,0 +1,9 @@
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+admin source      deployment file (checked)
+plan              claim_leftover (5 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+note              the figures below are read from the chain after inclusion (ADR-042)
+after auction     settled no, collateral left 475000, remaining target 660000
+after owner       balance 0
+exit: 0

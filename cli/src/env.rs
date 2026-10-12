@@ -15,7 +15,11 @@ use auction_sdk::{
 };
 use lee_core::account::{Account, AccountId};
 
-use crate::{error::CliError, output::kv};
+use crate::{
+    error::CliError,
+    output::kv,
+    tx_report::{print_applied, TxMeta},
+};
 
 pub struct Env<C: Chain> {
     pub chain: C,
@@ -96,14 +100,22 @@ impl<C: Chain> Env<C> {
         kv(out, "admin source", source)
     }
 
-    /// Lock, sign with the wallet, send, confirm (spec §6.5). Dropped is an error (exit 3).
-    pub fn send(&self, plan: &Plan, what: &str, out: &mut dyn Write) -> Result<(), CliError> {
+    /// Lock, sign with the wallet, send, confirm (spec §6.5). Dropped is an error (exit 3); an unknown
+    /// outcome (send uncertain, no verdict) keeps the lock, says how to check, and is never resent.
+    pub fn send(
+        &self,
+        v: &VerifiedConfig,
+        plan: &Plan,
+        meta: &TxMeta,
+        out: &mut dyn Write,
+    ) -> Result<(), CliError> {
         let keystore = self.keystore()?;
         kv(
             out,
             "plan",
             &format!(
-                "{what} ({} accounts, {} signer(s))",
+                "{} ({} accounts, {} signer(s))",
+                meta.what,
                 plan.account_ids.len(),
                 plan.signing_requirements.len()
             ),
@@ -115,13 +127,27 @@ impl<C: Chain> Env<C> {
             &self.lock_dir(),
             &self.confirm,
             &self.sleep,
-        )?;
+        )
+        .map_err(|e| self.with_check_hint(CliError::from(e), meta))?;
         kv(out, "submitted", &hex::encode(s.hash))?;
         match s.outcome {
             Outcome::Included { nonce_after } => {
-                kv(out, "included", &format!("signer nonce {nonce_after}"))
+                kv(out, "included", &format!("signer nonce {nonce_after}"))?;
+                print_applied(self, v, &meta.touched, out)
             }
             Outcome::Dropped { height } => Err(CliError::Dropped { height }),
+        }
+    }
+
+    fn with_check_hint(&self, e: CliError, meta: &TxMeta) -> CliError {
+        match e {
+            CliError::Unknown(m) => CliError::Unknown(format!(
+                "outcome unknown, lock kept ({m}). Do not resend: check with `auction-cli {}` or wait {} blocks and check again; the lock in {} clears itself once the window has passed",
+                meta.check,
+                self.confirm.drop_after_blocks,
+                self.lock_dir().display()
+            )),
+            other => other,
         }
     }
 }

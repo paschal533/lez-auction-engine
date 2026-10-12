@@ -44,3 +44,24 @@ Quotes are valid only at their clock; the transaction commands derive their slip
 ## Tests
 
 Golden tests (`cli/tests/golden.rs`) run every command against the SDK's standard fixture; no network. Regenerate with `UPDATE_GOLDEN=1` and review the diff.
+
+## Transaction commands
+
+Every one verifies the config (exit 2 on mismatch), prints the config's admin and where that admin comes from (before anything is signed), signs with the wallet (exit 4 on a keystore problem), sends, and confirms by nonce polling: `included` when the signer's nonce moves (the touched accounts are then re-read and printed as `after ...` lines, read from the chain, not computed), exit 3 ("dropped: nothing was applied; re-quote") when it has not moved 5 blocks later. One transaction per signer is in flight at a time (lock in `<state-dir>/locks`). A send whose result is unknown, or a confirmation that times out, prints "outcome unknown, lock kept", how to check, and exits 1; nothing is ever resent automatically.
+
+    auction-cli liquidate --position <id> --keeper <signer> --keeper-holding <collateral holding>
+    auction-cli bid --auction <id> --coin-in-max <coin> --bidder-stable <holding> --bidder-collateral <holding> [--slippage-bps 50 | --min-out N]
+    auction-cli claim-leftover --owner <signer> --owner-holding <holding> --auction <id>
+    auction-cli settle-empty --caller <signer> --auction <id>
+    auction-cli settle-debt --caller <signer> [--amount N]
+    auction-cli check-solvency --caller <signer>
+    auction-cli observe-feed --caller <signer>
+    auction-cli start-surplus --caller <signer>
+    auction-cli take-surplus --payer <protocol-token holding> --receiver <stablecoin holding> --amount <coin> [--slippage-bps 50]
+    auction-cli close-surplus --caller <signer>
+    auction-cli start-debt --caller <signer>
+    auction-cli take-debt --payer <stablecoin holding> --receiver <protocol-token holding> --amount <coin> [--slippage-bps 50]
+    auction-cli close-debt --caller <signer>
+    auction-cli watch --observe-with <signer>  # refresh the pause clock every round
+
+`bid` quotes first and sets `min_collateral_out` from the quote and the slippage (so a stale quote reverts with `Slippage` instead of filling worse); it sends `bid_with_settlement` when the fill may end the auction (ADR-029). `liquidate` refuses, before signing, a position the host would not liquidate. `start-surplus` / `start-debt` refuse while one is live, and `start-debt` refuses inside the relist delay (ADR-039). A fresh (never initialised) recipient holding must also be in the wallet: it signs (`RecipientMustSign`). Signers that sign more than one stablecoin-program transaction must be `wallet auth-transfer init`-ed first (ADR-018). Never unfreeze the host, or advise it, while settled bad debt is above the freeze threshold (THREAT_MODEL); `host_frozen_by_engine` means "has ever frozen".

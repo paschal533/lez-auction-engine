@@ -119,6 +119,32 @@ fn hash_at<C: Chain + ?Sized>(chain: &C, id: u64) -> SdkResult<String> {
         .ok_or_else(|| SdkError::Chain(format!("block {id} not found")))
 }
 
+/// Where to rewind to, or `None` when the cursor block is still on the node with the stored hash.
+/// A cursor above the node's head (a restarted localnet with fewer blocks) rewinds to
+/// `min(last_block - reorg_depth, head)`. A cursor block within the head that the node cannot
+/// return is a transient gap: the scan fails and the cursor is not advanced.
+fn rewind_target<C: Chain + ?Sized>(
+    chain: &C,
+    head: u64,
+    cursor: &Cursor,
+    s: &ScanSettings,
+) -> SdkResult<Option<u64>> {
+    let n = cursor.last_block;
+    if n == 0 {
+        return Ok(None);
+    }
+    let target = n.saturating_sub(s.reorg_depth).min(head);
+    if n > head {
+        return Ok(Some(target));
+    }
+    let on_node = hash_at(chain, n).map_err(|e| {
+        SdkError::Scan(format!(
+            "cursor block {n} is not on the node ({e}); run `rescan`"
+        ))
+    })?;
+    Ok((on_node != cursor.last_hash).then_some(target))
+}
+
 pub fn scan<C: Chain + ?Sized>(
     chain: &C,
     t: &ScanTargets,
@@ -132,10 +158,14 @@ pub fn scan<C: Chain + ?Sized>(
     })?;
     let head = chain.last_block_id()?;
     let mut next = cursor.clone();
-    if cursor.last_block > 0 && hash_at(chain, cursor.last_block)? != cursor.last_hash {
+    if let Some(target) = rewind_target(chain, head, cursor, s)? {
         // The node no longer has the block we stopped at: rewind and rescan (sets never duplicate).
-        next.last_block = cursor.last_block.saturating_sub(s.reorg_depth);
-        next.last_hash = hash_at(chain, next.last_block)?;
+        next.last_block = target;
+        next.last_hash = hash_at(chain, target).map_err(|e| {
+            SdkError::Scan(format!(
+                "cannot rewind to block {target}: {e}; run `rescan`"
+            ))
+        })?;
     }
     let batch = s.batch.max(1);
     let mut from = next.last_block + 1;
@@ -190,7 +220,17 @@ pub fn load_cursor(path: &Path) -> SdkResult<Cursor> {
     })
 }
 
-/// Atomic: write `<path>.tmp`, then rename over `path`.
+/// Per-process, per-call suffix so concurrent writers never share a temporary file.
+fn unique_suffix() -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}-{nanos}-{n}", std::process::id())
+}
+
+/// Atomic: write a unique temp file next to `path`, then rename over `path`.
 pub fn save_cursor(path: &Path, c: &Cursor) -> SdkResult<()> {
     let io = |e: std::io::Error| SdkError::Io {
         path: path.display().to_string(),
@@ -199,7 +239,7 @@ pub fn save_cursor(path: &Path, c: &Cursor) -> SdkResult<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(io)?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let tmp = path.with_extension(format!("json.{}.tmp", unique_suffix()));
     let text = serde_json::to_string_pretty(c).map_err(|e| SdkError::Io {
         path: path.display().to_string(),
         reason: e.to_string(),
@@ -267,6 +307,62 @@ mod tests {
         assert_eq!(after.last_block, 3);
     }
 
+    fn hash_hex(fx: &standard::Fixture, id: u64) -> String {
+        hex::encode(fx.chain.blocks(id, id).expect("block")[0].hash)
+    }
+
+    #[test]
+    fn rewind_arithmetic_is_exact_and_follows_the_rebuilt_chain() {
+        let (fx, t) = setup();
+        let c = scan(&fx.chain, &t, &Cursor::default(), &ScanSettings::default()).expect("scan");
+        fx.chain.rewrite_from(3, 7);
+        let one = ScanSettings {
+            reorg_depth: 1,
+            ..ScanSettings::default()
+        };
+        let after = scan(&fx.chain, &t, &c, &one).expect("rescan from block 2");
+        assert_eq!(after.last_block, 3);
+        assert_eq!(after.last_hash, hash_hex(&fx, 3));
+        assert_ne!(after.last_hash, c.last_hash);
+        assert_eq!(after.auctions, c.auctions);
+        // A fork below the rewind point is not detected: the rewind point is re-read from the node,
+        // so the scan stays consistent but blocks at or below it are not rescanned (ADR-043).
+        fx.chain.rewrite_from(1, 8);
+        let deep = scan(&fx.chain, &t, &after, &one).expect("consistent on the new chain");
+        assert_eq!(deep.last_hash, hash_hex(&fx, 3));
+    }
+
+    #[test]
+    fn a_cursor_above_the_node_head_rewinds_to_the_head_or_below() {
+        let (fx, t) = setup();
+        let full = scan(&fx.chain, &t, &Cursor::default(), &ScanSettings::default()).expect("scan");
+        let ahead = Cursor {
+            last_block: 10,
+            last_hash: "ab".into(),
+            ..Cursor::default()
+        };
+        let shallow = ScanSettings {
+            reorg_depth: 2,
+            ..ScanSettings::default()
+        };
+        let a = scan(&fx.chain, &t, &ahead, &shallow).expect("rewinds to the head");
+        assert_eq!((a.last_block, a.last_hash.clone()), (3, hash_hex(&fx, 3)));
+        let deep =
+            scan(&fx.chain, &t, &ahead, &ScanSettings::default()).expect("rewinds to genesis");
+        assert_eq!(deep, full, "a full rescan finds everything");
+    }
+
+    #[test]
+    fn a_missing_cursor_block_within_the_head_is_an_actionable_error() {
+        let (fx, t) = setup();
+        let c = scan(&fx.chain, &t, &Cursor::default(), &ScanSettings::default()).expect("scan");
+        fx.chain.hide_block(3);
+        let e = scan(&fx.chain, &t, &c, &ScanSettings::default()).expect_err("gap");
+        assert!(
+            matches!(&e, SdkError::Scan(m) if m.contains("cursor block 3") && m.contains("rescan"))
+        );
+    }
+
     #[test]
     fn scanner_leaves_the_cursor_unchanged_on_a_missing_block() {
         let (fx, t) = setup();
@@ -305,8 +401,30 @@ mod tests {
             vec!["cursor.json".to_owned()],
             "no temporary file left behind"
         );
+        std::fs::write(dir.path().join("cursor.json.tmp"), "garbage").expect("stray temp");
+        save_cursor(&path, &c).expect("a stray temp file is harmless");
+        assert_eq!(load_cursor(&path).expect("reload"), c);
+        std::fs::remove_file(dir.path().join("cursor.json.tmp")).expect("rm stray");
         std::fs::write(&path, "{ half").expect("write");
         let e = load_cursor(&path).expect_err("corrupt");
         assert!(matches!(e, SdkError::Io { ref path, .. } if path.ends_with("cursor.json")));
+    }
+
+    #[test]
+    fn a_failed_save_leaves_no_temporary_file() {
+        // The target is a non-empty directory, so the final rename fails (portable stand-in for a
+        // failure after the temp file was written; read-only directories are unreliable on /mnt/c).
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("cursor.json");
+        std::fs::create_dir(&path).expect("dir");
+        std::fs::write(path.join("keep"), "x").expect("file");
+        let e = save_cursor(&path, &Cursor::default()).expect_err("rename fails");
+        assert!(matches!(e, SdkError::Io { .. }));
+        assert!(
+            path.join("keep").exists(),
+            "the existing target is untouched"
+        );
+        let names: Vec<_> = std::fs::read_dir(dir.path()).expect("dir").collect();
+        assert_eq!(names.len(), 1, "no temporary file left behind");
     }
 }

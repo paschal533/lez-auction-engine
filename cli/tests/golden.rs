@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use auction_cli::{args::Cli, env::Env, run};
+use auction_cli::{args::Cli, env::Env, run_with};
 use auction_sdk::{
     confirm::ConfirmSettings,
     deployment::Deployment,
@@ -53,6 +53,11 @@ impl Case {
     }
 
     pub fn run(&self, args: &[&str]) -> String {
+        self.run_split(args).0
+    }
+
+    /// stdout (with the `exit:` line) and stderr, both normalised.
+    pub fn run_split(&self, args: &[&str]) -> (String, String) {
         let wallet = self.dir.path().join("wallet");
         if self.with_wallet {
             write_keystore(&wallet, &STANDARD_LABELS).expect("wallet");
@@ -78,13 +83,18 @@ impl Case {
             sleep: |_| {},
         };
         let mut out = Vec::new();
-        let result = run(&cli.command, &env, &mut out);
+        let mut err = Vec::new();
+        let result = run_with(&cli.command, &env, &mut out, &mut err);
         let mut text = String::from_utf8(out).expect("utf-8");
         match result {
             Ok(()) => text.push_str("exit: 0\n"),
             Err(e) => text.push_str(&format!("error: {e}\nexit: {}\n", e.exit_code())),
         }
-        normalise(&text, self.dir.path())
+        let stderr = String::from_utf8(err).expect("utf-8");
+        (
+            normalise(&text, self.dir.path()),
+            stderr.replace(&self.dir.path().display().to_string(), "<tmp>"),
+        )
     }
 }
 
@@ -349,4 +359,89 @@ fn a_smaller_scan_batch_gives_the_same_lists() {
     assert_eq!(value(&rescan, "scanned to block"), "3");
     let risk = c2.run(&["list-at-risk", "--batch", "1"]);
     assert!(risk.contains(&c2.fx.unsafe_position.to_string()), "{risk}");
+}
+
+fn put_auction_copy(c: &Case, at: lee_core::account::AccountId) {
+    use auction_sdk::chain::Chain;
+    let acc = c.fx.chain.account(&c.fx.live_auction).expect("auction");
+    c.fx.chain.put(at, acc);
+}
+
+#[test]
+fn a_mismatched_candidate_is_warned_about_on_stderr_and_the_rest_is_listed() {
+    let c = Case::new();
+    let not_an_auction = c.fx.unsafe_position.to_string();
+    c.write_cursor(&format!(
+        r#"{{"last_block":0,"last_hash":"","auctions":["{not_an_auction}"],"positions":[]}}"#
+    ));
+    let (out, err) = c.run_split(&["list-auctions"]);
+    assert!(
+        out.contains(&format!("{}  live", c.fx.live_auction)),
+        "{out}"
+    );
+    assert!(!out.contains("warning"), "stdout stays clean: {out}");
+    assert!(
+        err.contains(&format!("warning: skipped {not_an_auction}: ")) && err.contains("Auction"),
+        "{err}"
+    );
+    assert!(out.ends_with("exit: 0\n"), "{out}");
+}
+
+#[test]
+fn an_engine_rejected_candidate_is_warned_about_on_stderr_and_the_rest_is_listed() {
+    let c = Case::new();
+    // The live auction's account copied to an id it does not derive from: the engine's account
+    // check refuses it (WrongAccount), which is an Engine error, not a stale leftover.
+    let wrong = lee_core::account::AccountId::new([0x66; 32]);
+    put_auction_copy(&c, wrong);
+    c.write_cursor(&format!(
+        r#"{{"last_block":0,"last_hash":"","auctions":["{wrong}"],"positions":[]}}"#
+    ));
+    let (out, err) = c.run_split(&["list-auctions"]);
+    assert!(
+        out.contains(&format!("{}  live", c.fx.live_auction)),
+        "{out}"
+    );
+    assert!(
+        err.contains(&format!(
+            "warning: skipped {wrong}: the engine would reject this: "
+        )),
+        "{err}"
+    );
+    assert!(!out.contains(&wrong.to_string()), "{out}");
+}
+
+#[test]
+fn stale_leftovers_are_dropped_without_a_warning() {
+    let c = Case::new();
+    let gone = auction_cli_test_id(0x77);
+    c.write_cursor(&format!(
+        r#"{{"last_block":0,"last_hash":"","auctions":["{gone}"],"positions":["{gone}"]}}"#
+    ));
+    let (_, err) = c.run_split(&["list-auctions"]);
+    assert_eq!(err, "");
+    let (_, err) = c.run_split(&["list-at-risk"]);
+    assert_eq!(err, "");
+}
+
+#[test]
+fn rescan_from_beyond_the_cursor_says_which_blocks_it_skips() {
+    let c = Case::new();
+    let (out, err) = c.run_split(&["rescan", "--from", "3"]);
+    assert!(out.ends_with("exit: 0\n"), "{out}");
+    assert_eq!(err, "note: blocks 1..2 skipped\n");
+    // Continuing from where the cursor is now needs no note.
+    let (_, err) = c.run_split(&["rescan", "--from", "3"]);
+    assert_eq!(err, "");
+}
+
+#[test]
+fn rescan_from_1_over_a_corrupt_cursor_says_it_is_rebuilding() {
+    let c = Case::new();
+    c.write_cursor("{not json");
+    let (out, err) = c.run_split(&["rescan", "--from", "1"]);
+    assert!(out.ends_with("exit: 0\n"), "{out}");
+    assert_eq!(err, "cursor file unreadable; rebuilding from block 1\n");
+    let (_, err) = c.run_split(&["rescan", "--from", "1"]);
+    assert_eq!(err, "");
 }

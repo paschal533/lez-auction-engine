@@ -33,9 +33,9 @@ Account arguments accept a base58 id or a wallet label. Every command that touch
     auction-cli rescan [--from <block>]
     auction-cli watch [--interval-ms 15000] [--iterations N]
 
-`list-auctions`, `list-at-risk`, `rescan` and `watch` take `--batch N` (blocks per `getBlockRange` request, default 100): lower it when 100 blocks exceed the node's 16 MiB response cap. Lists read each discovered account from the chain and drop ids that no longer decode.
+`list-auctions`, `list-at-risk`, `rescan` and `watch` take `--batch N` (blocks per `getBlockRange` request, default 100): lower it when 100 blocks exceed the node's 16 MiB response cap. Lists read each discovered account from the chain and drop ids that no longer decode. Ids that decode but are the wrong account, or that the engine rejects, are skipped with `warning: skipped <id>: ...` on stderr; stdout stays script-safe.
 
-`rescan --from <block>` repositions the cursor and keeps what was already discovered; `rescan --from 1` rebuilds everything and is also the repair for a corrupt cursor file. Blocks before `<block>` are not scanned unless the cursor already covers them.
+`rescan --from <block>` repositions the cursor and keeps what was already discovered; `rescan --from 1` rebuilds everything and is also the repair for a corrupt cursor file. Blocks before `<block>` are not scanned unless the cursor already covers them. Such a gap is reported on stderr (`note: blocks X..N-1 skipped`).
 
 When the deployment file has `"engine_admin": null`, the admin shown by `config` comes from the chain alone: check that it is yours before signing anything.
 

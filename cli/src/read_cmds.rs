@@ -3,6 +3,8 @@
 use std::io::Write;
 use std::time::Duration;
 
+use lee_core::account::AccountId;
+
 use auction_sdk::{
     chain::Chain,
     deployment::program_id_hex,
@@ -159,16 +161,19 @@ fn auction_line(view: &AuctionView) -> String {
     line
 }
 
-/// Scanner candidates can be stale (ADR-043): an id whose account is gone, was replaced or is not
-/// what the scan took it for is dropped from the list instead of failing the command.
-fn skippable(e: &SdkError) -> bool {
-    matches!(
-        e,
-        SdkError::Missing { .. }
-            | SdkError::Decode { .. }
-            | SdkError::Mismatch { .. }
-            | SdkError::Engine { .. }
-    )
+/// Scanner candidates can be stale (ADR-043). An id whose account is gone or no longer decodes is an
+/// expected leftover and is dropped silently. An id that decodes but is the wrong account
+/// (`Mismatch`) or that the engine rejects (`Engine`) is skipped with a warning on stderr, so one
+/// bad id never hides the others and never hides itself either. Anything else fails the command.
+fn skip_stale(id: &AccountId, e: SdkError, err: &mut dyn Write) -> Result<(), CliError> {
+    match e {
+        SdkError::Missing { .. } | SdkError::Decode { .. } => Ok(()),
+        SdkError::Mismatch { .. } | SdkError::Engine { .. } => {
+            writeln!(err, "warning: skipped {id}: {e}")?;
+            Ok(())
+        }
+        other => Err(other.into()),
+    }
 }
 
 pub fn list_auctions<C: Chain>(
@@ -176,6 +181,7 @@ pub fn list_auctions<C: Chain>(
     all: bool,
     args: &ScanArgs,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<(), CliError> {
     let v = env.verified()?;
     let cursor = scan_now(env, &v, args)?;
@@ -185,8 +191,10 @@ pub fn list_auctions<C: Chain>(
     for id in cursor.auction_ids()? {
         let view = match quote::auction_view(&env.chain, &v, &id, now) {
             Ok(view) => view,
-            Err(e) if skippable(&e) => continue,
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                skip_stale(&id, e, err)?;
+                continue;
+            }
         };
         if view.state.settled && !all {
             continue;
@@ -204,6 +212,7 @@ pub fn list_at_risk<C: Chain>(
     env: &Env<C>,
     args: &ScanArgs,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<(), CliError> {
     let v = env.verified()?;
     let cursor = scan_now(env, &v, args)?;
@@ -213,8 +222,10 @@ pub fn list_at_risk<C: Chain>(
     for id in cursor.position_ids()? {
         let h = match quote::position_health(&env.chain, &v, &id, now) {
             Ok(h) => h,
-            Err(e) if skippable(&e) => continue,
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                skip_stale(&id, e, err)?;
+                continue;
+            }
         };
         if h.unsafe_at_min_cr && h.normalized_debt > 0 {
             shown += 1;
@@ -233,10 +244,17 @@ pub fn list_at_risk<C: Chain>(
 
 /// A corrupt cursor is repaired by `rescan --from 1`, so that one invocation starts from an empty
 /// cursor instead of failing on the file it is about to replace.
-fn cursor_for_rescan(path: &std::path::Path, from: Option<u64>) -> Result<Cursor, CliError> {
+fn cursor_for_rescan(
+    path: &std::path::Path,
+    from: Option<u64>,
+    err: &mut dyn Write,
+) -> Result<Cursor, CliError> {
     match scan::load_cursor(path) {
         Ok(c) => Ok(c),
-        Err(_) if from.is_some_and(|f| f <= 1) => Ok(Cursor::default()),
+        Err(_) if from.is_some_and(|f| f <= 1) => {
+            writeln!(err, "cursor file unreadable; rebuilding from block 1")?;
+            Ok(Cursor::default())
+        }
         Err(e) => Err(e.into()),
     }
 }
@@ -265,11 +283,16 @@ pub fn rescan<C: Chain>(
     from: Option<u64>,
     args: &ScanArgs,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<(), CliError> {
     let v = env.verified()?;
     let path = env.cursor_path(&v.config_id);
-    let mut cursor = cursor_for_rescan(&path, from)?;
+    let mut cursor = cursor_for_rescan(&path, from, err)?;
     if let Some(from) = from {
+        let covered = cursor.last_block;
+        if from > covered.saturating_add(1) {
+            writeln!(err, "note: blocks {}..{} skipped", covered + 1, from - 1)?;
+        }
         cursor = cursor_at(env, cursor, from)?;
     }
     let next = scan::scan(
@@ -290,10 +313,11 @@ pub fn watch<C: Chain>(
     iterations: Option<u32>,
     args: &ScanArgs,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<(), CliError> {
     let mut round = 0u32;
     loop {
-        list_auctions(env, false, args, out)?;
+        list_auctions(env, false, args, out, err)?;
         round = round.saturating_add(1);
         if iterations.is_some_and(|n| round >= n) {
             return Ok(());

@@ -24,6 +24,7 @@ Drift tests: `encode::tests` (SDK) and `programs/integration_tests/tests/idl.rs`
 | `addresses`, `decode` | 5 | PDAs from the engine's and host's own functions; decoders that check initialisation, owner and tag |
 | `deployment`, `verify` | 5 | `deployments/<network>.json` (must match `DEPLOYMENTS.md`); `verify_config` refuses a config not owned by the engine ImageID, not at `["CONFIG", admin, salt]`, or storing another host/token program, admin, `ProtocolParameters` or stablecoin definition, or whose host `ProtocolParameters` has another owner (I4, ADR-027); `verify_binding` checks the host binds this config |
 | `testing::standard` | 5 | the "standard world" fixture (`standard()`, `deployment()`, `config_id()` and the shared constants) used by SDK, CLI and golden tests; built from direct account inserts, no program runs |
+| `quote` | 6 | liquidation, bid, surplus-take and debt-take quotes on the handler's own path; auction view (held at max discount, paused reason); slippage helpers; next debt start (ADR-039) |
 
 ## Program-id verification (I4)
 
@@ -36,3 +37,7 @@ Trust boundary: the RPC endpoint is trusted. There are no state proofs, so a mal
 `verify_config` deliberately does not check the collateral definition, the `CollateralConfig` oracle id, or the protocol token and its oracle. Those are checked at use time: `Reader::oracle` (owner = twap oracle program when the deployment names it), `Reader::token_definition` (owner = token program), `Reader::balance`, and on-chain by the engine's own account pinning.
 
 The ImageIDs in `deployments/localnet.json` are native-build values until Plan 3b's reproducible Docker builds (THREAT_MODEL I4 residual); they equal `DEPLOYMENTS.md` today and Task 16 refreshes both after the engine guest changes of Tasks 2 and 3.
+
+## Quotes
+
+A quote is the handler's pricing path run on fetched accounts at a chosen `now` (default: the chain clock, `chain::clock_ms`). It calls `auction_engine_program::feed::{redemption_price, observe, require_live}` and the `auction_core` functions in the handler's order, so `t_eff` always comes from the clock *after* simulating `observed()` (ADR-024): an unobserved stale gap freezes the discount in the quote exactly as it will on-chain. A quote is valid only at its `now`; the on-chain result at inclusion time can differ (discount moved, oracle moved), which is why every transaction command derives `min_collateral_out` / `max_protocol_in` / `min_protocol_out` from the quote with a slippage margin (Review Focus 1, `sdk_quotes.rs`).

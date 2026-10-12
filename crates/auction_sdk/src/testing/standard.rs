@@ -327,6 +327,8 @@ pub fn standard() -> Fixture {
             count: 1,
         },
     );
+    // The liquidated position's host vault stays initialised (empty), as after a real liquidation.
+    chain.put_holding(host.position_vault(&p1), TOKEN, COLLATERAL, 0);
     let a = engine.auction(&p1, 0);
     chain.put_state(
         a,

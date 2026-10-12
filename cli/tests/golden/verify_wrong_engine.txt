@@ -1,0 +1,2 @@
+error: verification failed: engine program (owner of the config account): expected 0100000001000000010000000100000001000000010000000100000001000000, found e1000000e1000000e1000000e1000000e1000000e1000000e1000000e1000000; refusing to build a transaction (I4, ADR-027)
+exit: 2

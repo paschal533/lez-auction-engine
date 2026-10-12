@@ -1,0 +1,4 @@
+scanned to block  3
+auctions          1
+positions         2
+exit: 0

@@ -1,0 +1,2 @@
+error: verification failed: Auction: expected owner e1000000e1000000e1000000e1000000e1000000e1000000e1000000e1000000, found owner a1000000a1000000a1000000a1000000a1000000a1000000a1000000a1000000; refusing to build a transaction (I4, ADR-027)
+exit: 2

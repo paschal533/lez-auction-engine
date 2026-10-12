@@ -1,0 +1,27 @@
+[package]
+name = "auction_cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Command-line client of the RFP-014 auction engine (spec §6.6)."
+
+[[bin]]
+name = "auction-cli"
+path = "src/main.rs"
+
+[dependencies]
+auction_sdk = { workspace = true, features = ["rpc"] }
+auction_core = { workspace = true }
+auction_engine_core = { workspace = true }
+lee_core = { workspace = true }
+stablecoin_core = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "2"
+hex = "0.4"
+
+[dev-dependencies]
+auction_sdk = { workspace = true, features = ["rpc", "testing"] }
+risc0-zkvm = { workspace = true }
+tempfile = "3"

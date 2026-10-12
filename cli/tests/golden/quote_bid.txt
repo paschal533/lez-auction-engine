@@ -1,0 +1,15 @@
+auction           7PyXEX3xzSS2Poxhg7NtWTkRGsNRnZJNFFQP8bHJb5Eo
+clock (ms)        1700000000000
+t_eff (ms)        600000
+discount          377.77 bps
+price (RAY)       500000000000000000000000000
+remaining target  660000
+collateral left   475000
+charged           100000
+collateral out    51963
+min out (50 bps)  51703
+debt part         100000
+penalty part      0
+ends auction      no
+instruction       bid
+exit: 0

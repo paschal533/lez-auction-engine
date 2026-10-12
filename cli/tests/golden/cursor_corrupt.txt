@@ -1,0 +1,2 @@
+error: <tmp>/state/Ab7yzBXVajkLwXV5x2m1bo6qLj8Bw6iaFyyvRgr5spSu.cursor.json: corrupt cursor (key must be a string at line 1 column 2); delete it or run `rescan --from 1`
+exit: 1

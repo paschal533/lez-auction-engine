@@ -1,0 +1,3 @@
+scanned to block  3
+7xdCdVxS8WU8d7XyF32j3nR26AqA5QQcfWBSejgG6T2S  owner 7wx93ACHrg2tR8vHRBcKnVkRJTrtT7zcP3UsxcViopKg  collateral 500000  debt 600000  unsafe at min CR
+exit: 0

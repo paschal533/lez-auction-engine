@@ -1,0 +1,14 @@
+position          7xdCdVxS8WU8d7XyF32j3nR26AqA5QQcfWBSejgG6T2S
+owner             7wx93ACHrg2tR8vHRBcKnVkRJTrtT7zcP3UsxcViopKg
+unsafe (min CR)   yes
+nonce             0
+auction           7hT7bjKCoiP2fsCtwpHUUt8qDVDPVGHmeQKWTH1EzQTn
+collateral        500000
+vault balance     500000
+nominal debt      600000
+amount to raise   660000
+keeper reward     25
+lot               499975
+price (RAY)       500000000000000000000000000
+clock (ms)        1700000000000
+exit: 0

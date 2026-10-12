@@ -4,7 +4,7 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 
 ## Status
 
-**Plan 3a in progress: engine hardening, SDK and CLI.** See `docs/superpowers/plans/2026-10-09-plan-3a-engine-hardening-sdk-cli.md` and [docs/architecture/sdk.md](docs/architecture/sdk.md).
+**Plan 3a in progress: engine hardening, SDK and CLI.** See `docs/superpowers/plans/2026-10-09-plan-3a-engine-hardening-sdk-cli.md` and [docs/architecture/sdk.md](docs/architecture/sdk.md). CLI: [cli/README.md](cli/README.md).
 
 **Plan 2 complete: on-chain programs.**
 

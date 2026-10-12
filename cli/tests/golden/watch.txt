@@ -1,0 +1,5 @@
+scanned to block  3
+7PyXEX3xzSS2Poxhg7NtWTkRGsNRnZJNFFQP8bHJb5Eo  live  lot 475000  raised 0/660000  discount 377.77 bps  t_eff 600000 ms
+scanned to block  3
+7PyXEX3xzSS2Poxhg7NtWTkRGsNRnZJNFFQP8bHJb5Eo  live  lot 475000  raised 0/660000  discount 377.77 bps  t_eff 600000 ms
+exit: 0

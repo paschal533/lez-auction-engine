@@ -1,0 +1,13 @@
+config            Ab7yzBXVajkLwXV5x2m1bo6qLj8Bw6iaFyyvRgr5spSu
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+admin source      deployment file (checked)
+engine program    e1000000e1000000e1000000e1000000e1000000e1000000e1000000e1000000
+host program      a1000000a1000000a1000000a1000000a1000000a1000000a1000000a1000000
+token program     b1000000b1000000b1000000b1000000b1000000b1000000b1000000b1000000
+stablecoin        EAo22rU5j1DBkVcgibu3R27v2aHdcfcrQHK3L5hcALbs
+collateral        4F7BsTMVPKFshM1MwLf6y23cid6fL3xMpazVoF9krzUw
+protocol token    AoErkfXUkF4rE8GbFKJEBvucQ2WBfDYu2Ae9T7VsLJmW
+global cap        10000000
+global reserved   660000
+bad-debt freeze   yes
+exit: 0

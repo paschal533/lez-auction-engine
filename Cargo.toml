@@ -2,6 +2,7 @@
 members = [
     "crates/auction_core",
     "crates/auction_sdk",
+    "cli",
     "programs/auction_engine/core",
     "programs/auction_engine",
     "programs/auction_engine/methods",
@@ -37,6 +38,7 @@ lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git
 lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4", features = ["test-utils"] }
 auction_core = { path = "crates/auction_core" }
 auction_sdk = { path = "crates/auction_sdk" }
+auction_cli = { path = "cli" }
 auction_engine_core = { path = "programs/auction_engine/core" }
 auction_engine_program = { path = "programs/auction_engine" }
 token_core = { path = "programs/token/core" }

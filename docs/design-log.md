@@ -972,3 +972,23 @@ A rewind deeper than `reorg_depth` (10) needs `rescan --from 1`. Ids discovered 
 **Status**
 Accepted (Plan 3a, Task 11)
 
+---
+
+## ADR-044: CLI Conventions: Labels or Ids, Plain Key-Value Output, Exit Codes, Golden Tests
+
+**Context**
+Spec §6.6 lists the commands; spec §9 asks for CLI golden tests. The CLI must be scriptable (the localnet runbook drives it) and its failures must be distinguishable. Two platform facts shape it: clap exits 2 on a usage error (which would collide with the verification exit code), and a scanner cursor can be corrupt or too wide for the node's 16 MiB response cap, which the scanner's own messages tell users to fix with `rescan`.
+
+**Options**
+- (A) JSON output (`--json`) and one exit code for every failure.
+- (B) Plain `key value` lines, a stable exit-code table, and golden files that pin the output.
+- (C) Build the CLI on spel-cli.
+
+**Decision**
+(B). Account arguments take a base58 id or a wallet label. Output is `key value` lines (key padded to 17 columns, then a space, so the last field is always the value) and one line per listed item, with no colour or tables, so scripts can `awk` it and golden files stay stable. Exit codes: 1 usage/other (including an unreadable deployment file and clap usage errors, which `main` remaps from clap's default 2), 2 verification (I4), 3 dropped (re-quote), 4 keystore. The mapping is one function, `CliError::exit_code`, fed by `From<SdkError>` (a keystore error is 4, a `Mismatch` is 2, everything else 1). `run` is generic over `Chain`; golden tests run every command against `FixtureChain` with a temporary wallet, replacing temp paths and transaction hashes. Lists read the discovered ids on chain and drop those that no longer decode (ADR-043). `rescan --from N` repositions the cursor at block N-1 (its hash read from the node) and keeps the discovered sets; `--from 1` also starts from an empty cursor when the file is corrupt. `--batch N` on every scanning command sets the `getBlockRange` size. When the deployment file names no operator, `Env::announce_admin` prints the admin read from the chain, labelled as chain-only, and every signing command must call it before signing; `config` shows it.
+
+**Trade-offs**
+No JSON output in the PoC (the Plan 4 FFI is the machine interface). Golden files must be reviewed when output changes (`UPDATE_GOLDEN=1`). spel-cli is not an option (it mis-encodes stablecoin instructions, spec §3.2). `rescan --from N` with N beyond the cursor leaves the blocks in between unscanned by design; use `--from 1` to rebuild.
+
+**Status**
+Accepted (Plan 3a, Task 13)

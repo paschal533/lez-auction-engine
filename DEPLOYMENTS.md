@@ -11,14 +11,14 @@
 
 **The stablecoin and auction_engine ImageIDs come from a NATIVE build (local risc0 toolchain in WSL), not from the
 reproducible Docker build. They are not reproducible across machines**: the same source can give a different ImageID
-on another machine or toolchain state. Until Plan 3 produces reproducible Docker builds, treat these two values as
+on another machine or toolchain state. Until Plan 3b produces reproducible Docker builds, treat these two values as
 the record of what ran in the Plan 3a smoke only, not as ids a client can compare a rebuild against. The token and
 twap_oracle ids are the upstream Docker-built ones.
 
 Clients must compare the `host_program_id` and `token_program_id` stored in an engine config against this table
-before binding or bidding (threat model item I4); `localnet_tool decode-config` prints them.
+before binding or bidding (threat model item I4); `auction-cli admin verify` prints them, and `auction-cli host bind` checks them before binding.
 
-Reproducible (Docker) builds and testnet deployment: Plan 3 / milestone M6.
+Reproducible (Docker) builds and testnet deployment: Plan 3b / milestone M6.
 
 ## Reference price changes (ADR-017)
 

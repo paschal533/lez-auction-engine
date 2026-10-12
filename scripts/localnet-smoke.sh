@@ -26,7 +26,10 @@ LABELS="admin freeze oracle-src coll-def owner owner-coll owner-stable engine-ad
 
 cli() { "$CLI_BIN" --deployment "$DEP" --state-dir "$LN/cli-state" --wallet-home "$LEE_WALLET_HOME_DIR" "$@"; }
 # Last field of the first `key  value` line starting with $1; reads all input (no SIGPIPE under pipefail).
-field() { awk -v k="$1" 'index($0, k) == 1 && !done { print $NF; done = 1 }'; }
+field() {
+  awk -v k="$1" 'index($0, k) == 1 && !done { print $NF; done = 1 }
+    END { if (!done) { print "error: key \"" k "\" not found in auction-cli output" > "/dev/stderr"; exit 1 } }'
+}
 # Runs auction-cli, shows its output on stderr, prints the value of key $1. (Not `tee /dev/stderr`: reopening
 # /dev/stderr truncates it when stderr is redirected to a log file.)
 run_field() { local key="$1" out; shift; out="$(cli "$@")" || { printf '%s\n' "$out" >&2; return 1; }; printf '%s\n' "$out" >&2; printf '%s\n' "$out" | field "$key"; }
@@ -66,7 +69,7 @@ step_sequencer() {
     echo "port 3040 is already in use; not starting a second sequencer" >&2
     exit 1
   fi
-  rm -rf "$LN/seqhome" && mkdir -p "$LN/seqhome"
+  rm -rf "${LN:?}/seqhome" "${LN:?}/cli-state" && mkdir -p "$LN/seqhome"
   (cd "$S1/lez" && RISC0_DEV_MODE=1 RUST_LOG=info setsid nohup target/debug/sequencer_service \
     lez/sequencer/service/configs/debug/sequencer_config.json --home "$LN/seqhome" --listen-address 127.0.0.1 -p 3040 \
     > "$LN/logs/sequencer.log" 2>&1 < /dev/null &)
@@ -85,6 +88,8 @@ step_sequencer() {
 }
 
 step_accounts() {
+  # Fresh wallet for every full run (duplicate labels would make id_of ambiguous). Throwaway localnet wallet only.
+  rm -rf "${LN:?}/wallet-home"
   mkdir -p "$LEE_WALLET_HOME_DIR" && cp "$S1/lez/lez/wallet/configs/debug/wallet_config.json" "$LEE_WALLET_HOME_DIR/"
   local l
   for l in $LABELS; do echo pw | "$W" account new public --label "$l"; done
@@ -179,7 +184,16 @@ step_check() {
   local a
   for a in owner-coll owner-stable keeper-coll taker-stable taker-protocol; do cli dev balance --account "$a"; done
   cli dev balance --account "$(run_field buffer admin addresses --admin engine-admin --salt 1)"
-  grep -E "failed execution check" "$LN/logs/sequencer.log" | tail -20 || echo "no failed execution check"
+  if [[ ! -f "$LN/logs/sequencer.log" ]]; then
+    echo "sequencer log $LN/logs/sequencer.log not found; cannot check for failed transactions" >&2
+    exit 1
+  fi
+  if grep -qE "failed execution check" "$LN/logs/sequencer.log"; then
+    grep -E "failed execution check" "$LN/logs/sequencer.log" | tail -20
+    echo "step_check: the sequencer log contains failed execution checks" >&2
+    exit 1
+  fi
+  echo "no failed execution check"
 }
 
 step_stop() {
@@ -189,7 +203,12 @@ step_stop() {
     echo "no sequencer pid recorded in $LN/sequencer.pid; nothing stopped (check manually, do not pkill by name)" >&2
     exit 1
   fi
-  kill "$pid" 2>/dev/null || echo "pid $pid was not running" >&2
+  # Only signal the process if it is still our sequencer (the pid may have been reused).
+  if ! tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "sequencer_service"; then
+    echo "pid $pid is not a running sequencer_service; not signalling it" >&2
+  else
+    kill "$pid" 2>/dev/null || echo "pid $pid was not running" >&2
+  fi
   rm -f "$LN/sequencer.pid"
 }
 

@@ -50,7 +50,7 @@ scripts/localnet-smoke.sh step_stop
 | `step_auth` | 5 x `auth-transfer init`: `661107ea...`, `1dd27977...`, `2d724b5e...`, `9b73c482...`, `7b2ebe8a...` (blocks 3-11) | included |
 | `step_deploy` | token `43fab3ef...`, twap_oracle `32e65707...`, token_mint_authority `fb9a2082...`, stablecoin `26e36c34...`, auction_engine `21e1bd6e...` (blocks 13-20) | included |
 | `step_host` | COLL `new_fungible_definition` `45f95d96...`; `create_oracle_price_account` `e98ddd7e...`; `initialize_program` `c5b9e0ba...` | included |
-| `step_engine` | MOCK `new_fungible_definition` `3a1c4ae7...`; `init_config` `148c286b...` (`ref price (RAY)` printed `2000000000000000000000000000`) | included; config verified |
+| `step_engine` | MOCK `new_fungible_definition` `3a1c4ae7...`; `init_config` `148c286b...` (`ref price (RAY)` printed `2000000000000000000000000000`) | included |
 | `step_bind` | `host bind`: `verified config owner, address, host and token program ids, admin, host ProtocolParameters`, then `set_liquidation_engine` `bf99fccc...` | included; `bound by the host: yes` |
 | `step_collateral` | `set_collateral_config` `63fe3c42...` | included (min bid 25, type cap 5000000) |
 | `step_holdings` | 3 x `initialize_account`: `b6d6a508...`, `e7f21c67...`, `d91ac6b1...` | included |
@@ -91,12 +91,12 @@ committed `deployments/localnet.json` keeps `engine_admin` and `config` `null` (
 
 ## Plan 2 run (spel)
 
-History, kept unchanged below. Its engine ImageID `3d0d15fa...` is superseded by the one above.
+History, kept unchanged below. The Plan 2 script (spel based, with `step_verify_and_bind` and `localnet.env`) is `git show cb21843:scripts/localnet-smoke.sh`; the current `scripts/localnet-smoke.sh` is the Plan 3a one. Its engine ImageID `3d0d15fa...` is superseded by the one above.
 
 Proof that the stablecoin (with the engine hooks) and the auction engine deploy to and run on a real standalone
 LEZ v0.2.4 sequencer (`RISC0_DEV_MODE=1`, dev-mode proofs) and that the core flow works end to end:
 `liquidate` -> `bid_with_settlement` -> `claim_leftover`. Clients are `spel-cli` (Plan 3 replaces it with SDK
-encoders). Runbook: `scripts/localnet-smoke.sh`; helper: `programs/integration_tests/examples/localnet_tool.rs`.
+encoders). Runbook: the Plan 2 script (`git show cb21843:scripts/localnet-smoke.sh`); helper: `programs/integration_tests/examples/localnet_tool.rs`.
 
 **Result: complete.** Every step confirmed, no transaction of the final flow failed. Not covered here (the in-process
 suite covers them): the surplus and debt system auctions, `settle_debt`, `check_solvency`, `observe_feed`,

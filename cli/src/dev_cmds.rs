@@ -14,11 +14,19 @@ use crate::{
     output::kv,
 };
 
+/// The only network the dev commands (mock tokens, mock oracles) may act on.
+const LOCALNET: &str = "localnet";
 const CHECK_BALANCE: &str = "dev balance --account <account>";
 
 pub fn dev<C: Chain>(env: &Env<C>, cmd: &DevCommand, out: &mut dyn Write) -> Result<(), CliError> {
     if !matches!(cmd, DevCommand::Resolve { .. } | DevCommand::Balance { .. }) {
         env.refuse_at_ms()?;
+    }
+    if env.deployment.network != LOCALNET {
+        return Err(CliError::Usage(format!(
+            "dev commands are for the localnet only (the deployment file names network {:?})",
+            env.deployment.network
+        )));
     }
     match cmd {
         DevCommand::Resolve { label } => {

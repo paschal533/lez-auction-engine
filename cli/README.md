@@ -72,7 +72,7 @@ Every one verifies the config (exit 2 on mismatch), prints the config's admin an
 
     auction-cli admin addresses --admin <label> [--salt 1]
     auction-cli admin init-config --admin <label> [--salt 1] --params cli/params/localnet-engine.json [--protocol-token <id|label>] [--ref-oracle <id>]
-    auction-cli admin set-engine-params --admin <label> --params <json> [--protocol-token ...] [--ref-oracle ...]
+    auction-cli admin set-engine-params --admin <label> --params <json> [--protocol-token ...] [--ref-oracle ...] [--disable-protocol-token] [--disable-ref-oracle]
     auction-cli admin set-collateral-config --admin <label> --params cli/params/localnet-collateral.json
     auction-cli admin verify
     auction-cli host addresses
@@ -90,3 +90,5 @@ Every one verifies the config (exit 2 on mismatch), prints the config's admin an
     auction-cli dev balance --account <id|l>
 
 Parameter files hold `u128` values as decimal strings; the protocol-token and reference-oracle flags come from `--protocol-token` / `--ref-oracle`. An enabled protocol token must already exist as a fungible token definition (ADR-038): create it first with `dev token-new ... --mint-authority <mint authority from admin addresses>`. Every reference-price change printed by `set-engine-params` goes into `DEPLOYMENTS.md` (ADR-017).
+
+`set-engine-params` rewrites the protocol-token and reference-oracle slots from its flags, so an omitted flag would disable a slot the config has: the command refuses unless `--disable-protocol-token` / `--disable-ref-oracle` is passed, and prints `old -> new` for every slot that changes. `--protocol-token` is checked client-side (ADR-038) to be a fungible definition of the token program. `admin init-config` refuses a signer other than the deployment file `engine_admin`. `dev` commands only run when the deployment file names the network `localnet`. `host bind` prints the engine the host is bound to now before it re-binds; `host set-min-cr` / `set-controller-gains` print `old -> new`.

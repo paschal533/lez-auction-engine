@@ -1,3 +1,5 @@
+kp                0 -> -1000000000000000000000000000
+ki                0 -> -1
 plan              set_controller_gains (2 accounts, 1 signer(s))
 submitted         <hash>
 included          signer nonce 1

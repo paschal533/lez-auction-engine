@@ -249,6 +249,12 @@ pub enum AdminCommand {
         protocol_token: Option<String>,
         #[arg(long)]
         ref_oracle: Option<String>,
+        /// Allow the change to disable the protocol token the config currently has.
+        #[arg(long, conflicts_with = "protocol_token")]
+        disable_protocol_token: bool,
+        /// Allow the change to disable the reference oracle the config currently has.
+        #[arg(long, conflicts_with = "ref_oracle")]
+        disable_ref_oracle: bool,
     },
     SetCollateralConfig {
         #[arg(long)]

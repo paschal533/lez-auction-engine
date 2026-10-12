@@ -35,6 +35,17 @@ fn sent_host_debug(c: &Case) -> String {
     format!("{ix:?}")
 }
 
+/// The dev commands act on the localnet only; the fixture deployment names its own network.
+fn localnet_case() -> Case {
+    Case {
+        deployment: Some(Deployment {
+            network: "localnet".into(),
+            ..standard::deployment()
+        }),
+        ..Case::new()
+    }
+}
+
 fn wrong_host_case() -> Case {
     Case {
         deployment: Some(Deployment {
@@ -318,7 +329,7 @@ fn host_and_dev_commands() {
         ),
     ];
     for (name, args) in cases {
-        let c = Case::new();
+        let c = localnet_case();
         let out = c.run(&args);
         assert!(out.ends_with("exit: 0\n"), "{name}: {out}");
         check(name, &out);
@@ -372,4 +383,168 @@ fn sending_commands_refuse_at_ms_and_send_nothing() {
         assert!(out.ends_with("exit: 1\n"), "{out}");
         assert!(c.fx.chain.sent().is_empty());
     }
+}
+
+#[test]
+fn set_engine_params_without_the_flag_on_a_config_with_a_token_is_refused() {
+    let c = Case::new();
+    let engine_params = params("localnet-engine.json");
+    let out = c.run(&[
+        "admin",
+        "set-engine-params",
+        "--admin",
+        "engine-admin",
+        "--params",
+        &engine_params,
+    ]);
+    assert!(out.contains("would disable the protocol token"), "{out}");
+    assert!(out.ends_with("exit: 1\n"), "{out}");
+    assert!(c.fx.chain.sent().is_empty(), "nothing is sent");
+}
+
+#[test]
+fn set_engine_params_can_disable_a_slot_only_when_asked_and_says_so() {
+    let c = Case::new();
+    let engine_params = params("localnet-engine.json");
+    let out = c.run(&[
+        "admin",
+        "set-engine-params",
+        "--admin",
+        "engine-admin",
+        "--params",
+        &engine_params,
+        "--disable-protocol-token",
+    ]);
+    assert!(
+        out.ends_with(
+            "exit: 0
+"
+        ),
+        "{out}"
+    );
+    assert!(value(&out, "protocol token").ends_with("-> none"), "{out}");
+    assert_eq!(sent_names(&c), vec!["set_engine_params"]);
+}
+
+#[test]
+fn set_engine_params_announces_a_slot_change() {
+    let c = Case::new();
+    let engine_params = params("localnet-engine.json");
+    let oracle = standard::ORACLE.to_string();
+    let protocol = standard::PROTOCOL.to_string();
+    let out = c.run(&[
+        "admin",
+        "set-engine-params",
+        "--admin",
+        "engine-admin",
+        "--params",
+        &engine_params,
+        "--protocol-token",
+        &protocol,
+        "--ref-oracle",
+        &oracle,
+    ]);
+    assert!(out.contains(&format!("none -> {oracle}")), "{out}");
+    assert!(!out.contains("protocol token"), "unchanged slot: {out}");
+}
+
+#[test]
+fn set_collateral_config_validates_before_signing() {
+    let c = Case::new();
+    let dir = tempfile::tempdir().expect("tmp");
+    let file = dir.path().join("coll.json");
+    let text = std::fs::read_to_string(params("localnet-collateral.json"))
+        .expect("read")
+        .replace("\"5000000\"", "\"50000000\"");
+    std::fs::write(&file, text).expect("write");
+    let out = c.run(&[
+        "admin",
+        "set-collateral-config",
+        "--admin",
+        "engine-admin",
+        "--params",
+        &file.display().to_string(),
+    ]);
+    assert!(out.contains("invalid collateral config"), "{out}");
+    assert!(
+        out.ends_with(
+            "exit: 1
+"
+        ),
+        "{out}"
+    );
+    assert!(c.fx.chain.sent().is_empty());
+}
+
+#[test]
+fn a_protocol_token_that_is_not_a_fungible_definition_is_refused() {
+    let engine_params = params("localnet-engine.json");
+    let holding = id(standard::k::OWNER_COLL).to_string();
+    let c = Case::new();
+    for args in [
+        vec![
+            "admin",
+            "init-config",
+            "--admin",
+            "engine-admin",
+            "--salt",
+            "2",
+        ],
+        vec!["admin", "set-engine-params", "--admin", "engine-admin"],
+    ] {
+        let mut argv = args.clone();
+        argv.extend(["--params", &engine_params, "--protocol-token", &holding]);
+        let out = c.run(&argv);
+        assert!(out.contains("not a fungible token definition"), "{out}");
+        assert!(
+            out.ends_with(
+                "exit: 1
+"
+            ),
+            "{out}"
+        );
+    }
+    assert!(c.fx.chain.sent().is_empty());
+}
+
+#[test]
+fn init_config_by_a_signer_other_than_the_named_operator_is_exit_2() {
+    let c = Case::new();
+    let engine_params = params("localnet-engine.json");
+    let out = c.run(&[
+        "admin",
+        "init-config",
+        "--admin",
+        "keeper",
+        "--salt",
+        "2",
+        "--params",
+        &engine_params,
+    ]);
+    assert!(out.contains("verification failed: engine admin"), "{out}");
+    assert!(
+        out.ends_with(
+            "exit: 2
+"
+        ),
+        "{out}"
+    );
+    assert!(c.fx.chain.sent().is_empty());
+}
+
+#[test]
+fn dev_commands_refuse_any_network_but_the_localnet() {
+    let c = Case::new();
+    let out = c.run(&["dev", "resolve", "--label", "keeper"]);
+    assert!(
+        out.contains("dev commands are for the localnet only"),
+        "{out}"
+    );
+    assert!(
+        out.ends_with(
+            "exit: 1
+"
+        ),
+        "{out}"
+    );
 }

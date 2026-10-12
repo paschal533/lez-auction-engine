@@ -1,3 +1,4 @@
+host state        already initialised (admin HNQ2aVbCErw9h3dNXu8m7WhYZCsHCZGpeRsu6AqjSqFd)
 plan              initialize_program (9 accounts, 1 signer(s))
 submitted         <hash>
 included          signer nonce 1

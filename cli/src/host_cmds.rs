@@ -4,8 +4,12 @@
 
 use std::io::Write;
 
-use auction_sdk::{chain::Chain, deployment::program_id_hex, plan_host, verify::verify_binding};
-use stablecoin_core::ProtocolParameters;
+use auction_sdk::{
+    addresses::HostAddresses, chain::Chain, decode::Reader, deployment::program_id_hex, plan_host,
+    verify::verify_binding,
+};
+use lee_core::account::Account;
+use stablecoin_core::{LiquidationEngineState, ProtocolParameters};
 
 use crate::{
     admin_cmds::{host_addresses, print_after, protocol_parameters},
@@ -44,6 +48,12 @@ pub fn host<C: Chain>(
         } => generate_debt(env, (owner, position, owner_stable), *amount, out),
         HostCommand::SetMinCr { admin, ratio } => {
             let host = host_addresses(env);
+            let now = protocol_parameters(env, &host)?;
+            kv(
+                out,
+                "min collateral ratio",
+                &format!("{} -> {ratio}", now.minimum_collateralization_ratio),
+            )?;
             let plan =
                 plan_host::set_minimum_collateralization_ratio(&host, env.account(admin)?, *ratio)?;
             env.send_plain(
@@ -61,6 +71,13 @@ pub fn host<C: Chain>(
         }
         HostCommand::SetControllerGains { admin, kp, ki } => {
             let host = host_addresses(env);
+            let now = protocol_parameters(env, &host)?;
+            let (old_kp, old_ki) = (
+                now.controller_proportional_gain,
+                now.controller_integral_gain,
+            );
+            kv(out, "kp", &format!("{old_kp} -> {kp}"))?;
+            kv(out, "ki", &format!("{old_ki} -> {ki}"))?;
             let plan = plan_host::set_controller_gains(&host, env.account(admin)?, *kp, *ki)?;
             env.send_plain(&plan, "set_controller_gains", CHECK_HOST, out)?;
             print_params(env, out, |p| {
@@ -117,6 +134,28 @@ fn addresses<C: Chain>(env: &Env<C>, out: &mut dyn Write) -> Result<(), CliError
     )
 }
 
+/// The engine the host is bound to now (a re-bind away from another config must be visible).
+fn current_binding<C: Chain>(env: &Env<C>, host: &HostAddresses) -> String {
+    let state = match env.chain.account(&host.liquidation_engine_state) {
+        Ok(acc) if acc == Account::default() => return "none".to_owned(),
+        Ok(_) => Reader::new(&env.chain, env.deployment.engine_program)
+            .host::<LiquidationEngineState>(
+                &host.liquidation_engine_state,
+                &host.program,
+                "LiquidationEngineState",
+            ),
+        Err(e) => return format!("unreadable: {e}"),
+    };
+    match state {
+        Ok(s) => format!(
+            "engine {}, authority {}",
+            program_id_hex(&s.engine_program_id),
+            s.engine_authority_id
+        ),
+        Err(e) => format!("unreadable: {e}"),
+    }
+}
+
 fn bind<C: Chain>(env: &Env<C>, admin: &str, out: &mut dyn Write) -> Result<(), CliError> {
     // ADR-027: refuses (exit 2) unless verify_config accepts the config about to be bound.
     let v = env.verified()?;
@@ -141,6 +180,7 @@ fn bind<C: Chain>(env: &Env<C>, admin: &str, out: &mut dyn Write) -> Result<(), 
             "refusing before signing: {signer} is not the host admin {host_admin}"
         )));
     }
+    kv(out, "currently bound", &current_binding(env, &host))?;
     let plan = plan_host::set_liquidation_engine(
         &host,
         signer,
@@ -161,6 +201,11 @@ fn init_program<C: Chain>(
     out: &mut dyn Write,
 ) -> Result<(), CliError> {
     let host = host_addresses(env);
+    let current = match protocol_parameters(env, &host) {
+        Ok(p) => format!("already initialised (admin {})", p.admin_account_id),
+        Err(_) => "uninitialised".to_owned(),
+    };
+    kv(out, "host state", &current)?;
     let args = plan_host::InitializeProgramArgs {
         admin: env.account(&a.admin)?,
         freeze_authority: env.account(&a.freeze)?,

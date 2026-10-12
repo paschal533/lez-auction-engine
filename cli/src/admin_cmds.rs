@@ -16,6 +16,7 @@ use auction_sdk::{
 };
 use lee_core::account::AccountId;
 use stablecoin_core::ProtocolParameters;
+use token_core::TokenDefinition;
 
 use crate::{
     args::AdminCommand,
@@ -129,10 +130,13 @@ pub fn admin<C: Chain>(
             params: file,
             protocol_token,
             ref_oracle,
+            disable_protocol_token,
+            disable_ref_oracle,
         } => set_engine_params(
             env,
             admin,
             (file, protocol_token.as_ref(), ref_oracle.as_ref()),
+            (*disable_protocol_token, *disable_ref_oracle),
             out,
         ),
         AdminCommand::SetCollateralConfig {
@@ -168,8 +172,20 @@ fn init_config<C: Chain>(
     let host = host_addresses(env);
     check_network(env, &host)?;
     let admin = env.account(admin)?;
+    if let Some(expected) = env.deployment.engine_admin {
+        if expected != admin {
+            return Err(CliError::Verify(SdkError::Mismatch {
+                what: "engine admin (the signer is not the operator named by the deployment file)",
+                expected: expected.to_string(),
+                found: admin.to_string(),
+            }));
+        }
+    }
     let token = optional(env, protocol_token)?;
     let oracle = optional(env, ref_oracle)?;
+    if let Some(t) = token {
+        check_protocol_token(env, &t)?;
+    }
     let p = params::engine_params(file, token.is_some(), oracle.is_some())?;
     let e = EngineAddresses::new(env.deployment.engine_program, &admin, salt);
     kv(out, "config", &e.config.to_string())?;
@@ -192,15 +208,83 @@ fn init_config<C: Chain>(
     print_after(out, "config", read)
 }
 
+/// An omitted slot flag disables the slot on chain, so a change that would do so needs its explicit
+/// `--disable-*` flag (usage error otherwise, before anything is signed).
+fn guard_slot(
+    what: &str,
+    flag: &str,
+    (old, new): (Option<AccountId>, Option<AccountId>),
+    disable: bool,
+) -> Result<(), CliError> {
+    if old.is_some() && new.is_none() && !disable {
+        return Err(CliError::Usage(format!(
+            "refusing before signing: this would disable the {what} the config has; name it \
+             again or pass --{flag} to confirm"
+        )));
+    }
+    Ok(())
+}
+
+/// `old -> new` of a slot, printed before signing whenever it changes.
+fn announce_slot(
+    out: &mut dyn Write,
+    what: &str,
+    old: Option<AccountId>,
+    new: Option<AccountId>,
+) -> Result<(), CliError> {
+    if old == new {
+        return Ok(());
+    }
+    let show = |s: Option<AccountId>| s.map_or_else(|| "none".to_owned(), |i| i.to_string());
+    kv(out, what, &format!("{} -> {}", show(old), show(new)))
+}
+
+/// ADR-038: the protocol token must be a fungible definition owned by the token program.
+fn check_protocol_token<C: Chain>(env: &Env<C>, id: &AccountId) -> Result<(), CliError> {
+    let acc = env.chain.account(id)?;
+    let fungible = acc.program_owner == env.deployment.token_program
+        && matches!(
+            TokenDefinition::try_from(&acc.data),
+            Ok(TokenDefinition::Fungible { .. })
+        );
+    if fungible {
+        return Ok(());
+    }
+    Err(CliError::Usage(format!(
+        "refusing before signing: the protocol token {id} is not a fungible token definition of \
+         the token program (ADR-038); create it first with `dev token-new`"
+    )))
+}
+
 fn set_engine_params<C: Chain>(
     env: &Env<C>,
     admin: &str,
     (file, protocol_token, ref_oracle): ParamsArgs<'_>,
+    (disable_token, disable_oracle): (bool, bool),
     out: &mut dyn Write,
 ) -> Result<(), CliError> {
     let (v, admin) = begin(env, admin, out)?;
     let token = optional(env, protocol_token)?;
     let oracle = optional(env, ref_oracle)?;
+    let old_token = v.state.protocol_token;
+    let old_oracle = v.state.protocol_token_oracle_id;
+    guard_slot(
+        "protocol token",
+        "disable-protocol-token",
+        (old_token, token),
+        disable_token,
+    )?;
+    guard_slot(
+        "ref oracle",
+        "disable-ref-oracle",
+        (old_oracle, oracle),
+        disable_oracle,
+    )?;
+    if let Some(t) = token {
+        check_protocol_token(env, &t)?;
+    }
+    announce_slot(out, "protocol token", old_token, token)?;
+    announce_slot(out, "ref oracle", old_oracle, oracle)?;
     let p = params::engine_params(file, token.is_some(), oracle.is_some())?;
     if p.protocol_token_ref_price != v.state.protocol_token_ref_price {
         kv(
@@ -231,6 +315,9 @@ fn set_collateral_config<C: Chain>(
 ) -> Result<(), CliError> {
     let (v, admin) = begin(env, admin, out)?;
     let c = params::collateral_args(file)?;
+    // The engine's own rules, run now so a bad file fails before anything is signed.
+    c.validate(v.state.global_cap)
+        .map_err(|e| CliError::Usage(format!("invalid collateral config: {e}")))?;
     let oracle = protocol_parameters(env, &v.host)?.market_price_oracle_id; // ADR-028
     let plan = plan::set_collateral_config(&v, admin, oracle, &c)?;
     env.send_plain(&plan, "set_collateral_config", CHECK_VERIFY, out)?;

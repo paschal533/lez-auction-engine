@@ -5,6 +5,8 @@
 pub mod standard;
 #[doc(hidden)]
 pub mod support;
+mod wallet;
+pub use wallet::{keystore_json, write_keystore, TestKeys, STANDARD_LABELS};
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};

@@ -15,7 +15,6 @@ use auction_sdk::{
     plan::Plan,
     verify::{verify_config, VerifiedConfig},
 };
-use lee::public_transaction::{Message, WitnessSet};
 
 pub struct WorldChain<'a>(pub &'a World);
 
@@ -69,27 +68,16 @@ impl World {
             "signers follow the plan"
         );
         self.seed_clock();
-        let keys: Vec<PrivateKey> = signers.iter().map(|n| key(*n)).collect();
-        let refs: Vec<&PrivateKey> = keys.iter().collect();
-        let nonces = plan
+        let nonces: Vec<Nonce> = plan
             .signing_requirements
             .iter()
             .map(|a| self.state.get_account_by_id(*a).nonce)
             .collect();
-        let message = Message::new_preserialized(
-            plan.program_id,
-            plan.account_ids.clone(),
-            nonces,
-            plan.instruction_words.clone(),
-        );
-        let witness = WitnessSet::for_message(&message, &refs);
+        let tx = auction_sdk::tx::sign(plan, &nonces, &auction_sdk::testing::TestKeys::of(signers))
+            .expect("the plan signs");
         let result = self
             .state
-            .transition_from_public_transaction(
-                &PublicTransaction::new(message, witness),
-                self.block,
-                self.now,
-            )
+            .transition_from_public_transaction(&tx, self.block, self.now)
             .map(|_| ());
         if result.is_ok() {
             self.block += 1;

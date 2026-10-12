@@ -30,3 +30,4 @@ thiserror = "2"
 
 [dev-dependencies]
 risc0-zkvm = { workspace = true }
+tempfile = "3"

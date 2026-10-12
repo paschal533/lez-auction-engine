@@ -903,3 +903,24 @@ The SDK depends on the pure handler crate `auction_engine_program` (no zkVM), wh
 
 **Status**
 Accepted (Plan 3a, Task 4)
+
+---
+
+## ADR-041: The SDK Reads the Wallet Keystore File Directly
+
+**Context**
+Spec §6.6: "Signing goes through the LEZ wallet keystore". The LEZ v0.2.4 `wallet` crate exposes `Storage::from_path` and `pub_account_signing_key`, but depending on it pulls `keycard_wallet` → `pcsc` (a native smart-card library) and the wallet's sync client into the SDK.
+
+**Options**
+- (A) Depend on the `wallet` crate.
+- (B) Shell out to the `wallet` binary for every signature.
+- (C) Read `storage.json` (the wallet's persisted format) and sign with `lee::PrivateKey`.
+
+**Decision**
+(C). The SDK parses `key_chain.accounts` (`Public` → `data.ssk`, `ImportedPublic` → `pub_sign_key`, private entries recorded to be refused) and `labels`, and checks that every key derives its stored account id. Upstream `ImportedPrivate` entries have no `account_id` and are skipped, so an unlabelled imported private account fails as `NoKey`. Accounts are created, `auth-transfer init`-ed and funded with the real `wallet` binary. Debug never prints key material: paths and labels may appear in messages and `Debug`; private keys, seeds, mnemonics and passwords never appear in `Debug`, `Display`, errors or logs.
+
+**Trade-offs**
+A future wallet storage format change breaks the reader (pinned to LEZ v0.2.4; the format is tested by `keystore_json` fixtures). Keys are unencrypted on disk in v0.2.4 (upstream has not implemented storage encryption yet); the SDK never prints them and cannot zeroize `lee::PrivateKey` (no `Zeroize` upstream). Hardware (keycard) accounts are not supported by the CLI.
+
+**Status**
+Accepted (Plan 3a, Task 9)

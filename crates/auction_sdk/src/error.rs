@@ -30,6 +30,8 @@ pub enum SdkError {
     Deployment { path: String, reason: String },
     #[error("chain: {0}")]
     Chain(String),
+    #[error(transparent)]
+    Keystore(#[from] crate::keystore::KeystoreError),
     #[error("signer {signer} already has a transaction in flight (lock {lock}); it resolves within {blocks} blocks")]
     InFlight {
         signer: String,

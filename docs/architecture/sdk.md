@@ -29,6 +29,8 @@ The `*_is_fresh` flags of the builders (`keeper_holding_is_fresh`, `bidder_colla
 | `quote` | 6 | liquidation, bid, surplus-take and debt-take quotes on the handler's own path; auction view (held at max discount, paused reason); slippage helpers; next debt start (ADR-039) |
 | `plan` (builders) | 7 | one builder per engine instruction (Shared Reference S1 lists, checked against `idl/auction_engine-idl.json`); fresh recipient holdings added as signers; slots from the config (ADR-030); `bid` vs `bid_with_settlement` chosen by the caller from `BidQuote::needs_settlement` (ADR-029) |
 | `plan_host` | 7 | stablecoin (incl. signed `i128` controller gains), token and twap_oracle builders used by the CLI admin/host/dev commands; encoded by enum index, never the IDL position |
+| `keystore` | 9 | the wallet's `storage.json` read directly; labels or base58 ids; keys verified against their ids; private accounts refused |
+| `tx` | 9 | `KeySource`, `sign(plan, nonces, keys)` |
 
 ## Program-id verification (I4)
 
@@ -49,3 +51,11 @@ A quote is the handler's pricing path run on fetched accounts at a chosen `now` 
 ## Proof on the real guests
 
 `programs/integration_tests/tests/sdk_plans.rs` runs every engine, host and token builder through `World::run_plan` against the real token, stablecoin and engine guests (liquidate, partial and final bid, claim, observe, settle_debt, check_solvency, surplus and debt auctions, init/bind/collateral/params, signed controller gains). `sdk_quotes.rs` pins quote == on-chain result: the liquidation quote equals the opened auction, a bid quote taken at the inclusion clock equals the fill, and a quote taken earlier protects the bidder through `min_collateral_out` when the oracle moves (Review Focus 1). The harness uses the SDK's `encode::{init_config_ix, set_engine_params_ix, set_collateral_config_ix}` instead of its own copies, and `WorldChain` reads the in-process `V03State`; the clock a quote must use is the one the transaction executes under (in the World `World::now`, seeded into `CLOCK_01` by `submit`/`run_plan`, advanced by `World::advance`).
+
+## Keystore
+
+The SDK reads the LEZ wallet's `storage.json` itself (ADR-041); the `wallet` crate is not a dependency. The path is `--wallet-home` or `$LEE_WALLET_HOME_DIR`, then `/storage.json`. Format (LEZ v0.2.4 `lez/wallet/src/storage/persistent.rs`): `key_chain.accounts[]` entries `{"Public": {account_id, chain_index, data: {sk, ssk, pk, cc, cci}}}`, `{"ImportedPublic": {account_id, pub_sign_key}}`, `{"Private": {account_id, ...}}` and `{"ImportedPrivate": {...}}`, plus `labels: {label: {"Public"|"Private": account_id}}`. Public accounts sign with `ssk` (the wallet signs with `&ChildKeysPublic.ssk`; the account id derives from `PublicKey::new_from_private_key(&ssk)`), imported public accounts with `pub_sign_key`; every key is checked to derive its stored account id (`KeyMismatch` otherwise). Signatures are LEZ's own `WitnessSet::for_message` over `Message::hash`, verified by `WitnessSet::is_valid_for`.
+
+Private accounts are recorded only to be refused (`PrivateAccount`). Upstream `ImportedPrivate` entries carry no `account_id`, so the parser skips them: an unlabelled imported private account fails as `NoKey`, a labelled one as `PrivateAccount`. A base58 account id resolves without a key (recipients); signing needs one.
+
+The v0.2.4 wallet keeps keys unencrypted on disk, so protect the wallet home like a key file. Errors are typed (`KeystoreError`: `HomeNotSet`, `NotFound`, `Unreadable`, `Malformed`, `UnknownLabel`, `NoKey`, `PrivateAccount`, `KeyMismatch`; the CLI exits 4) and "Debug never prints key material": `Keystore`'s `Debug` lists the path, public account ids and labels only, and no error, `Display`, `Debug` or log contains a private key, seed, mnemonic or password (pinned by `keystore_formats_never_contain_key_bytes_in_any_error_or_debug`). `lee::PrivateKey` has no `Zeroize` upstream, so keys cannot be wiped from memory by this crate; nothing is written to disk.

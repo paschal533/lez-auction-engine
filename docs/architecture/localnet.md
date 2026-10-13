@@ -89,6 +89,19 @@ Cleanup: state lives under `$HOME/lez-target/plan3a-localnet/` (sequencer home, 
 guests, `deployment.json` of the run); `step_stop` stops only the sequencer that `step_sequencer` started. The
 committed `deployments/localnet.json` keeps `engine_admin` and `config` `null` (they are keys of one machine's wallet).
 
+### Re-run after the final-review fixes (2026-10-13)
+
+The full run above was repeated on a fresh sequencer at the merge candidate: 34 transactions `included`, no failed
+execution check, the same final balances. `live_rpc_reads_height_clock_and_blocks` passed against it.
+
+Restart check (ADR-043 as amended): a chain was set up and scanned to block 39, then the sequencer was restarted
+(`step_stop step_sequencer` back to back) and set up again with the same wallet, so the config landed at the same
+address. With the old chain's cursor restored, `list-auctions` printed `note: the node serves another chain than the
+cursor was built on (block 2 differs ...)`, rescanned from block 1 to the new head (27) and later scans continued
+from there. The run found two script defects, both fixed: `step_stop` did not wait for the sequencer to exit (the next
+`step_sequencer` saw port 3040 still in use), and `step_accounts` kept the previous wallet's `engine_admin`/`config`
+in the run's deployment file (now reset to `null`).
+
 ## Plan 2 run (spel)
 
 History, kept unchanged below. The Plan 2 script (spel based, with `step_verify_and_bind` and `localnet.env`) is `git show cb21843:scripts/localnet-smoke.sh`; the current `scripts/localnet-smoke.sh` is the Plan 3a one. Its engine ImageID `3d0d15fa...` is superseded by the one above.

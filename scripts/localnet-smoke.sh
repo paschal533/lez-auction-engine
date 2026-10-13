@@ -94,6 +94,16 @@ step_accounts() {
   local l
   for l in $LABELS; do echo pw | "$W" account new public --label "$l"; done
   : > "$LN/run.env"
+  # New keys mean a new engine admin and config address: forget the previous run's (step_engine records them).
+  if [[ -f "$DEP" ]]; then
+    python3 - "$DEP" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+d["engine_admin"] = None
+d["config"] = None
+json.dump(d, open(sys.argv[1], "w", encoding="utf-8"), indent=2)
+PY
+  fi
 }
 
 step_auth() {
@@ -208,6 +218,16 @@ step_stop() {
     echo "pid $pid is not a running sequencer_service; not signalling it" >&2
   else
     kill "$pid" 2>/dev/null || echo "pid $pid was not running" >&2
+    # Wait for it to exit so a following step_sequencer finds port 3040 free.
+    local i
+    for i in $(seq 1 30); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "sequencer pid $pid did not exit within 30 s" >&2
+      exit 1
+    fi
   fi
   rm -f "$LN/sequencer.pid"
 }

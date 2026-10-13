@@ -28,13 +28,13 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 Git Bash on Windows cannot resolve the LEZ and risc0 git dependencies of the workspace (`programs/UPSTREAM.md`), so the core checks run in Linux/WSL through the wrapper (ADR-025, `.github/workflows/core.yml`). Rust 1.94.0 (pinned by `rust-toolchain.toml`) and Python 3 are enough. Format is checked only on our crates with `-p` (vendored code keeps its upstream formatting). From the repository root in WSL:
 
 ```bash
-scripts/wsl-cargo.sh fmt -p auction_core -p auction_engine_core -p auction_engine_program -p engine_integration_tests -- --check
+scripts/wsl-cargo.sh fmt -p auction_core -p auction_engine_core -p auction_engine_program -p engine_integration_tests -p auction_sdk -p auction_cli -- --check
 scripts/wsl-cargo.sh clippy --locked -p auction_core --all-targets -- -D warnings
 PROPTEST_CASES=5000 scripts/wsl-cargo.sh test --locked -p auction_core
 scripts/wsl-cargo.sh run --locked -q -p auction_core --example vectors > /tmp/vectors.json && python3 tools/differential/check.py /tmp/vectors.json
 ```
 
-From Git Bash, wrap each one as shown under "Build and test the programs (WSL)" below (`MSYS_NO_PATHCONV=1 wsl -d Ubuntu-20.04 -e bash -lc 'cd /mnt/c/Users/user/Documents/basecamp/lez-auction-engine && scripts/wsl-cargo.sh ...'`). The last line is the differential check: the example prints test vectors from the Rust core and `tools/differential/check.py` replays them against an independent Python model. CI additionally runs `PROPTEST_CASES=2000 cargo test --locked -p auction_core --test invariants --test s5_pause_onset`.
+From Git Bash, wrap each one as shown under "Build and test the programs (WSL)" below (`MSYS_NO_PATHCONV=1 wsl -d Ubuntu-20.04 -e bash -lc 'cd /mnt/c/Users/user/Documents/basecamp/lez-auction-engine && scripts/wsl-cargo.sh ...'`). The last line is the differential check: the example prints test vectors from the Rust core and `tools/differential/check.py` replays them against an independent Python model. CI additionally runs `PROPTEST_CASES=2000 cargo test --locked -p auction_core --test invariants --test s5_pause_onset`, and builds the guests with the pinned risc0 toolchain to run the program, SDK, CLI and vendored suites, the IDL drift check and the hook patch-series check. The job list, runner facts and local commands are in [docs/architecture/ci.md](docs/architecture/ci.md).
 
 The spikes under `spikes/` need the risc0 toolchain (WSL or Linux) and are not part of the workspace; see the per-spike documents for the exact commands.
 

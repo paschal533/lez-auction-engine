@@ -1,0 +1,24 @@
+name: Install risc0 (pinned)
+description: rzup with the component versions of lez/.github/docker/ci.Dockerfile (never a bare `rzup install`, which floats them)
+runs:
+  using: composite
+  steps:
+    - name: Cache the rzup components
+      uses: actions/cache@v4
+      with:
+        path: ~/.risc0
+        key: risc0-rust-1.94.1-cpp-2024.1.5-r0vm-3.0.5-cargo-risczero-3.0.5-v1
+    - name: Install rzup and the pinned components
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ ! -x "$HOME/.risc0/bin/rzup" ]]; then curl -L https://risczero.com/install | bash; fi
+        "$HOME/.risc0/bin/rzup" install rust 1.94.1
+        "$HOME/.risc0/bin/rzup" install cpp 2024.1.5
+        "$HOME/.risc0/bin/rzup" install r0vm 3.0.5
+        "$HOME/.risc0/bin/rzup" install cargo-risczero 3.0.5
+        echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+    - name: Check the prover version
+      shell: bash
+      run: r0vm --version | grep -q "3.0.5"

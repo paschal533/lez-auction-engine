@@ -112,7 +112,7 @@ Stablecoin IDL position to enum index (the enum index is what the guest decodes 
 
 Plan 3 carry-overs:
 
-- Program CI with the risc0 toolchain: engine and stablecoin suites, the hook order test, and an `idl-gen` diff against the committed IDLs.
+- Done (Plan 3b Task 4): program CI with the risc0 toolchain (jobs programs, idl-drift, hook-patches).
 - Done (Plan 3a Tasks 4–8): SDK encoders keyed by enum index (`encode.rs`), proven on the real guests (`sdk_plans.rs`).
 - Done (Plan 3a Task 2, ADR-038): config-time check that an enabled `protocol_token` is a fungible token definition owned by the token program.
 - Done (Plan 3a Task 3, ADR-039): fixed relist delay between debt auctions.

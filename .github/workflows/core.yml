@@ -8,10 +8,51 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.0
         with: { components: "rustfmt, clippy" }
       # Vendored crates keep upstream formatting (`cargo +nightly fmt` per the lez-programs Makefile); our crates are listed explicitly.
-      - run: cargo fmt -p auction_core -p auction_engine_core -p auction_engine_program -p engine_integration_tests -- --check
+      - run: cargo fmt -p auction_core -p auction_engine_core -p auction_engine_program -p engine_integration_tests -p auction_sdk -p auction_cli -- --check
       - run: cargo clippy --locked -p auction_core --all-targets -- -D warnings
       - run: cargo test --locked -p auction_core
       - run: PROPTEST_CASES=2000 cargo test --locked -p auction_core --test invariants --test s5_pause_onset
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: cargo run --locked -q -p auction_core --example vectors > /tmp/vectors.json && python3 tools/differential/check.py /tmp/vectors.json
+
+  programs:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150
+    env:
+      RISC0_DEV_MODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/ci/free-disk.sh
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev pkg-config libssl-dev
+      - uses: dtolnay/rust-toolchain@1.94.0
+        with: { components: "rustfmt, clippy" }
+      - uses: ./.github/actions/install-risc0
+      - uses: Swatinem/rust-cache@v2
+        with: { shared-key: programs }
+      - name: clippy (workspace; the vendored upstream integration_tests crate is excluded, as in every task)
+        run: RISC0_SKIP_BUILD=1 cargo clippy --locked --workspace --all-targets --exclude integration_tests -- -D warnings
+      - name: engine, real-guest integration (incl. sdk_plans, sdk_quotes, chains, idl), SDK and CLI
+        run: cargo test --locked -p auction_engine_core -p auction_engine_program -p engine_integration_tests -p auction_sdk -p auction_cli --features auction_sdk/testing,auction_sdk/rpc
+      - name: vendored stablecoin and token suites with our hooks appended (spec §1.5)
+        run: cargo test --locked -p stablecoin_core -p stablecoin_program -p token_program -p integration_tests
+
+  idl-drift:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: Swatinem/rust-cache@v2
+        with: { shared-key: idl }
+      - run: scripts/ci/idl-drift.sh
+
+  hook-patches:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: pristine lez-programs 64c01210
+        run: |
+          git clone --filter=blob:none https://github.com/logos-blockchain/lez-programs "$RUNNER_TEMP/lez-programs"
+          git -C "$RUNNER_TEMP/lez-programs" checkout -q 64c01210adecd6b557dbd021a3cc94553f243fd8
+      - run: LEZ_PROGRAMS="$RUNNER_TEMP/lez-programs" scripts/check-hook-patches.sh

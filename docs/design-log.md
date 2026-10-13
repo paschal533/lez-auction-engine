@@ -1071,3 +1071,24 @@ Two localnets started from the same config share block 1; both are throwaway, so
 Accepted (Plan 3b, Task 3)
 
 ---
+
+## ADR-048: Cycle Baseline, Transaction Sizes and the 10 % Regression Rule
+
+**Context**
+Spec §11: `CYCLES.md` records cycles per instruction against 32 Mi and transaction sizes; CI fails on a regression above 10 %. ADR-036 measured the chains once.
+
+**Options**
+- (A) Assert hard-coded numbers in tests.
+- (B) A committed baseline compared by a script, with the table generated from the same data.
+- (C) Real-proof cycles as the baseline.
+
+**Decision**
+(B). `chains.rs` records every measured instruction (`CYCLES_OUT`, executor cycles and borsh size of the signed transaction, built by the same helper that submits it); `scripts/check-cycles.py` fails on growth above 10 % (exactly 10 % passes), on a label added or removed without a baseline change, on more than 10 executions and on any execution over 32 Mi; `CYCLES.md` is generated from the same file. Under `AUCTION_PROVE=1` nothing is recorded and the summary line is `PROOF[..] TOTAL`, so prover and executor cycles are never mixed. The baseline is the local native build; CI measures its own native build. Executor cycles are deterministic for one ELF and input, and toolchain differences between native builds stay well inside 10 %. The 17 measured totals are within 0.63 % of the ADR-036 table (Plan 3a and 3b code changes since). The P2 load test (6 live auctions, 18 interleaved bids) requires a bid's cost to stay within 5 % whatever the number of live auctions; it measured a spread of 0.05 % (1,611,475 to 1,612,210 cycles).
+
+**Trade-offs**
+Executor cycles, not proving time: proving is tiered separately (ADR-045). Refreshing the baseline is a reviewed change in the same commit as its cause.
+
+**Status**
+Accepted (Plan 3b, Task 6)
+
+---

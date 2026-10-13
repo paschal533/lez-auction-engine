@@ -267,6 +267,28 @@ impl World {
         self.state.force_insert_account(redemption_state(), account);
     }
 
+    /// The one place a signed public transaction is built: `submit` sends it and `signed_tx_bytes`
+    /// sizes it, so the reported size is the size of what is sent.
+    fn signed_tx<I: Serialize>(
+        &self,
+        program: ProgramId,
+        accounts: &[AccountId],
+        signers: &[u8],
+        instruction: &I,
+    ) -> PublicTransaction {
+        let keys: Vec<PrivateKey> = signers.iter().map(|n| key(*n)).collect();
+        let nonces = signers
+            .iter()
+            .map(|n| self.state.get_account_by_id(id(*n)).nonce)
+            .collect();
+        let message =
+            public_transaction::Message::try_new(program, accounts.to_vec(), nonces, instruction)
+                .expect("message is valid");
+        let refs: Vec<&PrivateKey> = keys.iter().collect();
+        let witness = public_transaction::WitnessSet::for_message(&message, &refs);
+        PublicTransaction::new(message, witness)
+    }
+
     pub fn submit<I: Serialize>(
         &mut self,
         program: ProgramId,
@@ -275,22 +297,10 @@ impl World {
         instruction: I,
     ) -> Result<(), LeeError> {
         self.seed_clock();
-        let keys: Vec<PrivateKey> = signers.iter().map(|n| key(*n)).collect();
-        let nonces = signers
-            .iter()
-            .map(|n| self.state.get_account_by_id(id(*n)).nonce)
-            .collect();
-        let message = public_transaction::Message::try_new(program, accounts, nonces, instruction)
-            .expect("message is valid");
-        let refs: Vec<&PrivateKey> = keys.iter().collect();
-        let witness = public_transaction::WitnessSet::for_message(&message, &refs);
+        let tx = self.signed_tx(program, &accounts, signers, &instruction);
         let result = self
             .state
-            .transition_from_public_transaction(
-                &PublicTransaction::new(message, witness),
-                self.block,
-                self.now,
-            )
+            .transition_from_public_transaction(&tx, self.block, self.now)
             .map(|_| ());
         if result.is_ok() {
             self.block += 1;
@@ -471,7 +481,23 @@ pub mod measure;
 pub mod prove;
 
 impl World {
-    /// Measures the chain (executions, cycles), then submits. Returns (executions, result).
+    /// Measures the chain (executions, cycles; proofs under `AUCTION_PROVE=1`), then submits.
+    pub fn measured_full(
+        &mut self,
+        label: &str,
+        accounts: Vec<AccountId>,
+        signers: &[u8],
+        ix: Ix,
+    ) -> (measure::Measured, Result<(), LeeError>) {
+        self.seed_clock();
+        let keys: Vec<PrivateKey> = signers.iter().map(|n| key(*n)).collect();
+        let refs: Vec<&PrivateKey> = keys.iter().collect();
+        let m = measure::measure(label, &self.state, engine_program(), &accounts, &refs, &ix);
+        (m, self.engine(accounts, signers, ix))
+    }
+
+    /// `measured_full` for the ADR-036 tables: also records cycles and the signed transaction size.
+    /// Returns (executions, result).
     pub fn measured(
         &mut self,
         label: &str,
@@ -479,11 +505,18 @@ impl World {
         signers: &[u8],
         ix: Ix,
     ) -> (usize, Result<(), LeeError>) {
-        self.seed_clock();
-        let keys: Vec<PrivateKey> = signers.iter().map(|n| key(*n)).collect();
-        let refs: Vec<&PrivateKey> = keys.iter().collect();
-        let m = measure::measure(label, &self.state, engine_program(), &accounts, &refs, &ix);
-        (m.per_exec.len(), self.engine(accounts, signers, ix))
+        let tx_bytes = self.signed_tx_bytes(&accounts, signers, &ix);
+        let (m, r) = self.measured_full(label, accounts, signers, ix);
+        measure::record(label, &m, tx_bytes);
+        (m.per_exec.len(), r)
+    }
+
+    /// Borsh size of the signed engine transaction `World::engine` submits (spec 11 tx sizes). The RPC
+    /// wire form adds a one-byte `LeeTransaction` variant tag and base64.
+    pub fn signed_tx_bytes(&self, accounts: &[AccountId], signers: &[u8], ix: &Ix) -> usize {
+        borsh::to_vec(&self.signed_tx(engine_program(), accounts, signers, ix))
+            .expect("borsh")
+            .len()
     }
 
     /// Raw account (R3 isolation checks).

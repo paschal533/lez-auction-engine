@@ -23,7 +23,7 @@ fn require_proving() {
     );
 }
 
-/// Cheapest instruction of ADR-036: `settle_debt` on an empty buffer (1 execution, 591,029 cycles).
+/// Cheapest instruction of ADR-036: `settle_debt` on an empty buffer (1 execution, 594,757 executor cycles in `CYCLES.md`).
 #[test]
 #[ignore = "real proof: scripts/measure-proof.sh"]
 fn prove_settle_debt() {
@@ -45,7 +45,7 @@ fn prove_settle_debt() {
     assert_eq!(n, 1);
 }
 
-/// Most expensive instruction of ADR-036: `liquidate` (5 executions, 3,151,610 cycles).
+/// Most expensive instruction of ADR-036: `liquidate` (5 executions, 3,151,473 executor cycles in `CYCLES.md`).
 #[test]
 #[ignore = "real proof: scripts/measure-proof.sh"]
 fn prove_liquidate() {

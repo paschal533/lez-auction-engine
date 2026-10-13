@@ -1,0 +1,306 @@
+{
+  "bid": {
+    "executions": 3,
+    "label": "bid",
+    "per_exec": [
+      {
+        "cycles": 1354630,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 138395,
+        "program": "token"
+      },
+      {
+        "cycles": 133977,
+        "program": "token"
+      }
+    ],
+    "total_cycles": 1627002,
+    "tx_bytes": 548
+  },
+  "bid_final": {
+    "executions": 4,
+    "label": "bid_final",
+    "per_exec": [
+      {
+        "cycles": 1559517,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 138395,
+        "program": "token"
+      },
+      {
+        "cycles": 133917,
+        "program": "token"
+      },
+      {
+        "cycles": 133977,
+        "program": "token"
+      }
+    ],
+    "total_cycles": 1965806,
+    "tx_bytes": 580
+  },
+  "check_solvency(burn+freeze)": {
+    "executions": 3,
+    "label": "check_solvency(burn+freeze)",
+    "per_exec": [
+      {
+        "cycles": 1125646,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 138365,
+        "program": "token"
+      },
+      {
+        "cycles": 270701,
+        "program": "stablecoin"
+      }
+    ],
+    "total_cycles": 1534712,
+    "tx_bytes": 516
+  },
+  "check_solvency(freeze)": {
+    "executions": 2,
+    "label": "check_solvency(freeze)",
+    "per_exec": [
+      {
+        "cycles": 1068785,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 270701,
+        "program": "stablecoin"
+      }
+    ],
+    "total_cycles": 1339486,
+    "tx_bytes": 516
+  },
+  "claim_leftover": {
+    "executions": 2,
+    "label": "claim_leftover",
+    "per_exec": [
+      {
+        "cycles": 705263,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 133752,
+        "program": "token"
+      }
+    ],
+    "total_cycles": 839015,
+    "tx_bytes": 324
+  },
+  "close_surplus": {
+    "executions": 2,
+    "label": "close_surplus",
+    "per_exec": [
+      {
+        "cycles": 784673,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 133917,
+        "program": "token"
+      }
+    ],
+    "total_cycles": 918590,
+    "tx_bytes": 388
+  },
+  "liquidate": {
+    "executions": 5,
+    "label": "liquidate",
+    "per_exec": [
+      {
+        "cycles": 1961706,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 107490,
+        "program": "token"
+      },
+      {
+        "cycles": 814503,
+        "program": "stablecoin"
+      },
+      {
+        "cycles": 133797,
+        "program": "token"
+      },
+      {
+        "cycles": 133977,
+        "program": "token"
+      }
+    ],
+    "total_cycles": 3151473,
+    "tx_bytes": 716
+  },
+  "observe_feed": {
+    "executions": 1,
+    "label": "observe_feed",
+    "per_exec": [
+      {
+        "cycles": 690208,
+        "program": "auction_engine"
+      }
+    ],
+    "total_cycles": 690208,
+    "tx_bytes": 356
+  },
+  "set_collateral_config": {
+    "executions": 1,
+    "label": "set_collateral_config",
+    "per_exec": [
+      {
+        "cycles": 926987,
+        "program": "auction_engine"
+      }
+    ],
+    "total_cycles": 926987,
+    "tx_bytes": 556
+  },
+  "settle_debt": {
+    "executions": 1,
+    "label": "settle_debt",
+    "per_exec": [
+      {
+        "cycles": 594757,
+        "program": "auction_engine"
+      }
+    ],
+    "total_cycles": 594757,
+    "tx_bytes": 340
+  },
+  "settle_debt(burn)": {
+    "executions": 2,
+    "label": "settle_debt(burn)",
+    "per_exec": [
+      {
+        "cycles": 651311,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 138365,
+        "program": "token"
+      }
+    ],
+    "total_cycles": 789676,
+    "tx_bytes": 340
+  },
+  "start_debt": {
+    "executions": 1,
+    "label": "start_debt",
+    "per_exec": [
+      {
+        "cycles": 839342,
+        "program": "auction_engine"
+      }
+    ],
+    "total_cycles": 839342,
+    "tx_bytes": 460
+  },
+  "start_debt(burn)": {
+    "executions": 2,
+    "label": "start_debt(burn)",
+    "per_exec": [
+      {
+        "cycles": 895893,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 138365,
+        "program": "token"
+      }
+    ],
+    "total_cycles": 1034258,
+    "tx_bytes": 460
+  },
+  "start_surplus": {
+    "executions": 3,
+    "label": "start_surplus",
+    "per_exec": [
+      {
+        "cycles": 905203,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 122275,
+        "program": "token"
+      },
+      {
+        "cycles": 133917,
+        "program": "token"
+      }
+    ],
+    "total_cycles": 1161395,
+    "tx_bytes": 460
+  },
+  "start_surplus(burn)": {
+    "executions": 4,
+    "label": "start_surplus(burn)",
+    "per_exec": [
+      {
+        "cycles": 961959,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 122275,
+        "program": "token"
+      },
+      {
+        "cycles": 138365,
+        "program": "token"
+      },
+      {
+        "cycles": 133917,
+        "program": "token"
+      }
+    ],
+    "total_cycles": 1356516,
+    "tx_bytes": 460
+  },
+  "take_debt": {
+    "executions": 3,
+    "label": "take_debt",
+    "per_exec": [
+      {
+        "cycles": 1006238,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 138395,
+        "program": "token"
+      },
+      {
+        "cycles": 176462,
+        "program": "token"
+      }
+    ],
+    "total_cycles": 1321095,
+    "tx_bytes": 484
+  },
+  "take_surplus": {
+    "executions": 3,
+    "label": "take_surplus",
+    "per_exec": [
+      {
+        "cycles": 947419,
+        "program": "auction_engine"
+      },
+      {
+        "cycles": 138721,
+        "program": "token"
+      },
+      {
+        "cycles": 133947,
+        "program": "token"
+      }
+    ],
+    "total_cycles": 1220087,
+    "tx_bytes": 452
+  }
+}

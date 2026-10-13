@@ -36,6 +36,13 @@ jobs:
         run: cargo test --locked -p auction_engine_core -p auction_engine_program -p engine_integration_tests -p auction_sdk -p auction_cli --features auction_sdk/testing,auction_sdk/rpc
       - name: vendored stablecoin and token suites with our hooks appended (spec §1.5)
         run: cargo test --locked -p stablecoin_core -p stablecoin_program -p token_program -p integration_tests
+      - name: cycle regression check (ADR-048)
+        run: scripts/cycles.sh "$RUNNER_TEMP/cycles.jsonl" && python3 scripts/check-cycles.py cycles/baseline.json "$RUNNER_TEMP/cycles.jsonl"
+      - name: checker unit tests
+        run: python3 -m unittest discover -s scripts/tests -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: cycles, path: "${{ runner.temp }}/cycles.jsonl", if-no-files-found: ignore }
 
   idl-drift:
     runs-on: ubuntu-22.04

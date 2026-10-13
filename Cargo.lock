@@ -2116,6 +2116,7 @@ dependencies = [
  "auction_core",
  "auction_engine_core",
  "auction_sdk",
+ "borsh",
  "clock_core",
  "lee",
  "lee_core",

@@ -9,6 +9,7 @@ publish = false
 lee = { workspace = true }
 lee_core = { workspace = true, features = ["host", "test_utils"] }
 clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.2.4" }
+borsh = { workspace = true }
 risc0-zkvm = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -117,7 +117,7 @@ Plan 3 carry-overs:
 - Done (Plan 3a Task 2, ADR-038): config-time check that an enabled `protocol_token` is a fungible token definition owned by the token program.
 - Done (Plan 3a Task 3, ADR-039): fixed relist delay between debt auctions.
 - Reproducible Docker builds, then refresh the ImageIDs in `DEPLOYMENTS.md`.
-- `CYCLES.md` plus a regression check, and re-measure ADR-023 with real proofs.
+- Done (Plan 3b Task 6; real-proof re-measure Task 7): `CYCLES.md` plus a regression check (ADR-048).
 - `REQUIREMENTS.md` plus its checker, `cargo-fuzz`, and a red-team pass.
 - An oracle price publisher / keeper.
 - Upstream issue for the stablecoin guest function order (spel mis-encodes IDL positions 8-18).

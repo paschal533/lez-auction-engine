@@ -140,8 +140,10 @@ pub fn measure<I: Serialize>(
             queue.push_back((c, Some(call.program_id), depth + 1));
         }
     }
+    // Prove mode sums prover user_cycles, so it must not share the executor `CYCLES[..]` prefix.
+    let prefix = if prove { "PROOF" } else { "CYCLES" };
     println!(
-        "CYCLES[{label}] TOTAL executions={} cycles={total}",
+        "{prefix}[{label}] TOTAL executions={} cycles={total}",
         per_exec.len()
     );
     Measured {
@@ -149,4 +151,24 @@ pub fn measure<I: Serialize>(
         total,
         proofs,
     }
+}
+
+/// Prints the signed transaction size and, when `CYCLES_OUT` is set, appends one JSON line for the
+/// cycle regression check (`scripts/check-cycles.py`, ADR-048).
+pub fn record(label: &str, m: &Measured, tx_bytes: usize) {
+    println!("TXSIZE[{label}] bytes={tx_bytes}");
+    // Under AUCTION_PROVE=1 the totals are prover user_cycles, not executor cycles: never record them.
+    if super::prove::proving_enabled() {
+        return;
+    }
+    append_json_line(
+        "CYCLES_OUT",
+        serde_json::json!({
+            "label": label,
+            "executions": m.per_exec.len(),
+            "total_cycles": m.total,
+            "per_exec": m.per_exec.iter().map(|(p, c)| serde_json::json!({"program": p, "cycles": c})).collect::<Vec<_>>(),
+            "tx_bytes": tx_bytes,
+        }),
+    );
 }

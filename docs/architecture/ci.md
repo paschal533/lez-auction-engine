@@ -7,7 +7,7 @@ Workflow: `.github/workflows/core.yml` (runs on every push and pull request). Ev
 | Job / action | Where | What it covers |
 |--------------|-------|----------------|
 | `core` | `core.yml` | Format of our crates, clippy and tests of `auction_core`, the property tests with `PROPTEST_CASES=2000`, the Rust/Python differential check. No risc0 toolchain. |
-| `programs` | `core.yml` | The guests built with the pinned risc0 toolchain; workspace clippy; the engine, real-guest integration, SDK and CLI suites; the vendored stablecoin and token suites. |
+| `programs` | `core.yml` | The guests built with the pinned risc0 toolchain; workspace clippy; the engine, real-guest integration, SDK and CLI suites; the vendored stablecoin and token suites; the cycle regression check (ADR-048). |
 | `idl-drift` | `core.yml` | `tools/idl-gen` against both guest sources, diffed against the committed IDLs. |
 | `hook-patches` | `core.yml` | The exported hook patch series applied to pristine lez-programs, compared with `programs/stablecoin`. |
 | `install-risc0` | `.github/actions/install-risc0` | Composite action used by `programs`: rzup and the pinned components, cached in `~/.risc0`. |
@@ -30,7 +30,11 @@ cargo run --locked -q -p auction_core --example vectors > /tmp/vectors.json && p
 RISC0_SKIP_BUILD=1 cargo clippy --locked --workspace --all-targets --exclude integration_tests -- -D warnings
 cargo test --locked -p auction_engine_core -p auction_engine_program -p engine_integration_tests -p auction_sdk -p auction_cli --features auction_sdk/testing,auction_sdk/rpc
 cargo test --locked -p stablecoin_core -p stablecoin_program -p token_program -p integration_tests
+scripts/cycles.sh "$RUNNER_TEMP/cycles.jsonl" && python3 scripts/check-cycles.py cycles/baseline.json "$RUNNER_TEMP/cycles.jsonl"
+python3 -m unittest discover -s scripts/tests -v
 ```
+
+The last two commands are the cycle gate (ADR-048): `scripts/cycles.sh` runs the `chains.rs` scenarios with `CYCLES_OUT` set, `scripts/check-cycles.py` compares the result with `cycles/baseline.json` (more than 10 % growth, an added or removed label, more than 10 executions or an execution over 32 Mi fails), and the unit tests cover the checker itself. The step uploads `cycles.jsonl` as the `cycles` artifact. Regenerate the baseline and `CYCLES.md` with `python3 scripts/check-cycles.py cycles/baseline.json /tmp/c.jsonl --write-baseline --write-md CYCLES.md`.
 
 The vendored upstream `integration_tests` crate is excluded from clippy (it keeps upstream style) and runs in the last command with our hooks appended (spec section 1.5).
 
@@ -68,6 +72,8 @@ The host is Windows; cargo runs in WSL through the wrappers. From Git Bash wrap 
 | `programs`, clippy | `RISC0_SKIP_BUILD=1 scripts/wsl-cargo.sh clippy --locked --workspace --all-targets --exclude integration_tests -- -D warnings` |
 | `programs`, engine/SDK/CLI | `scripts/wsl-cargo.sh test --locked -p auction_engine_core -p auction_engine_program -p engine_integration_tests -p auction_sdk -p auction_cli --features auction_sdk/testing,auction_sdk/rpc` |
 | `programs`, vendored | `scripts/wsl-cargo.sh test --locked -p stablecoin_core -p stablecoin_program -p token_program -p integration_tests` |
+| `programs`, cycle gate | `scripts/wsl-env.sh scripts/cycles.sh /tmp/c.jsonl && python3 scripts/check-cycles.py cycles/baseline.json /tmp/c.jsonl` |
+| `programs`, checker tests | `python3 -m unittest discover -s scripts/tests -v` |
 | `idl-drift` | `scripts/wsl-env.sh scripts/ci/idl-drift.sh` |
 | `hook-patches` | `scripts/wsl-env.sh env LEZ_PROGRAMS=$HOME/lez-spikes/s1/lez-programs scripts/check-hook-patches.sh` |
 

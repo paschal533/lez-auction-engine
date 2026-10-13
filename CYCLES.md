@@ -35,13 +35,17 @@ when a limit is exceeded (`scripts/check-cycles.py`, ADR-048). Reproduce:
 
 ## P2 load test (N concurrent auctions, interleaved bids)
 
-`load_concurrent_auctions_with_interleaved_bids_stay_isolated` (`tests/load.rs`): 6 positions are liquidated, then 3 rounds of one partial bid (30,000 coin in) on each auction are interleaved, 18 bids in all. Output line:
+`load_concurrent_auctions_with_interleaved_bids_stay_isolated` (`tests/load.rs`) makes two assertions. A reference partial bid (30,000 coin in) is measured with exactly 1 live auction; then 6 positions are liquidated and 3 rounds of one partial bid on each auction are interleaved, 18 bids in all. Output lines:
 
 ```
+LOAD reference_1_live_auction_cycles=1612060 first_round_N=6 min_cycles=1611475 max_cycles=1612210
 LOAD N=6 bids=18 min_cycles=1611475 max_cycles=1612210 spread_percent=0.05
 ```
 
-The cheapest and the dearest bid differ by 0.05 % (limit 5 %), so a bid's cost does not depend on how many auctions are live. Every auction then settles with a final bid and `type_reserved` returns to 0.
+- A first-round bid with 6 live auctions (1,611,475 to 1,612,210 cycles) is within 5 % of the same bid with 1 live auction (1,612,060 cycles).
+- The 18 bids over the 6 auctions and 3 rounds are uniform: the cheapest and the dearest differ by 0.05 % (limit 5 %).
+
+Every auction then settles with a final bid and `type_reserved` returns to 0.
 
 ## Real proofs
 

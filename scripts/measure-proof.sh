@@ -14,13 +14,13 @@ log="$out_dir/${test_name}-po2-${po2}.log"
 # shellcheck disable=SC1090
 . "${LEZ_ENV_FILE:-$HOME/lez-spikes/s1/env.sh}"
 r0vm --version | grep -q "3.0.5" || { echo "measure-proof: r0vm 3.0.5 required (rzup install r0vm 3.0.5)" >&2; exit 2; }
-exe="$("$repo/scripts/wsl-cargo.sh" test -p engine_integration_tests --test real_proofs --no-run --message-format=json 2>/dev/null \
+exe="$("$repo/scripts/wsl-cargo.sh" test -p engine_integration_tests --test real_proofs --no-run --message-format=json 2>"$log.build" \
   | python3 -c 'import json, sys
 for line in sys.stdin:
     m = json.loads(line)
     if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["name"] == "real_proofs":
         print(m["executable"])' | tail -1)"
-[[ -x "$exe" ]] || { echo "measure-proof: real_proofs test binary not found" >&2; exit 2; }
+[[ -x "$exe" ]] || { echo "measure-proof: real_proofs test binary not found (build output: $log.build)" >&2; exit 2; }
 set +e
 AUCTION_PROVE=1 RISC0_DEV_MODE=0 AUCTION_PROVE_PO2="$po2" \
   /usr/bin/time -v timeout "$limit" "$exe" --ignored --exact "$test_name" --nocapture --test-threads 1 > "$log" 2>&1
@@ -31,5 +31,5 @@ rss_kb="$(sed -n 's/.*Maximum resident set size (kbytes): //p' "$log")"
 # Not anchored: the first PROOF line follows libtest's "test <name> ... " on the same line.
 grep -oE 'PROOF\[.*' "$log" || true
 echo "RESULT test=$test_name po2=$po2 status=$status wall=$wall peak_rss_mib=$(( ${rss_kb:-0} / 1024 )) log=$log"
-"$repo/scripts/disk-guard.sh"
+"$repo/scripts/disk-guard.sh" || echo "disk-guard: STOP after run" >&2
 exit "$status"

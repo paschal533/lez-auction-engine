@@ -1027,9 +1027,9 @@ Spec §1.3 and §9 ask for one real-proof (`RISC0_DEV_MODE=0`) end-to-end job pe
 
 **Decision**
 (B), tiered by the Plan 3b Task 1 measurement (`docs/architecture/real-proofs.md`):
-- RFP S2: the `localnet-e2e` job runs `scripts/demo.sh` against a sequencer with `RISC0_DEV_MODE=0` on every push to `main` (R1). The local smoke run at `RISC0_DEV_MODE=0` is deferred to Task 14 (disk).
-- Segment size `AUCTION_PROVE_PO2 = 19` (R2). `prove_liquidate` passed at po2 18 (2167 s, 2368 MiB) and po2 19 (2729 s, 4719 MiB); po2 20 was not run because peak RSS doubles per po2 (about 9.4 GiB expected, above the 5632 MiB ceiling).
-- Per push to `main`: Tier B: `real-proof-push` proves `settle_debt` on a hosted runner; the liquidate-bid path is proved nightly (R3).
+- RFP S2: the `localnet-e2e` job (added in Task 14) runs `scripts/demo.sh` (added in Task 14) against a sequencer with `RISC0_DEV_MODE=0` on every push to `main` (R1). The local smoke run at `RISC0_DEV_MODE=0` is deferred to Task 14 (disk).
+- Segment size `AUCTION_PROVE_PO2 = 19` (R2). `prove_liquidate` passed at po2 18 (2167 s, 2368 MiB) and po2 19 (2729 s, 4719 MiB); po2 20 was not run; expected about 9.4 GiB from the po2 18→19 doubling (one measured step), above the 5632 MiB ceiling; PO2 = 19 by controller ruling.
+- Per push to `main`: Tier B: `real-proof-push` proves `settle_debt` on a hosted runner; the liquidate-bid path is proved by the Tier C self-hosted job when it is enabled, plus the committed local full run (R3).
 - Nightly and on tags: Tier C: a self-hosted job (disabled unless `vars.REAL_PROOF_SELF_HOSTED == 'true'`) plus a committed local full run in `docs/evidence/` (R4).
 - Privacy circuit (`observe_feed`): deferred to Task 7 (disk); not scheduled until measured (R5).
 

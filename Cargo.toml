@@ -26,6 +26,7 @@ exclude = [
     "programs/stablecoin/methods/guest",
     "programs/auction_engine/methods/guest",
     "programs/test_programs/methods/guest",
+    "fuzz",
 ]
 resolver = "2"
 

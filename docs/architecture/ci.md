@@ -11,6 +11,7 @@ Workflow: `.github/workflows/core.yml` (runs on every push and pull request). Ev
 | `idl-drift` | `core.yml` | `tools/idl-gen` against both guest sources, diffed against the committed IDLs. |
 | `hook-patches` | `core.yml` | The exported hook patch series applied to pristine lez-programs, compared with `programs/stablecoin`. |
 | `coverage` | `core.yml` | `cargo llvm-cov` over the five Rust crates, then `scripts/check-coverage.py`: at least 80 % of lines per crate (ADR-049). |
+| `fuzz-nightly` | `fuzz.yml` | Nightly (01:33 UTC) and on dispatch: `scripts/fuzz-smoke.sh 300` runs the five `cargo-fuzz` targets of `fuzz/` for 300 s each on the nightly toolchain. |
 | `install-risc0` | `.github/actions/install-risc0` | Composite action used by `programs`: rzup and the pinned components, cached in `~/.risc0`. |
 
 ## What each job runs
@@ -53,6 +54,14 @@ python3 scripts/check-coverage.py "$RUNNER_TEMP/cov.json" --root "$GITHUB_WORKSP
 
 The gate is per crate (ADR-049): the checker prints each crate's line coverage and exits 1 naming every crate under 80 % or without data. Test code, fixtures, the guest wrappers and examples are matched by `IGNORE` and not counted. Run it locally inside WSL with the same two commands (prefix the first with `scripts/wsl-env.sh`), then `scripts/wsl-env.sh cargo llvm-cov clean --workspace` to delete the instrumented build.
 
+`fuzz-nightly` (`ubuntu-22.04`, 90 minute limit, schedule `33 1 * * *` and `workflow_dispatch`; it never runs on push or pull request). It runs `scripts/ci/free-disk.sh`, installs clang, libclang, pkg-config and libssl, the nightly Rust toolchain and `cargo-fuzz`, then:
+
+```bash
+scripts/fuzz-smoke.sh 300
+```
+
+A crash fails the job and uploads `fuzz/artifacts` as the `fuzz-crashes` artifact (the procedure is in [sdk.md](sdk.md), "Fuzzing"). A schedule or dispatch trigger only works from the default branch, so the first hosted run of `fuzz-nightly` happens after the merge to `main`; until then the targets have only been run locally (60 s each, inside WSL).
+
 ## Pinned versions
 
 Never floated, and there is no bare `rzup install` anywhere (it would float the components).
@@ -87,6 +96,7 @@ The host is Windows; cargo runs in WSL through the wrappers. From Git Bash wrap 
 | `programs`, checker tests | `python3 -m unittest discover -s scripts/tests -v` |
 | `idl-drift` | `scripts/wsl-env.sh scripts/ci/idl-drift.sh` |
 | `hook-patches` | `scripts/wsl-env.sh env LEZ_PROGRAMS=$HOME/lez-spikes/s1/lez-programs scripts/check-hook-patches.sh` |
+| `fuzz-nightly` | `scripts/wsl-env.sh scripts/fuzz-smoke.sh 60`, then `rm -rf "$HOME/lez-target/plan2/fuzz"` |
 
 Validate the workflow file with `actionlint` 1.7.7: `actionlint .github/workflows/core.yml`.
 

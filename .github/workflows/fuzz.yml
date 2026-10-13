@@ -1,0 +1,20 @@
+name: fuzz
+on:
+  schedule:
+    - cron: "33 1 * * *"
+  workflow_dispatch:
+jobs:
+  fuzz-nightly:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/ci/free-disk.sh
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev pkg-config libssl-dev
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-fuzz }
+      - run: scripts/fuzz-smoke.sh 300
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: fuzz-crashes, path: fuzz/artifacts, if-no-files-found: ignore }

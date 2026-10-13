@@ -105,6 +105,37 @@ Lock: `<state dir>/locks/<signer>.lock` holds `{nonce, height, owner}`. It is cr
 - Within a scan every block must extend the previous one (`prev_hash`) and the node must return every requested block; otherwise the scan fails and the cursor is not advanced. Work is bounded per request by `batch` (default 100 blocks).
 - `save_cursor` writes a uniquely named temp file next to the cursor (fsynced) and renames it over the cursor; a failed write removes the temporary file. `load_cursor` returns the genesis cursor for a missing file and `SdkError::Io` for an unparsable one.
 
+## Fuzzing
+
+The SDK reads untrusted input: the node's account bytes, the wallet storage file, the scanner cursor file and the deployment JSON. `fuzz/` is a separate crate (its own workspace, excluded from the root one, nightly toolchain, `libfuzzer-sys`) with five `cargo-fuzz` targets. Each must never panic; `quote_bid` also checks invariant 3.
+
+| Target | Input | Property |
+|--------|-------|----------|
+| `keystore_parse` | any bytes read as wallet storage text | `Keystore::parse` returns a keystore or a typed error (its message is formatted, key material is never printed). |
+| `deployment_json` | any bytes read as a deployment file | `Deployment::from_json` returns a deployment or a typed error. |
+| `cursor_json` | any bytes read as a scanner cursor file | Deserialising a `Cursor` and reading `auction_ids()` and `position_ids()` never panics. |
+| `decode_accounts` | any bytes as the data of an account owned by the engine | `Reader::{config, coll_config, accounting, auction, surplus_auction, debt_auction, record_count}` each return a state or a typed error. |
+| `quote_bid` | arbitrary `coin_in_max`, `min_out`, clock offset and oracle price (0 to about 6.5 R) on the standard live auction | `quote_bid` returns an error or a fill with `charged <= coin_in_max`, `collateral_out >= min_out` and `collateral_out <= collateral_left` (invariant 3, spec 5.13). |
+
+The targets cannot carry `#![forbid(unsafe_code)]`: `fuzz_target!` expands to a `#[no_mangle] extern "C"` entry point.
+
+Run them inside WSL, from the repository root. `scripts/wsl-env.sh` puts the build in the shared target directory (`$HOME/lez-target/plan2/fuzz`), which is deleted after use. One-time setup: `rustup toolchain install nightly --profile minimal` and `scripts/wsl-env.sh cargo install --locked cargo-fuzz`.
+
+```bash
+scripts/disk-guard.sh && scripts/wsl-env.sh scripts/fuzz-smoke.sh 60; scripts/disk-guard.sh   # every target, 60 s each
+scripts/wsl-env.sh cargo +nightly fuzz run --target-dir "$HOME/lez-target/plan2/fuzz" quote_bid -- -max_total_time=60   # one target
+rm -rf "$HOME/lez-target/plan2/fuzz"
+```
+
+Crash procedure (libFuzzer writes `fuzz/artifacts/<target>/crash-<hash>`):
+
+1. Reproduce: `scripts/wsl-env.sh cargo +nightly fuzz run --target-dir "$HOME/lez-target/plan2/fuzz" <target> fuzz/artifacts/<target>/crash-<hash>`.
+2. Minimise: `scripts/wsl-env.sh cargo +nightly fuzz tmin --target-dir "$HOME/lez-target/plan2/fuzz" <target> fuzz/artifacts/<target>/crash-<hash>`.
+3. If the panic is in our crates, add a unit test with the minimised input to the owning crate (red), fix it (green), and run the target for 60 s again.
+4. If the panic is inside LEZ, borsh or another dependency, stop and record the input as an upstream finding; the target then needs a ruling.
+
+The `fuzz-nightly` job (`.github/workflows/fuzz.yml`) runs `scripts/fuzz-smoke.sh 300` every night and uploads `fuzz/artifacts` as `fuzz-crashes` when a target crashes. See [ci.md](ci.md).
+
 ## Localnet
 
 The CLI-driven run on a real standalone sequencer (every program instruction sent by `auction-cli`) is recorded in the Plan 3a section of [localnet.md](localnet.md); the runbook is `scripts/localnet-smoke.sh`.

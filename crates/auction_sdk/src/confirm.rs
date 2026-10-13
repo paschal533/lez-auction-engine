@@ -352,6 +352,11 @@ impl Drop for InFlightLock {
 
 /// Attempts at taking the lock with a baseline that is still current once the lock is held.
 const LOCK_ATTEMPTS: u32 = 3;
+/// Blocks that must remain in the drop window when the baseline is re-read under the lock. Until
+/// `rebase` renames its record into place, the lock still says `h0`, and a reader judges it stale at
+/// `h0 + drop_after_blocks`. With one block of margin a takeover would need two blocks between the
+/// re-read and the rename (microseconds apart; blocks are about 15 s), so it cannot happen.
+const REBASE_MARGIN_BLOCKS: u64 = 1;
 
 /// The signers' nonces, then the height: one baseline for the lock and for confirmation.
 fn baseline<C: Chain + ?Sized>(chain: &C, signers: &[AccountId]) -> SdkResult<(Vec<Nonce>, u64)> {
@@ -373,6 +378,7 @@ fn baseline<C: Chain + ?Sized>(chain: &C, signers: &[AccountId]) -> SdkResult<(V
 /// taken from the re-read and written into the lock record (`rebase`), so the lock and the
 /// confirmation share one baseline and the drop window starts no earlier than the signing. A height
 /// that already moved a whole drop window (the record would look resolved to others) also retries.
+/// A re-read within REBASE_MARGIN_BLOCKS of the window end also retries (Plan 3a N1).
 fn lock_with_current_baseline<C: Chain + ?Sized>(
     chain: &C,
     signers: &[AccountId],
@@ -384,7 +390,9 @@ fn lock_with_current_baseline<C: Chain + ?Sized>(
         let (nonces, h0) = baseline(chain, signers)?;
         let lock = InFlightLock::acquire(lock_dir, &primary, nonces[0].0, h0, s)?;
         let (current, h1) = baseline(chain, signers)?;
-        if current == nonces && h1 < h0.saturating_add(s.drop_after_blocks) {
+        if current == nonces
+            && h1.saturating_add(REBASE_MARGIN_BLOCKS) < h0.saturating_add(s.drop_after_blocks)
+        {
             if h1 != h0 {
                 lock.rebase(current[0].0, h1)?;
             }

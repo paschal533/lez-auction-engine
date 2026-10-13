@@ -385,3 +385,15 @@ fn a_cursor_beyond_the_head_of_the_same_chain_asks_for_a_full_rescan() {
     assert_eq!(value(&fixed, "scanned to block"), "5");
     assert!(fixed.ends_with("exit: 0\n"), "{fixed}");
 }
+
+#[test]
+fn rescan_from_on_a_cursor_without_anchor_notes_the_reset_and_the_gap() {
+    let c = Case::new();
+    c.write_cursor(&format!(
+        "{{\"last_block\":3,\"last_hash\":\"{}\",\"auctions\":[],\"positions\":[]}}",
+        "00".repeat(32)
+    ));
+    let (out, err) = c.run_split(&["rescan", "--from", "3"]);
+    assert!(out.ends_with("exit: 0\n"), "{out}");
+    assert!(err.contains("note: blocks 1..2 skipped"), "{err}");
+}

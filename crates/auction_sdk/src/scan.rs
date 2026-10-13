@@ -331,15 +331,12 @@ pub fn scan_report<C: Chain + ?Sized>(
 
 /// `cursor` positioned so that the next scan starts at block `from` (`rescan --from`). The user
 /// chose the start, so the block before it is taken from the node as it is now. A cursor built on
-/// another chain is discarded first (its discoveries belong to that chain), reported in `restarted`.
+/// another chain, or an anchorless one past the anchor block, is discarded first (its discoveries may
+/// belong to another chain), reported in `restarted`.
 pub fn start_at<C: Chain + ?Sized>(chain: &C, cursor: &Cursor, from: u64) -> SdkResult<Scanned> {
     let head = chain.last_block_id()?;
     let anchor = chain_anchor(chain, head)?;
-    let (base, restarted) = if !cursor.anchor.is_empty() && cursor.anchor != anchor {
-        (Cursor::default(), Some(Restart::ChainReplaced))
-    } else {
-        (cursor.clone(), None)
-    };
+    let (base, restarted) = on_this_chain(cursor, &anchor);
     let start = from.saturating_sub(1);
     let last_hash = hash_at(chain, start)?;
     let recent = if start == 0 {
@@ -659,6 +656,35 @@ mod tests {
         assert_eq!(other.cursor.anchor, c.anchor);
         let resumed = scan(&fx.chain, &t, &other.cursor, &ScanSettings::default()).expect("scan");
         assert_eq!(resumed.last_block, 3);
+    }
+
+    #[test]
+    fn start_at_resets_an_anchorless_cursor_past_the_anchor_block() {
+        // Plan 3a N2: an old-format cursor may belong to a replaced chain; `rescan --from N` must
+        // treat it like `scan` does (NoAnchor reset), not keep its ids and hide the skipped blocks.
+        let (fx, t) = setup();
+        let c = full_scan(&fx, &t);
+        let legacy = Cursor {
+            anchor: String::new(),
+            ..c.clone()
+        };
+        let placed = start_at(&fx.chain, &legacy, 3).expect("positioned");
+        assert_eq!(placed.restarted, Some(Restart::NoAnchor));
+        assert!(
+            placed.cursor.auctions.is_empty(),
+            "ids of an unknown chain dropped"
+        );
+        let early = Cursor {
+            last_block: 1,
+            ..Cursor::default()
+        };
+        assert_eq!(
+            start_at(&fx.chain, &early, 2)
+                .expect("positioned")
+                .restarted,
+            None,
+            "an anchorless cursor that saw only block 1 cannot have missed anything"
+        );
     }
 
     #[test]

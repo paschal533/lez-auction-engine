@@ -493,3 +493,149 @@ fn an_empty_nonce_reply_is_an_error_not_nonce_zero() {
     let e = confirm(&NoNonces, &id(k::CALLER), 0, 0, &fast(), &|_| {}).expect_err("empty reply");
     assert!(matches!(e, SdkError::Chain(m) if m.contains("no nonce")));
 }
+
+/// Height 10 at the first read and 14 afterwards, drop window 5: the re-read under the lock is one
+/// block short of the window end (15). The record still says 10 until `rebase` renames it, so a
+/// block landing in between would let another process judge it stale and take it over (Plan 3a N1).
+/// The lock is re-taken from a fresh baseline instead of being rebased so close to the edge.
+struct NearWindowEnd<'a> {
+    fx: &'a crate::testing::FixtureChain,
+    reads: std::cell::Cell<u32>,
+    reads_at_send: std::cell::Cell<u32>,
+}
+
+impl Chain for NearWindowEnd<'_> {
+    fn account(&self, i: &AccountId) -> SdkResult<lee_core::account::Account> {
+        self.fx.account(i)
+    }
+    fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<lee_core::account::Nonce>> {
+        self.fx.nonces(ids)
+    }
+    fn last_block_id(&self) -> SdkResult<u64> {
+        self.reads.set(self.reads.get() + 1);
+        Ok(if self.reads.get() == 1 { 10 } else { 14 })
+    }
+    fn blocks(&self, a: u64, b: u64) -> SdkResult<Vec<crate::chain::BlockSummary>> {
+        self.fx.blocks(a, b)
+    }
+    fn send(&self, _: &lee::PublicTransaction) -> SdkResult<[u8; 32]> {
+        self.reads_at_send.set(self.reads.get());
+        Err(SdkError::SendUncertain("connection reset".into()))
+    }
+}
+
+#[test]
+fn a_re_read_one_block_short_of_the_window_end_retakes_the_lock() {
+    let fx = standard::standard();
+    let dir = tempfile::tempdir().expect("tmp");
+    let chain = NearWindowEnd {
+        fx: &fx.chain,
+        reads: std::cell::Cell::new(0),
+        reads_at_send: std::cell::Cell::new(0),
+    };
+    let e = submit(
+        &chain,
+        &TestKeys::of(&[k::CALLER]),
+        &observe_plan(&fx),
+        dir.path(),
+        &fast(),
+        &|_| {},
+    )
+    .expect_err("unknown result");
+    assert!(matches!(e, SdkError::SendUncertain(_)));
+    assert_eq!(
+        chain.reads_at_send.get(),
+        4,
+        "baseline 10, re-read 14 (too close to 15): retry with baseline 14, re-read 14"
+    );
+    let r = read_record(&dir.path().join(format!("{}.lock", id(k::CALLER))));
+    assert_eq!(r.height, 14);
+}
+
+/// The signer's nonce moves on every read: every attempt sees a stale baseline under the lock.
+struct NonceAlwaysMoves<'a>(&'a crate::testing::FixtureChain, std::cell::Cell<u128>);
+
+impl Chain for NonceAlwaysMoves<'_> {
+    fn account(&self, i: &AccountId) -> SdkResult<lee_core::account::Account> {
+        self.0.account(i)
+    }
+    fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<lee_core::account::Nonce>> {
+        let n = self.1.get();
+        self.1.set(n + 1);
+        Ok(ids.iter().map(|_| lee_core::account::Nonce(n)).collect())
+    }
+    fn last_block_id(&self) -> SdkResult<u64> {
+        self.0.last_block_id()
+    }
+    fn blocks(&self, a: u64, b: u64) -> SdkResult<Vec<crate::chain::BlockSummary>> {
+        self.0.blocks(a, b)
+    }
+    fn send(&self, _: &lee::PublicTransaction) -> SdkResult<[u8; 32]> {
+        panic!("nothing may be sent without a current baseline")
+    }
+}
+
+#[test]
+fn a_nonce_that_moves_on_every_read_exhausts_the_retries_and_leaves_no_lock() {
+    let fx = standard::standard();
+    let dir = tempfile::tempdir().expect("tmp");
+    let chain = NonceAlwaysMoves(&fx.chain, std::cell::Cell::new(0));
+    let e = submit(
+        &chain,
+        &TestKeys::of(&[k::CALLER]),
+        &observe_plan(&fx),
+        dir.path(),
+        &fast(),
+        &|_| {},
+    )
+    .expect_err("in flight");
+    assert!(matches!(e, SdkError::InFlight { .. }), "{e}");
+    assert_eq!(chain.1.get(), 6, "LOCK_ATTEMPTS = 3, two nonce reads each");
+    assert!(is_empty_dir(dir.path()), "every attempt released its lock");
+}
+
+/// The transaction was sent, then the node client panics while polling: the transaction may still
+/// land, so unwinding must keep the lock (keep_on_drop is set before `send`).
+struct PanicsAfterSend<'a>(&'a crate::testing::FixtureChain, std::cell::Cell<bool>);
+
+impl Chain for PanicsAfterSend<'_> {
+    fn account(&self, i: &AccountId) -> SdkResult<lee_core::account::Account> {
+        self.0.account(i)
+    }
+    fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<lee_core::account::Nonce>> {
+        assert!(!self.1.get(), "node client crashed while polling");
+        self.0.nonces(ids)
+    }
+    fn last_block_id(&self) -> SdkResult<u64> {
+        self.0.last_block_id()
+    }
+    fn blocks(&self, a: u64, b: u64) -> SdkResult<Vec<crate::chain::BlockSummary>> {
+        self.0.blocks(a, b)
+    }
+    fn send(&self, tx: &lee::PublicTransaction) -> SdkResult<[u8; 32]> {
+        self.1.set(true);
+        self.0.send(tx)
+    }
+}
+
+#[test]
+fn a_panic_after_the_send_keeps_the_lock() {
+    let fx = standard::standard();
+    let dir = tempfile::tempdir().expect("tmp");
+    let chain = PanicsAfterSend(&fx.chain, std::cell::Cell::new(false));
+    let plan = observe_plan(&fx);
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        submit(
+            &chain,
+            &TestKeys::of(&[k::CALLER]),
+            &plan,
+            dir.path(),
+            &fast(),
+            &|_| {},
+        )
+    }));
+    assert!(caught.is_err(), "the poll panicked");
+    let lock = dir.path().join(format!("{}.lock", id(k::CALLER)));
+    assert!(lock.exists(), "unwinding after the send keeps the lock");
+    assert_eq!(fx.chain.sent().len(), 1);
+}

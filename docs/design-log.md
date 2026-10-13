@@ -952,8 +952,12 @@ After a send is attempted the lock is released only on a definite verdict (Inclu
 **Amended (Plan 3a final review, M1)**
 `submit` used to read `n0`/`h0` before taking the lock. If another transaction of the same signer landed and released its lock in between, the lock was taken on a stale `n0`, and the first poll reported that other transaction as Included. `submit` now re-reads the nonces and height under the lock; a moved nonce releases the lock and repeats the read (3 attempts, then `InFlight`). The height read under the lock is written into the lock record (temp file renamed over the lock, only while this process owns it) and used for confirmation, so the lock and the confirmation share one baseline and the drop window never starts before the signing. A height that moved a whole drop window between the two reads retries as well, since other processes would already judge that record resolved.
 
+**Amended (Plan 3b, Task 2)**
+- Rebase margin (Plan 3a N1): the baseline re-read under the lock must leave at least one block of the drop window (`h1 + 1 < h0 + drop`), otherwise the lock is re-taken from a fresh baseline; a takeover between the re-read and the rename would need two blocks within microseconds. Test `a_re_read_one_block_short_of_the_window_end_retakes_the_lock`.
+- Pinned behaviour: three stale attempts end in `InFlight` with no lock file left (`a_nonce_that_moves_on_every_read_exhausts_the_retries_and_leaves_no_lock`, N4); a panic after the send keeps the lock (`a_panic_after_the_send_keeps_the_lock`).
+
 **Status**
-Accepted (Plan 3a, Task 10); amended (Plan 3a final review)
+Accepted (Plan 3a, Task 10); amended (Plan 3a final review, Plan 3b Task 2)
 
 ---
 
@@ -983,8 +987,11 @@ Old cursor files still load (`anchor` and `recent` default to empty). An empty a
 
 Ruling (supersedes the Task 11 "deeper-than-depth fork is impossible" ruling): the scanner proves completeness from the cursor's own records (anchor, recent hashes) and never from hashes re-read from the node; when it cannot prove it, it fails and names `rescan --from 1`.
 
+**Amended (Plan 3b, Task 2)**
+`rescan --from N` applies the same rule as `scan` to an anchorless cursor past block 2: it is discarded (`NoAnchor`), so its ids are dropped and the CLI notes the skipped blocks 1..N-1 (Plan 3a N2; `start_at_resets_an_anchorless_cursor_past_the_anchor_block`, golden test `rescan_from_on_a_cursor_without_anchor_notes_the_reset_and_the_gap`).
+
 **Status**
-Accepted (Plan 3a, Task 11); amended (Plan 3a final review)
+Accepted (Plan 3a, Task 11); amended (Plan 3a final review, Plan 3b Task 2)
 
 ---
 

@@ -1012,3 +1012,31 @@ No JSON output in the PoC (the Plan 4 FFI is the machine interface). Golden file
 
 **Status**
 Accepted (Plan 3a, Task 13); amended (Plan 3a final review)
+
+---
+
+## ADR-045: Real Proofs on LEZ v0.2.4 and Their CI Tiers
+
+**Context**
+Spec §1.3 and §9 ask for one real-proof (`RISC0_DEV_MODE=0`) end-to-end job per push to `main` and the full real-proof suite nightly and on tags; RFP S2 asks for end-to-end tests against a standalone sequencer with `RISC0_DEV_MODE=0`. LEZ v0.2.4 never proves public transactions (the sequencer uses the executor), and hosted runners for this private repository have 2 vCPUs, 7 GiB RAM and a 360-minute job limit.
+
+**Options**
+- (A) Treat a `RISC0_DEV_MODE=0` sequencer run as the whole requirement.
+- (B) Prove every execution of each instruction's chain with the risc0 prover, in CI where it fits, plus (A).
+- (C) Prove only locally and commit the logs.
+
+**Decision**
+(B), tiered by the Plan 3b Task 1 measurement (`docs/architecture/real-proofs.md`):
+- RFP S2: the `localnet-e2e` job runs `scripts/demo.sh` against a sequencer with `RISC0_DEV_MODE=0` on every push to `main` (R1). The local smoke run at `RISC0_DEV_MODE=0` is deferred to Task 14 (disk).
+- Segment size `AUCTION_PROVE_PO2 = 19` (R2). `prove_liquidate` passed at po2 18 (2167 s, 2368 MiB) and po2 19 (2729 s, 4719 MiB); po2 20 was not run because peak RSS doubles per po2 (about 9.4 GiB expected, above the 5632 MiB ceiling).
+- Per push to `main`: Tier B: `real-proof-push` proves `settle_debt` on a hosted runner; the liquidate-bid path is proved nightly (R3).
+- Nightly and on tags: Tier C: a self-hosted job (disabled unless `vars.REAL_PROOF_SELF_HOSTED == 'true'`) plus a committed local full run in `docs/evidence/` (R4).
+- Privacy circuit (`observe_feed`): deferred to Task 7 (disk); not scheduled until measured (R5).
+
+**Trade-offs**
+The proved guests are native builds of the same source (the deployed Docker builds have different ImageIDs, ADR-047): a receipt shows the source is provable within the limits, not that a particular deployed binary was proved. Hosted timing scales by an assumed factor of 4 from an 8-core machine; Task 7 records the first CI timings and moves a tier if they exceed the budgets. Tier B was established at po2 18 (4 × 367.6 s = 1470 s ≤ 2700 s); `settle_debt` and `bid_with_settlement` at po2 19 are deferred to Task 7's local full run (disk), which confirms it. On the Windows dev machine, proving memory grows the pagefile on C:, which limits how many local proofs can run.
+
+**Status**
+Accepted (Plan 3b, Task 1; controller ruling PO2=19, PUSH=B, NIGHTLY=C); finalised in Task 7.
+
+---

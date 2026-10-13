@@ -468,6 +468,7 @@ pub use system::*;
 // ---- chain measurement and raw account access (Task 17) ----
 pub mod checks;
 pub mod measure;
+pub mod prove;
 
 impl World {
     /// Measures the chain (executions, cycles), then submits. Returns (executions, result).

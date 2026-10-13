@@ -2,10 +2,11 @@
 # Plan 3a Task 16 localnet smoke: the Plan 2 runbook with auction-cli for every program instruction (no spel).
 # Run INSIDE WSL. Steps, in order (several may be given in one call):
 #   step_build step_sequencer step_accounts step_auth step_deploy step_host step_engine step_bind
-#   step_collateral step_holdings step_flow step_system step_check step_stop
+#   step_collateral step_holdings step_flow step_system step_check step_peak step_stop
 # Requires the S1 builds (sequencer_service, wallet) and S1's Docker-built upstream guests (token, twap_oracle,
 # token_mint_authority). The wallet binary still does wallet business: key creation, auth-transfer init and
 # program deployment. Only the sequencer started by step_sequencer (pid file) is ever signalled.
+# SEQ_RISC0_DEV_MODE=0 runs the sequencer with dev mode off (RFP S2).
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 S1="$HOME/lez-spikes/s1"
@@ -70,7 +71,7 @@ step_sequencer() {
     exit 1
   fi
   rm -rf "${LN:?}/seqhome" "${LN:?}/cli-state" && mkdir -p "$LN/seqhome"
-  (cd "$S1/lez" && RISC0_DEV_MODE=1 RUST_LOG=info setsid nohup target/debug/sequencer_service \
+  (cd "$S1/lez" && RISC0_DEV_MODE="${SEQ_RISC0_DEV_MODE:-1}" RUST_LOG=info setsid nohup target/debug/sequencer_service \
     lez/sequencer/service/configs/debug/sequencer_config.json --home "$LN/seqhome" --listen-address 127.0.0.1 -p 3040 \
     > "$LN/logs/sequencer.log" 2>&1 < /dev/null &)
   rm -f "$LN/sequencer.pid"
@@ -204,6 +205,13 @@ step_check() {
     exit 1
   fi
   echo "no failed execution check"
+}
+
+step_peak() {
+  # Peak RSS of the running sequencer (VmHWM), for the ADR-045 measurement.
+  local pid
+  pid="$(cat "$LN/sequencer.pid")"
+  echo "sequencer peak RSS: $(sed -n 's/^VmHWM:[[:space:]]*//p' "/proc/$pid/status") (RISC0_DEV_MODE=${SEQ_RISC0_DEV_MODE:-1})"
 }
 
 step_stop() {

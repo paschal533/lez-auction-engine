@@ -315,3 +315,73 @@ fn rescan_from_1_over_a_corrupt_cursor_says_it_is_rebuilding() {
     let (_, err) = c.run_split(&["rescan", "--from", "1"]);
     assert_eq!(err, "");
 }
+
+#[test]
+fn a_config_that_is_not_on_the_node_is_a_verification_failure() {
+    // The usual cause: the CLI points at another network's node.
+    let c = Case::new();
+    let missing = lee_core::account::AccountId::new([0x55; 32]).to_string();
+    let out = c.run(&["--config", &missing, "config"]);
+    assert!(
+        out.contains("verification failed: engine config account (not found on this node"),
+        "{out}"
+    );
+    assert!(out.ends_with("exit: 2\n"), "{out}");
+    check("config_not_found", &out);
+}
+
+#[test]
+fn a_cursor_of_a_replaced_chain_is_discarded_with_a_note() {
+    let c = Case::new();
+    // A cursor left by an earlier localnet run: far ahead, another block 2, nothing discovered.
+    c.write_cursor(&format!(
+        r#"{{"last_block":500,"last_hash":"{h}","anchor":"{h}","recent":{{}},"auctions":[],"positions":[]}}"#,
+        h = "ab".repeat(32)
+    ));
+    let (out, err) = c.run_split(&["list-auctions"]);
+    assert!(
+        out.contains(&format!("{}  live", c.fx.live_auction)),
+        "the auction on the new chain is found: {out}"
+    );
+    assert_eq!(value(&out, "scanned to block"), "3");
+    assert!(
+        err.starts_with("note: the node serves another chain than the cursor was built on"),
+        "{err}"
+    );
+    assert_eq!(err.lines().count(), 1, "{err}");
+    let (_, err) = c.run_split(&["list-auctions"]);
+    assert_eq!(err, "", "the new cursor is anchored: no second note");
+}
+
+#[test]
+fn a_cursor_written_before_anchors_is_rebuilt_once_with_a_note() {
+    let c = Case::new();
+    c.write_cursor(&format!(
+        r#"{{"last_block":3,"last_hash":"{}","auctions":[],"positions":[]}}"#,
+        "cd".repeat(32)
+    ));
+    let (out, err) = c.run_split(&["list-at-risk"]);
+    assert!(out.contains(&c.fx.unsafe_position.to_string()), "{out}");
+    assert!(err.contains("older format"), "{err}");
+    let (_, err) = c.run_split(&["list-at-risk"]);
+    assert_eq!(err, "");
+}
+
+#[test]
+fn a_cursor_beyond_the_head_of_the_same_chain_asks_for_a_full_rescan() {
+    use auction_sdk::chain::Chain;
+    let c = Case::new();
+    for _ in 0..15 {
+        c.fx.chain.push_block(vec![]);
+    }
+    let first = c.run(&["list-auctions"]);
+    assert_eq!(value(&first, "scanned to block"), "18");
+    c.fx.chain.truncate(5); // the node lost blocks 6..=18; block 2 is unchanged
+    assert_eq!(c.fx.chain.last_block_id().expect("head"), 5);
+    let out = c.run(&["list-auctions"]);
+    assert!(out.contains("run `rescan --from 1`"), "{out}");
+    assert!(out.ends_with("exit: 1\n"), "{out}");
+    let fixed = c.run(&["rescan", "--from", "1"]);
+    assert_eq!(value(&fixed, "scanned to block"), "5");
+    assert!(fixed.ends_with("exit: 0\n"), "{fixed}");
+}

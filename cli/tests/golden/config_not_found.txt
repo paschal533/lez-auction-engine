@@ -1,0 +1,2 @@
+error: verification failed: engine config account (not found on this node: wrong network, or wrong --config?): expected an engine config at 6k78AbasGMFFrhG95Pj6jQbqkVt7FQMhVgemxJovWKR6, found no account; refusing to build a transaction (I4, ADR-027)
+exit: 2

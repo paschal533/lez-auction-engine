@@ -5,5 +5,5 @@ record            the initial reference price in DEPLOYMENTS.md (ADR-017)
 plan              init_config (8 accounts, 1 signer(s))
 submitted         <hash>
 included          signer nonce 1
-after config      unreadable: account Fso6kWuyJQwkkinkNF9p3p5VgySdEvEi9VvmaJSihD6Y (engine config) is not initialised
+after config      unreadable: engine config account (not found on this node: wrong network, or wrong --config?): expected an engine config at Fso6kWuyJQwkkinkNF9p3p5VgySdEvEi9VvmaJSihD6Y, found no account; refusing to build a transaction (I4, ADR-027)
 exit: 0

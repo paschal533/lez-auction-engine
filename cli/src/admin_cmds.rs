@@ -92,10 +92,11 @@ fn begin<C: Chain>(
     env.announce_admin(&v, out)?;
     let signer = env.account(signer)?;
     if signer != v.state.admin {
-        return Err(CliError::Usage(format!(
-            "refusing before signing: {signer} is not the config admin {}",
-            v.state.admin
-        )));
+        return Err(CliError::Verify(SdkError::Mismatch {
+            what: "config admin (refusing before signing: the signer is not the config admin)",
+            expected: v.state.admin.to_string(),
+            found: signer.to_string(),
+        }));
     }
     Ok((v, signer))
 }

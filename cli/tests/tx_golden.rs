@@ -363,3 +363,52 @@ fn a_tx_command_refuses_at_ms() {
     assert!(c.fx.chain.sent().is_empty(), "nothing is sent");
     check("bid_at_ms_refused", &out);
 }
+
+#[test]
+fn watch_reports_a_failed_round_and_goes_on() {
+    let c = Case::new();
+    c.fx.chain.set_send_mode(SendMode::Reject);
+    let (out, err) = c.run_split(&[
+        "watch",
+        "--iterations",
+        "2",
+        "--interval-ms",
+        "0",
+        "--observe-with",
+        "caller",
+    ]);
+    assert_eq!(c.fx.chain.sent().len(), 2, "both rounds tried observe_feed");
+    assert_eq!(
+        out.matches("scanned to block").count(),
+        2,
+        "a failed observe_feed does not skip the listing: {out}"
+    );
+    assert_eq!(
+        err.matches("observe-feed failed (continuing)").count(),
+        2,
+        "{err}"
+    );
+    assert!(err.contains("watch: round 2:"), "{err}");
+    assert!(
+        out.ends_with("exit: 1\n"),
+        "a bounded run with a failed round does not exit 0: {out}"
+    );
+}
+
+#[test]
+fn watch_stops_at_once_on_a_setup_error() {
+    let c = Case::new();
+    let (out, err) = c.run_split(&[
+        "watch",
+        "--iterations",
+        "3",
+        "--interval-ms",
+        "0",
+        "--observe-with",
+        "nobody",
+    ]);
+    assert!(c.fx.chain.sent().is_empty());
+    assert_eq!(out.matches("scanned to block").count(), 0, "{out}");
+    assert!(!err.contains("continuing"), "{err}");
+    assert!(out.ends_with("exit: 4\n"), "an unknown wallet label: {out}");
+}

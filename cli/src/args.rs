@@ -394,9 +394,70 @@ pub enum DevCommand {
     },
 }
 
+impl Command {
+    /// Commands that sign and send a transaction (tx, admin, host and dev commands, and `watch
+    /// --observe-with`). They trust the deployment file's ImageIDs for what they sign, so `main`
+    /// names the file they use.
+    #[must_use]
+    pub fn signs(&self) -> bool {
+        match self {
+            Self::Config
+            | Self::QuoteLiquidation { .. }
+            | Self::QuoteBid { .. }
+            | Self::ListAuctions { .. }
+            | Self::ListAtRisk { .. }
+            | Self::Rescan { .. } => false,
+            Self::Watch { observe_with, .. } => observe_with.is_some(),
+            _ => true,
+        }
+    }
+}
+
+/// The stderr line naming the deployment file a signing command trusts (resolved to an absolute
+/// path, since the default is relative to the current directory), or `None` for read commands.
+#[must_use]
+pub fn deployment_note(cmd: &Command, path: &std::path::Path, network: &str) -> Option<String> {
+    if !cmd.signs() {
+        return None;
+    }
+    let shown = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    Some(format!(
+        "deployment: {} (network {network})",
+        shown.display()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn note(args: &[&str]) -> Option<String> {
+        let mut argv = vec!["auction-cli"];
+        argv.extend_from_slice(args);
+        let cli = Cli::try_parse_from(argv).expect("parses");
+        deployment_note(&cli.command, &cli.deployment, "localnet")
+    }
+
+    #[test]
+    fn signing_commands_name_the_absolute_deployment_file() {
+        let expected = std::env::current_dir()
+            .expect("cwd")
+            .join("deployments/localnet.json");
+        let tx = note(&["observe-feed", "--caller", "c"]).expect("a tx command");
+        assert_eq!(
+            tx,
+            format!("deployment: {} (network localnet)", expected.display())
+        );
+        assert!(note(&["admin", "verify"]).is_some());
+        assert!(note(&["host", "addresses"]).is_some());
+        assert!(note(&["dev", "balance", "--account", "a"]).is_some());
+        assert!(note(&["watch", "--observe-with", "c"]).is_some());
+        assert_eq!(note(&["watch"]), None);
+        assert_eq!(note(&["list-auctions"]), None);
+        assert_eq!(note(&["config"]), None);
+        let given = note(&["--deployment", "/x/d.json", "close-debt", "--caller", "c"]);
+        assert!(given.expect("note").contains("d.json"));
+    }
 
     #[test]
     fn usage_errors_exit_1_and_help_exits_0() {

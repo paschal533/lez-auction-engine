@@ -6,7 +6,7 @@
 use std::process::ExitCode;
 
 use auction_cli::{
-    args::{usage_exit_code, Cli},
+    args::{deployment_note, usage_exit_code, Cli},
     env::Env,
     error::CliError,
     run,
@@ -32,6 +32,9 @@ fn main() -> ExitCode {
         Ok(d) => d,
         Err(e) => return fail(&e.into()),
     };
+    if let Some(note) = deployment_note(&cli.command, &cli.deployment, &deployment.network) {
+        eprintln!("{note}");
+    }
     let config = match cli
         .config
         .as_deref()

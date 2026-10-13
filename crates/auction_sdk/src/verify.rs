@@ -40,10 +40,12 @@ pub fn verify_config<C: Chain + ?Sized>(
 ) -> SdkResult<VerifiedConfig> {
     let acc = chain.account(config_id)?;
     if acc == Account::default() {
-        return Err(SdkError::Missing {
-            what: "engine config",
-            id: config_id.to_string(),
-        });
+        // Verification, not a plain lookup failure: the usual cause is a node of another network.
+        return Err(mismatch(
+            "engine config account (not found on this node: wrong network, or wrong --config?)",
+            format!("an engine config at {config_id}"),
+            "no account".to_owned(),
+        ));
     }
     if acc.program_owner != d.engine_program {
         return Err(mismatch(
@@ -122,11 +124,20 @@ pub fn verify_config<C: Chain + ?Sized>(
 /// The host binds exactly this config's engine authority (checked before `liquidate`; a host bound to
 /// another config would reject the hook anyway, but the user learns why before signing).
 pub fn verify_binding<C: Chain + ?Sized>(chain: &C, v: &VerifiedConfig) -> SdkResult<()> {
-    let les: LiquidationEngineState = Reader::new(chain, v.engine.program).host(
-        &v.host.liquidation_engine_state,
-        &v.host.program,
-        "LiquidationEngineState",
-    )?;
+    let les: LiquidationEngineState = Reader::new(chain, v.engine.program)
+        .host(
+            &v.host.liquidation_engine_state,
+            &v.host.program,
+            "LiquidationEngineState",
+        )
+        .map_err(|e| match e {
+            SdkError::Missing { id, .. } => mismatch(
+                "host engine binding (LiquidationEngineState not found: the host is not bound yet, or wrong network)",
+                format!("a binding at {id}"),
+                "no account".to_owned(),
+            ),
+            other => other,
+        })?;
     if les.engine_program_id != v.engine.program {
         return Err(mismatch(
             "engine program bound by the host",
@@ -248,8 +259,9 @@ mod tests {
         );
         let e = verify_config(&fx.chain, &fx.deployment, &cfg).expect_err("network");
         assert!(what_of(e).contains("ProtocolParameters"));
+        // A config that is not on this node is a verification failure (wrong network), not a lookup.
         let e = verify_config(&fx.chain, &fx.deployment, &id(99)).expect_err("missing");
-        assert!(what_of(e).contains("missing engine config"));
+        assert!(what_of(e).contains("engine config account (not found"));
     }
 
     #[test]
@@ -318,6 +330,10 @@ mod tests {
         );
         let e = verify_binding(&fx.chain, &v).expect_err("another engine program");
         assert!(what_of(e).contains("engine program bound"));
+        fx.chain
+            .put(v.host.liquidation_engine_state, Account::default());
+        let e = verify_binding(&fx.chain, &v).expect_err("not bound");
+        assert!(what_of(e).contains("host engine binding"));
     }
 
     #[test]

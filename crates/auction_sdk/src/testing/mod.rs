@@ -168,6 +168,13 @@ impl FixtureChain {
         }
     }
 
+    /// Keeps blocks `1..=len` only (a node that lost its later blocks, or a shorter replacement).
+    pub fn truncate(&self, len: u64) {
+        self.blocks
+            .borrow_mut()
+            .truncate(usize::try_from(len).expect("small"));
+    }
+
     /// The node answers "not found" for block `id`.
     pub fn hide_block(&self, id: u64) {
         self.hidden.borrow_mut().insert(id);

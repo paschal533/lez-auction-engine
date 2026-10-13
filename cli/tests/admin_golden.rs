@@ -176,7 +176,7 @@ fn set_engine_params_by_another_signer_is_refused_before_signing() {
         &engine_params,
     ]);
     assert!(out.contains("refusing before signing"), "{out}");
-    assert!(out.ends_with("exit: 1\n"), "{out}");
+    assert!(out.ends_with("exit: 2\n"), "{out}");
     assert!(c.fx.chain.sent().is_empty());
 }
 
@@ -229,7 +229,35 @@ fn bind_by_a_signer_that_is_not_the_host_admin_is_refused() {
     let c = Case::new();
     let out = c.run(&["host", "bind", "--admin", "keeper"]);
     assert!(out.contains("is not the host admin"), "{out}");
+    assert!(out.ends_with("exit: 2\n"), "{out}");
     assert!(c.fx.chain.sent().is_empty());
+}
+
+#[test]
+fn host_parameter_changes_by_a_signer_that_is_not_the_host_admin_are_refused() {
+    let cases: [&[&str]; 2] = [
+        &["host", "set-min-cr", "--admin", "keeper", "--ratio", "2"],
+        &[
+            "host",
+            "set-controller-gains",
+            "--admin",
+            "keeper",
+            "--kp",
+            "1",
+            "--ki",
+            "1",
+        ],
+    ];
+    for args in cases {
+        let c = Case::new();
+        let out = c.run(args);
+        assert!(
+            out.contains("verification failed: host admin (refusing before signing"),
+            "{out}"
+        );
+        assert!(out.ends_with("exit: 2\n"), "{out}");
+        assert!(c.fx.chain.sent().is_empty(), "nothing signed or sent");
+    }
 }
 
 #[test]

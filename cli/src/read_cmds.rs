@@ -11,7 +11,7 @@ use auction_sdk::{
     deployment::program_id_hex,
     error::SdkError,
     quote::{self, AuctionView},
-    scan::{self, Cursor, ScanSettings, ScanTargets},
+    scan::{self, Cursor, Restart, ScanSettings, ScanTargets},
     verify::VerifiedConfig,
 };
 
@@ -125,22 +125,32 @@ fn scan_settings(args: &ScanArgs) -> ScanSettings {
     }
 }
 
+/// One stderr line when a scan discarded the stored cursor (ADR-043, amended).
+fn note_restart(restarted: Option<Restart>, err: &mut dyn Write) -> Result<(), CliError> {
+    if let Some(r) = restarted {
+        writeln!(err, "note: {r}")?;
+    }
+    Ok(())
+}
+
 /// Scans the new blocks and persists the cursor.
 pub(crate) fn scan_now<C: Chain>(
     env: &Env<C>,
     v: &VerifiedConfig,
     args: &ScanArgs,
+    err: &mut dyn Write,
 ) -> Result<Cursor, CliError> {
     let path = env.cursor_path(&v.config_id);
     let cursor = scan::load_cursor(&path)?;
-    let next = scan::scan(
+    let next = scan::scan_report(
         &env.chain,
         &ScanTargets::of(v),
         &cursor,
         &scan_settings(args),
     )?;
-    scan::save_cursor(&path, &next)?;
-    Ok(next)
+    scan::save_cursor(&path, &next.cursor)?;
+    note_restart(next.restarted, err)?;
+    Ok(next.cursor)
 }
 
 fn auction_line(view: &AuctionView) -> String {
@@ -201,7 +211,7 @@ pub fn list_auctions<C: Chain>(
     err: &mut dyn Write,
 ) -> Result<(), CliError> {
     let v = env.verified()?;
-    let cursor = scan_now(env, &v, args)?;
+    let cursor = scan_now(env, &v, args, err)?;
     let now = env.now()?;
     kv(out, "scanned to block", &cursor.last_block.to_string())?;
     let mut shown = 0usize;
@@ -232,7 +242,7 @@ pub fn list_at_risk<C: Chain>(
     err: &mut dyn Write,
 ) -> Result<(), CliError> {
     let v = env.verified()?;
-    let cursor = scan_now(env, &v, args)?;
+    let cursor = scan_now(env, &v, args, err)?;
     let now = env.now()?;
     kv(out, "scanned to block", &cursor.last_block.to_string())?;
     let mut shown = 0usize;
@@ -276,25 +286,6 @@ fn cursor_for_rescan(
     }
 }
 
-/// The cursor positioned so that the next scan starts at block `from`.
-fn cursor_at<C: Chain>(env: &Env<C>, cursor: Cursor, from: u64) -> Result<Cursor, CliError> {
-    let start = from.saturating_sub(1);
-    let last_hash = if start == 0 {
-        String::new()
-    } else {
-        let blocks = env.chain.blocks(start, start)?;
-        let block = blocks
-            .first()
-            .ok_or_else(|| CliError::Usage(format!("block {start} not found")))?;
-        hex::encode(block.hash)
-    };
-    Ok(Cursor {
-        last_block: start,
-        last_hash,
-        ..cursor
-    })
-}
-
 pub fn rescan<C: Chain>(
     env: &Env<C>,
     from: Option<u64>,
@@ -306,24 +297,66 @@ pub fn rescan<C: Chain>(
     let path = env.cursor_path(&v.config_id);
     let mut cursor = cursor_for_rescan(&path, from, err)?;
     if let Some(from) = from {
-        let covered = cursor.last_block;
+        let placed = scan::start_at(&env.chain, &cursor, from)?;
+        note_restart(placed.restarted, err)?;
+        let covered = if placed.restarted.is_some() {
+            0
+        } else {
+            cursor.last_block
+        };
         if from > covered.saturating_add(1) {
             writeln!(err, "note: blocks {}..{} skipped", covered + 1, from - 1)?;
         }
-        cursor = cursor_at(env, cursor, from)?;
+        cursor = placed.cursor;
     }
-    let next = scan::scan(
+    let scanned = scan::scan_report(
         &env.chain,
         &ScanTargets::of(&v),
         &cursor,
         &scan_settings(args),
     )?;
-    scan::save_cursor(&path, &next)?;
+    scan::save_cursor(&path, &scanned.cursor)?;
+    note_restart(scanned.restarted, err)?;
+    let next = scanned.cursor;
     kv(out, "scanned to block", &next.last_block.to_string())?;
     kv(out, "auctions", &next.auctions.len().to_string())?;
     kv(out, "positions", &next.positions.len().to_string())
 }
 
+/// Errors that end `watch`: the setup is wrong (unverifiable config, no wallet, bad arguments, a
+/// closed output), so every later round would fail the same way. Anything else (a node hiccup, a
+/// dropped or in-flight `observe_feed`, a scan gap) concerns one round only.
+fn ends_watch(e: &CliError) -> bool {
+    matches!(
+        e,
+        CliError::Verify(_) | CliError::Keystore(_) | CliError::Usage(_) | CliError::Output(_)
+    )
+}
+
+/// A step's failure: setup errors are returned (they end `watch`); any other is reported on stderr
+/// and kept as the round's error, so the loop goes on.
+fn watch_step(
+    result: Result<(), CliError>,
+    what: &str,
+    round: u32,
+    err: &mut dyn Write,
+    last_error: &mut Option<CliError>,
+) -> Result<(), CliError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) if ends_watch(&e) => Err(e),
+        Err(e) => {
+            writeln!(err, "watch: round {round}: {what} failed (continuing): {e}")?;
+            *last_error = Some(e);
+            Ok(())
+        }
+    }
+}
+
+/// Repeats `observe_feed` (optional) and `list-auctions`. A failed step is reported on stderr and
+/// the loop goes on (a failed `observe_feed` does not skip the listing); setup errors (`ends_watch`)
+/// stop it at once. A run bounded by `--iterations` exits with the last step error if any step
+/// failed (S4: exit 0 only when every round succeeded).
 pub fn watch<C: Chain>(
     env: &Env<C>,
     interval_ms: u64,
@@ -334,14 +367,17 @@ pub fn watch<C: Chain>(
     err: &mut dyn Write,
 ) -> Result<(), CliError> {
     let mut round = 0u32;
+    let mut last_error = None;
     loop {
-        if let Some(caller) = observe_with {
-            crate::tx_cmds::observe_feed(env, caller, out)?;
-        }
-        list_auctions(env, false, args, out, err)?;
         round = round.saturating_add(1);
+        if let Some(caller) = observe_with {
+            let observed = crate::tx_cmds::observe_feed(env, caller, out);
+            watch_step(observed, "observe-feed", round, err, &mut last_error)?;
+        }
+        let listed = list_auctions(env, false, args, out, err);
+        watch_step(listed, "list-auctions", round, err, &mut last_error)?;
         if iterations.is_some_and(|n| round >= n) {
-            return Ok(());
+            return last_error.map_or(Ok(()), Err);
         }
         (env.sleep)(Duration::from_millis(interval_ms));
     }

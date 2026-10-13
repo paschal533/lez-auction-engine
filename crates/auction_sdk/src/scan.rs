@@ -1,9 +1,17 @@
 //! Discovery by block scan (spec §6.4, ADR-008, ADR-043): no account-listing RPC and no events exist
 //! on v0.2.4. The scan keeps engine `liquidate` transactions that name our config (auction and
 //! position ids) and host `open_position` transactions that name our `ProtocolParameters`
-//! (position ids), and persists a cursor `{last_block, last_hash, auctions, positions}`.
+//! (position ids), and persists a cursor `{last_block, last_hash, anchor, recent, auctions,
+//! positions}`.
+//!
+//! Completeness (ADR-043, amended): the cursor records which chain it was built on (`anchor`, the
+//! hash of block [`ANCHOR_BLOCK`]) and the hashes of its last `reorg_depth + 1` blocks (`recent`).
+//! A node with another anchor (restarted or replaced) discards the cursor and rescans from block 1.
+//! A rewind is accepted only when it reaches genesis or the node still has the rewind block with the
+//! hash the scan recorded there; otherwise the scan fails and asks for `rescan --from 1` instead of
+//! succeeding over blocks it never saw.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use auction_engine_core::Instruction;
@@ -17,11 +25,24 @@ use crate::{
     verify::VerifiedConfig,
 };
 
+/// The block whose hash identifies a chain. Not block 1: the LEZ v0.2.4 genesis block is built with
+/// `timestamp: 0` from the sequencer config, so a restarted localnet reproduces its hash. Block 2 is
+/// the first block stamped with the wall clock, so two runs of the same node differ there.
+pub const ANCHOR_BLOCK: u64 = 2;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cursor {
     pub last_block: u64,
     /// Hex hash of `last_block` ("" before the first scan).
     pub last_hash: String,
+    /// Hex hash of block [`ANCHOR_BLOCK`] of the chain this cursor was built on. "" means unknown:
+    /// a fresh cursor, a chain shorter than the anchor, or a cursor written before anchors existed.
+    #[serde(default)]
+    pub anchor: String,
+    /// Hex hashes of the last `reorg_depth + 1` scanned blocks, so that a rewind can be checked
+    /// against what the scan actually saw.
+    #[serde(default)]
+    pub recent: BTreeMap<u64, String>,
     pub auctions: BTreeSet<String>,
     pub positions: BTreeSet<String>,
 }
@@ -43,6 +64,37 @@ impl Cursor {
     pub fn position_ids(&self) -> SdkResult<Vec<AccountId>> {
         parse_ids(&self.positions)
     }
+}
+
+/// Why a scan discarded the stored cursor and started again from block 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Restart {
+    /// The node's block [`ANCHOR_BLOCK`] differs from the cursor's anchor: another chain.
+    ChainReplaced,
+    /// The cursor predates anchors, so the chain it was built on is unknown.
+    NoAnchor,
+}
+
+impl std::fmt::Display for Restart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ChainReplaced => write!(
+                f,
+                "the node serves another chain than the cursor was built on (block {ANCHOR_BLOCK} differs: restarted or replaced node); discarded the cursor and rescanned from block 1"
+            ),
+            Self::NoAnchor => write!(
+                f,
+                "the cursor does not record which chain it was built on (older format); rescanned from block 1"
+            ),
+        }
+    }
+}
+
+/// A scan result: the new cursor, and whether the stored one was discarded (tell the user).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scanned {
+    pub cursor: Cursor,
+    pub restarted: Option<Restart>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,54 +171,133 @@ fn hash_at<C: Chain + ?Sized>(chain: &C, id: u64) -> SdkResult<String> {
         .ok_or_else(|| SdkError::Chain(format!("block {id} not found")))
 }
 
-/// Where to rewind to, or `None` when the cursor block is still on the node with the stored hash.
-/// A cursor above the node's head (a restarted localnet with fewer blocks) rewinds to
-/// `min(last_block - reorg_depth, head)`. A cursor block within the head that the node cannot
-/// return is a transient gap: the scan fails and the cursor is not advanced.
+/// The node's anchor, or "" while its chain is shorter than [`ANCHOR_BLOCK`].
+fn chain_anchor<C: Chain + ?Sized>(chain: &C, head: u64) -> SdkResult<String> {
+    if head < ANCHOR_BLOCK {
+        return Ok(String::new());
+    }
+    hash_at(chain, ANCHOR_BLOCK)
+}
+
+/// The cursor to continue from on a node whose anchor is `anchor`, or a fresh one and why.
+/// A cursor without an anchor that recorded nothing past genesis cannot have missed anything and is
+/// kept; one that did is rebuilt, because the chain it was built on is unknown.
+fn on_this_chain(cursor: &Cursor, anchor: &str) -> (Cursor, Option<Restart>) {
+    if cursor.anchor.is_empty() {
+        if cursor.last_block < ANCHOR_BLOCK {
+            return (cursor.clone(), None);
+        }
+        return (Cursor::default(), Some(Restart::NoAnchor));
+    }
+    if cursor.anchor != anchor {
+        return (Cursor::default(), Some(Restart::ChainReplaced));
+    }
+    (cursor.clone(), None)
+}
+
+/// Where to rewind to (block and its hash), or `None` when the cursor block is still on the node
+/// with the stored hash. A rewind goes back `reorg_depth` blocks, to at most the head, and is
+/// accepted only if it reaches genesis or the node's hash of the rewind block is the one the scan
+/// recorded there; otherwise blocks below it may differ from the ones scanned and the scan fails.
+/// A cursor block within the head that the node cannot return is a transient gap: the scan fails.
 fn rewind_target<C: Chain + ?Sized>(
     chain: &C,
     head: u64,
     cursor: &Cursor,
     s: &ScanSettings,
-) -> SdkResult<Option<u64>> {
+) -> SdkResult<Option<(u64, String)>> {
     let n = cursor.last_block;
     if n == 0 {
         return Ok(None);
     }
-    let target = n.saturating_sub(s.reorg_depth).min(head);
-    if n > head {
-        return Ok(Some(target));
+    if n <= head {
+        let on_node = hash_at(chain, n).map_err(|e| {
+            SdkError::Scan(format!(
+                "cursor block {n} is not on the node ({e}); run `rescan`"
+            ))
+        })?;
+        if on_node == cursor.last_hash {
+            return Ok(None);
+        }
     }
-    let on_node = hash_at(chain, n).map_err(|e| {
+    let target = n.saturating_sub(s.reorg_depth).min(head);
+    if target == 0 {
+        return Ok(Some((0, String::new())));
+    }
+    let on_node = hash_at(chain, target).map_err(|e| {
         SdkError::Scan(format!(
-            "cursor block {n} is not on the node ({e}); run `rescan`"
+            "cannot rewind to block {target} ({e}); run `rescan --from 1`"
         ))
     })?;
-    Ok((on_node != cursor.last_hash).then_some(target))
+    if cursor.recent.get(&target) != Some(&on_node) {
+        let why = if n > head {
+            format!("the cursor is at block {n} but the node's head is {head}")
+        } else {
+            format!("block {n} changed")
+        };
+        return Err(SdkError::Scan(format!(
+            "{why}, and the node's block {target} is not the one scanned (the node was restarted or rebuilt more than {} blocks deep); blocks before it may have been missed: run `rescan --from 1`",
+            s.reorg_depth
+        )));
+    }
+    Ok(Some((target, on_node)))
 }
 
+/// `scan_report` without the restart flag.
 pub fn scan<C: Chain + ?Sized>(
     chain: &C,
     t: &ScanTargets,
     cursor: &Cursor,
     s: &ScanSettings,
 ) -> SdkResult<Cursor> {
+    scan_report(chain, t, cursor, s).map(|r| r.cursor)
+}
+
+fn check_block(b: &BlockSummary, want: u64, next: &Cursor) -> SdkResult<()> {
+    if b.id != want {
+        return Err(SdkError::Scan(format!(
+            "expected block {want}, got {}",
+            b.id
+        )));
+    }
+    if !next.last_hash.is_empty() && hex::encode(b.prev_hash) != next.last_hash {
+        return Err(SdkError::Scan(format!(
+            "block {} does not extend the scanned chain; run `rescan`",
+            b.id
+        )));
+    }
+    if b.id == ANCHOR_BLOCK && hex::encode(b.hash) != next.anchor {
+        return Err(SdkError::Scan(format!(
+            "block {ANCHOR_BLOCK} changed during the scan; run the command again"
+        )));
+    }
+    Ok(())
+}
+
+/// Scans the blocks after the cursor and returns the new cursor; never mutates its input, so a
+/// failed scan leaves the caller's cursor as it was. A cursor built on another chain, or without an
+/// anchor, is replaced by a full rescan, reported in `restarted`.
+pub fn scan_report<C: Chain + ?Sized>(
+    chain: &C,
+    t: &ScanTargets,
+    cursor: &Cursor,
+    s: &ScanSettings,
+) -> SdkResult<Scanned> {
     let liquidate = index_of(&Instruction::Liquidate { nonce: 0 })?;
     let open = index_of(&stablecoin_core::Instruction::OpenPosition {
         position_nonce: 0,
         initial_collateral_amount: 0,
     })?;
     let head = chain.last_block_id()?;
-    let mut next = cursor.clone();
-    if let Some(target) = rewind_target(chain, head, cursor, s)? {
+    let anchor = chain_anchor(chain, head)?;
+    let (mut next, restarted) = on_this_chain(cursor, &anchor);
+    if let Some((target, hash)) = rewind_target(chain, head, &next, s)? {
         // The node no longer has the block we stopped at: rewind and rescan (sets never duplicate).
         next.last_block = target;
-        next.last_hash = hash_at(chain, target).map_err(|e| {
-            SdkError::Scan(format!(
-                "cannot rewind to block {target}: {e}; run `rescan`"
-            ))
-        })?;
+        next.last_hash = hash;
+        next.recent.retain(|id, _| *id <= target);
     }
+    next.anchor = anchor;
     let batch = s.batch.max(1);
     let mut from = next.last_block + 1;
     while from <= head {
@@ -182,25 +313,50 @@ pub fn scan<C: Chain + ?Sized>(
         }
         for (i, b) in blocks.iter().enumerate() {
             let want = from + u64::try_from(i).map_err(|_| SdkError::Scan("index".into()))?;
-            if b.id != want {
-                return Err(SdkError::Scan(format!(
-                    "expected block {want}, got {}",
-                    b.id
-                )));
-            }
-            if !next.last_hash.is_empty() && hex::encode(b.prev_hash) != next.last_hash {
-                return Err(SdkError::Scan(format!(
-                    "block {} does not extend the scanned chain; run `rescan`",
-                    b.id
-                )));
-            }
+            check_block(b, want, &next)?;
             collect(t, b, &mut next, liquidate, open);
             next.last_block = b.id;
             next.last_hash = hex::encode(b.hash);
+            next.recent.insert(b.id, next.last_hash.clone());
         }
         from = to + 1;
     }
-    Ok(next)
+    let keep_from = next.last_block.saturating_sub(s.reorg_depth);
+    next.recent.retain(|id, _| *id >= keep_from);
+    Ok(Scanned {
+        cursor: next,
+        restarted,
+    })
+}
+
+/// `cursor` positioned so that the next scan starts at block `from` (`rescan --from`). The user
+/// chose the start, so the block before it is taken from the node as it is now. A cursor built on
+/// another chain is discarded first (its discoveries belong to that chain), reported in `restarted`.
+pub fn start_at<C: Chain + ?Sized>(chain: &C, cursor: &Cursor, from: u64) -> SdkResult<Scanned> {
+    let head = chain.last_block_id()?;
+    let anchor = chain_anchor(chain, head)?;
+    let (base, restarted) = if !cursor.anchor.is_empty() && cursor.anchor != anchor {
+        (Cursor::default(), Some(Restart::ChainReplaced))
+    } else {
+        (cursor.clone(), None)
+    };
+    let start = from.saturating_sub(1);
+    let last_hash = hash_at(chain, start)?;
+    let recent = if start == 0 {
+        BTreeMap::new()
+    } else {
+        BTreeMap::from([(start, last_hash.clone())])
+    };
+    Ok(Scanned {
+        cursor: Cursor {
+            last_block: start,
+            last_hash,
+            anchor,
+            recent,
+            ..base
+        },
+        restarted,
+    })
 }
 
 pub fn load_cursor(path: &Path) -> SdkResult<Cursor> {
@@ -297,8 +453,10 @@ mod tests {
     fn scanner_rewinds_when_the_cursor_block_hash_changed() {
         let (fx, t) = setup();
         let c = scan(&fx.chain, &t, &Cursor::default(), &ScanSettings::default()).expect("scan");
-        fx.chain.rewrite_from(2, 7); // the node rebuilt blocks 2..=3 (e.g. a restarted localnet)
-        let after = scan(&fx.chain, &t, &c, &ScanSettings::default()).expect("rescan");
+        fx.chain.rewrite_from(3, 7); // the node rebuilt block 3 (a shallow reorg)
+        let after = scan_report(&fx.chain, &t, &c, &ScanSettings::default()).expect("rescan");
+        assert_eq!(after.restarted, None, "same chain: no restart");
+        let after = after.cursor;
         assert_ne!(after.last_hash, c.last_hash);
         assert_eq!(
             after.auctions, c.auctions,
@@ -311,10 +469,24 @@ mod tests {
         hex::encode(fx.chain.blocks(id, id).expect("block")[0].hash)
     }
 
+    fn extend(fx: &standard::Fixture, blocks: u64) {
+        for _ in 0..blocks {
+            fx.chain.push_block(vec![]);
+        }
+    }
+
+    fn full_scan(fx: &standard::Fixture, t: &ScanTargets) -> Cursor {
+        scan(&fx.chain, t, &Cursor::default(), &ScanSettings::default()).expect("full scan")
+    }
+
+    fn is_rescan_from_1(e: &SdkError) -> bool {
+        matches!(e, SdkError::Scan(m) if m.contains("run `rescan --from 1`"))
+    }
+
     #[test]
     fn rewind_arithmetic_is_exact_and_follows_the_rebuilt_chain() {
         let (fx, t) = setup();
-        let c = scan(&fx.chain, &t, &Cursor::default(), &ScanSettings::default()).expect("scan");
+        let c = full_scan(&fx, &t);
         fx.chain.rewrite_from(3, 7);
         let one = ScanSettings {
             reorg_depth: 1,
@@ -325,31 +497,168 @@ mod tests {
         assert_eq!(after.last_hash, hash_hex(&fx, 3));
         assert_ne!(after.last_hash, c.last_hash);
         assert_eq!(after.auctions, c.auctions);
-        // A fork below the rewind point is not detected: the rewind point is re-read from the node,
-        // so the scan stays consistent but blocks at or below it are not rescanned (ADR-043).
+        assert_eq!(after.recent.keys().copied().collect::<Vec<_>>(), vec![2, 3]);
+        // Rebuilt from block 1: the anchor (block 2) changed, so the whole chain is rescanned.
         fx.chain.rewrite_from(1, 8);
-        let deep = scan(&fx.chain, &t, &after, &one).expect("consistent on the new chain");
-        assert_eq!(deep.last_hash, hash_hex(&fx, 3));
+        let deep = scan_report(&fx.chain, &t, &after, &one).expect("rebuilt");
+        assert_eq!(deep.restarted, Some(Restart::ChainReplaced));
+        assert_eq!(deep.cursor.last_hash, hash_hex(&fx, 3));
+        assert_eq!(deep.cursor.anchor, hash_hex(&fx, ANCHOR_BLOCK));
+        assert_eq!(deep.cursor.auctions, c.auctions);
     }
 
     #[test]
-    fn a_cursor_above_the_node_head_rewinds_to_the_head_or_below() {
+    fn a_replaced_chain_shorter_than_the_cursor_is_rescanned_from_block_1() {
+        // The cursor of an old, long chain; the node now serves a new chain of 3 blocks whose
+        // block 2 differs and which holds a liquidation the old cursor never saw.
         let (fx, t) = setup();
-        let full = scan(&fx.chain, &t, &Cursor::default(), &ScanSettings::default()).expect("scan");
-        let ahead = Cursor {
-            last_block: 10,
-            last_hash: "ab".into(),
+        let old = Cursor {
+            last_block: 500,
+            last_hash: "aa".repeat(32),
+            anchor: "bb".repeat(32),
+            recent: BTreeMap::from([(490, "cc".repeat(32))]),
             ..Cursor::default()
         };
-        let shallow = ScanSettings {
-            reorg_depth: 2,
-            ..ScanSettings::default()
+        let r = scan_report(&fx.chain, &t, &old, &ScanSettings::default()).expect("restarts");
+        assert_eq!(r.restarted, Some(Restart::ChainReplaced));
+        assert_eq!(r.cursor, full_scan(&fx, &t));
+        assert_eq!(r.cursor.auction_ids().expect("ids"), vec![fx.live_auction]);
+    }
+
+    #[test]
+    fn a_replaced_chain_longer_than_the_cursor_is_rescanned_from_block_1() {
+        // Head 20 is above `last_block - reorg_depth` (15 - 10): without the anchor the scan would
+        // rewind to block 5, take its hash from the new node and never see blocks 1..=5.
+        let (fx, t) = setup();
+        extend(&fx, 17);
+        let old = Cursor {
+            last_block: 15,
+            last_hash: "aa".repeat(32),
+            anchor: "bb".repeat(32),
+            ..Cursor::default()
         };
-        let a = scan(&fx.chain, &t, &ahead, &shallow).expect("rewinds to the head");
-        assert_eq!((a.last_block, a.last_hash.clone()), (3, hash_hex(&fx, 3)));
-        let deep =
-            scan(&fx.chain, &t, &ahead, &ScanSettings::default()).expect("rewinds to genesis");
-        assert_eq!(deep, full, "a full rescan finds everything");
+        let r = scan_report(&fx.chain, &t, &old, &ScanSettings::default()).expect("restarts");
+        assert_eq!(r.restarted, Some(Restart::ChainReplaced));
+        assert_eq!(r.cursor.last_block, 20);
+        assert_eq!(r.cursor.auction_ids().expect("ids"), vec![fx.live_auction]);
+        // The same through a real rebuild: the node restarted and produced more blocks since.
+        let c = r.cursor;
+        fx.chain.rewrite_from(1, 9);
+        extend(&fx, 5);
+        let r = scan_report(&fx.chain, &t, &c, &ScanSettings::default()).expect("restarts");
+        assert_eq!(r.restarted, Some(Restart::ChainReplaced));
+        assert_eq!(r.cursor, full_scan(&fx, &t));
+    }
+
+    #[test]
+    fn a_matching_anchor_scans_incrementally() {
+        let (fx, t) = setup();
+        let c = full_scan(&fx, &t);
+        assert_eq!(c.anchor, hash_hex(&fx, ANCHOR_BLOCK));
+        extend(&fx, 2);
+        // Block 1 is unreadable now: only an incremental scan (blocks 4..=5) can succeed.
+        fx.chain.hide_block(1);
+        let r = scan_report(&fx.chain, &t, &c, &ScanSettings::default()).expect("incremental");
+        assert_eq!(r.restarted, None);
+        assert_eq!(r.cursor.last_block, 5);
+        assert_eq!(r.cursor.anchor, c.anchor);
+        assert_eq!(r.cursor.auctions, c.auctions);
+    }
+
+    #[test]
+    fn a_cursor_without_an_anchor_loads_and_is_rebuilt_once() {
+        let (fx, t) = setup();
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("cursor.json");
+        // Written before anchors existed: no `anchor`, no `recent`.
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"last_block":3,"last_hash":"{}","auctions":[],"positions":[]}}"#,
+                hash_hex(&fx, 3)
+            ),
+        )
+        .expect("write");
+        let old = load_cursor(&path).expect("old cursors still load");
+        assert_eq!((old.anchor.as_str(), old.recent.len()), ("", 0));
+        let r = scan_report(&fx.chain, &t, &old, &ScanSettings::default()).expect("rebuilt");
+        assert_eq!(r.restarted, Some(Restart::NoAnchor));
+        assert_eq!(
+            r.cursor,
+            full_scan(&fx, &t),
+            "a full rescan, anchor recorded"
+        );
+        let again = scan_report(&fx.chain, &t, &r.cursor, &ScanSettings::default()).expect("ok");
+        assert_eq!(again.restarted, None, "only once");
+        // A cursor without an anchor that recorded only genesis has nothing to lose: kept quietly.
+        let genesis_only = Cursor {
+            last_block: 1,
+            last_hash: hash_hex(&fx, 1),
+            ..Cursor::default()
+        };
+        let r = scan_report(&fx.chain, &t, &genesis_only, &ScanSettings::default()).expect("ok");
+        assert_eq!(r.restarted, None);
+        assert_eq!(r.cursor.last_block, 3, "continues after block 1");
+        assert_eq!(r.cursor.anchor, hash_hex(&fx, ANCHOR_BLOCK));
+    }
+
+    #[test]
+    fn a_cursor_above_the_head_of_the_same_chain_rewinds_only_when_provable() {
+        let (fx, t) = setup();
+        extend(&fx, 15);
+        let c = full_scan(&fx, &t); // block 18, recent 8..=18
+                                    // Within reach of the recorded hashes: rewinds to block 8 (provably unchanged).
+        fx.chain.truncate(12);
+        let r = scan_report(&fx.chain, &t, &c, &ScanSettings::default()).expect("rewinds");
+        assert_eq!(r.restarted, None);
+        assert_eq!(
+            (r.cursor.last_block, r.cursor.last_hash.clone()),
+            (12, hash_hex(&fx, 12))
+        );
+        assert_eq!(r.cursor.auctions, c.auctions);
+        // Out of reach: the rewind would land on block 5, which the cursor has no record of.
+        fx.chain.truncate(5);
+        let e = scan(&fx.chain, &t, &c, &ScanSettings::default()).expect_err("cannot prove");
+        assert!(is_rescan_from_1(&e), "{e}");
+        assert!(e.to_string().contains("head is 5"), "{e}");
+        // A cursor within `reorg_depth` of genesis rewinds to genesis, which is always complete.
+        let short = scan(&fx.chain, &t, &Cursor::default(), &ScanSettings::default()).expect("ok");
+        fx.chain.truncate(3);
+        let r = scan(&fx.chain, &t, &short, &ScanSettings::default()).expect("to genesis");
+        assert_eq!(r, full_scan(&fx, &t));
+    }
+
+    #[test]
+    fn a_fork_deeper_than_reorg_depth_on_the_same_chain_fails() {
+        let (fx, t) = setup();
+        extend(&fx, 15);
+        let c = full_scan(&fx, &t);
+        fx.chain.rewrite_from(10, 7); // within reach: block 8 unchanged
+        let shallow = scan(&fx.chain, &t, &c, &ScanSettings::default()).expect("shallow reorg");
+        assert_eq!(shallow.last_hash, hash_hex(&fx, 18));
+        fx.chain.rewrite_from(5, 8); // block 8 changed too, block 2 did not
+        let e = scan(&fx.chain, &t, &shallow, &ScanSettings::default()).expect_err("too deep");
+        assert!(is_rescan_from_1(&e), "{e}");
+    }
+
+    #[test]
+    fn start_at_discards_a_cursor_of_another_chain() {
+        let (fx, t) = setup();
+        let c = full_scan(&fx, &t);
+        let same = start_at(&fx.chain, &c, 3).expect("positioned");
+        assert_eq!(same.restarted, None);
+        assert_eq!(same.cursor.auctions, c.auctions, "keeps its discoveries");
+        assert_eq!(same.cursor.recent, BTreeMap::from([(2, hash_hex(&fx, 2))]));
+        let foreign = Cursor {
+            anchor: "bb".repeat(32),
+            ..c.clone()
+        };
+        let other = start_at(&fx.chain, &foreign, 3).expect("positioned");
+        assert_eq!(other.restarted, Some(Restart::ChainReplaced));
+        assert!(other.cursor.auctions.is_empty());
+        assert_eq!(other.cursor.anchor, c.anchor);
+        let resumed = scan(&fx.chain, &t, &other.cursor, &ScanSettings::default()).expect("scan");
+        assert_eq!(resumed.last_block, 3);
     }
 
     #[test]

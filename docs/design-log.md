@@ -949,8 +949,11 @@ Dropped means "not applied by height h0 + 5". A backlogged transaction can still
 
 After a send is attempted the lock is released only on a definite verdict (Included, Dropped, or a send error that is a definite rejection). A timeout, an unknown send result (`SdkError::SendUncertain`, which chain implementations return for a transport failure after the request may have been delivered) or a panic keep the lock file; the chain-fact staleness rule clears it within 5 blocks. The lock is written to a temp file and hard-linked into place, so a live slow writer never leaves an empty or torn lock; on filesystems without hard links it falls back to `create_new` + write, where an empty file is re-read briefly and torn files from crashes are still recovered. An empty nonce reply is an error, never nonce 0.
 
+**Amended (Plan 3a final review, M1)**
+`submit` used to read `n0`/`h0` before taking the lock. If another transaction of the same signer landed and released its lock in between, the lock was taken on a stale `n0`, and the first poll reported that other transaction as Included. `submit` now re-reads the nonces and height under the lock; a moved nonce releases the lock and repeats the read (3 attempts, then `InFlight`). The height read under the lock is written into the lock record (temp file renamed over the lock, only while this process owns it) and used for confirmation, so the lock and the confirmation share one baseline and the drop window never starts before the signing. A height that moved a whole drop window between the two reads retries as well, since other processes would already judge that record resolved.
+
 **Status**
-Accepted (Plan 3a, Task 10)
+Accepted (Plan 3a, Task 10); amended (Plan 3a final review)
 
 ---
 
@@ -969,8 +972,19 @@ Spec §6.4: positions and auctions are found by a `getBlockRange` scan with a pe
 **Trade-offs**
 A rewind deeper than `reorg_depth` (10) needs `rescan --from 1`. Ids discovered in rebuilt blocks that no longer exist stay in the set until they fail to decode (harmless). Production uses the indexer's `getTransactionsByAccount`, then v0.3 events (spec §6.4).
 
+**Amended (Plan 3a final review, I1)**
+The Task 11 ruling that a fork deeper than `reorg_depth` is "impossible by design (the rewind point's hash is re-read from the node)" does not hold for a replaced chain. The config address is a PDA of admin and salt, so a cursor file survives a localnet restart and a redeploy; re-reading the rewind point's hash from the new node keeps the scan self-consistent but not complete: a cursor above the new head scanned nothing, and a new chain longer than `last_block - 10` was scanned only above the rewind point, both reported as success. The cursor now also stores:
+- `anchor`: the hex hash of block 2. Not block 1: the v0.2.4 sequencer builds its genesis block from its config with `timestamp: 0` (`lez/sequencer/core/src/lib.rs`), so a restarted localnet reproduces the block 1 hash; block 2 is the first block stamped with the wall clock.
+- `recent`: the hashes of the last `reorg_depth + 1` scanned blocks.
+
+Every scan reads the node's block 2 first. A different anchor (or a chain now shorter than block 2 under an anchored cursor) discards the cursor, its discoveries included, rescans from block 1 and reports `Restart::ChainReplaced`; the CLI prints one `note:` line on stderr. With a matching anchor, a changed cursor block or a cursor above the head rewinds to `min(last_block - reorg_depth, head)` as before, but the rewind is accepted only if it reaches genesis or the node's hash of the rewind block equals the one in `recent`; otherwise the scan fails, cursor unchanged, with "run `rescan --from 1`". A hash chain makes an equal hash at the rewind block prove that every block below it is the one scanned, so a successful scan is now complete. `rescan --from N` keeps working: it positions the cursor at the node's block `N-1` and records the node's anchor (the user chose the start), and still discards a cursor of another chain first.
+
+Old cursor files still load (`anchor` and `recent` default to empty). An empty anchor means "unknown": a cursor that recorded nothing past block 1 is kept; any other is rebuilt by a full rescan from block 1 (`Restart::NoAnchor`, one stderr note), which records the anchor. A full rescan was chosen over adopting the node's current anchor because the old cursor may already belong to a replaced chain, and adopting the anchor would make that permanent and silent; the cost is one full scan per old cursor file.
+
+Ruling (supersedes the Task 11 "deeper-than-depth fork is impossible" ruling): the scanner proves completeness from the cursor's own records (anchor, recent hashes) and never from hashes re-read from the node; when it cannot prove it, it fails and names `rescan --from 1`.
+
 **Status**
-Accepted (Plan 3a, Task 11)
+Accepted (Plan 3a, Task 11); amended (Plan 3a final review)
 
 ---
 
@@ -990,5 +1004,11 @@ Spec §6.6 lists the commands; spec §9 asks for CLI golden tests. The CLI must 
 **Trade-offs**
 No JSON output in the PoC (the Plan 4 FFI is the machine interface). Golden files must be reviewed when output changes (`UPDATE_GOLDEN=1`). spel-cli is not an option (it mis-encodes stablecoin instructions, spec §3.2). `rescan --from N` with N beyond the cursor leaves the blocks in between unscanned by design; use `--from 1` to rebuild. The CLI says so on stderr (`note: blocks X..N-1 skipped`), and warns on stderr (`warning: skipped <id>: ...`) about list candidates that decode but are the wrong account or are rejected by the engine, instead of hiding them; only gone or undecodable ids are dropped silently. A wrong-account `Mismatch` on a user-supplied id (for example `quote-bid` on a non-auction) exits 2 like a program-id or deployment mismatch; that is intended.
 
+**Amended (Plan 3a final review, M2-M5)**
+- Exit 2 also covers a config account that is not on the node (`verify_config` returns a `Mismatch`, "wrong network, or wrong --config?") and a host with no `LiquidationEngineState` in `verify_binding`, and a signer that is not the config admin (admin commands) or the host admin (`host bind`, `set-min-cr`, `set-controller-gains`); these used to exit 1. The host-admin check now runs before signing for all three host admin commands.
+- `watch` reports a failed step (`observe-feed` or `list-auctions`) on stderr (`watch: round N: ... failed (continuing): ...`) and goes on; a failed `observe-feed` does not skip the listing. Setup errors (verification 2, keystore 4, usage, closed output) stop it at once. A run bounded by `--iterations` exits with the last step error if any step failed, so exit 0 still means every round succeeded.
+- Signing commands (tx, `admin`, `host`, `dev`, and `watch --observe-with`) print `deployment: <absolute path> (network <name>)` on stderr once, because the default `deployments/localnet.json` (and the default state directory `.auction-cli`) resolve against the current directory. Run the CLI from the repository root, or pass `--deployment` and `--state-dir`, so that every invocation trusts the same file and shares the same locks.
+- Scanning commands print one `note:` line on stderr when the scanner discarded a cursor of another chain or an old cursor without an anchor (ADR-043, amended).
+
 **Status**
-Accepted (Plan 3a, Task 13)
+Accepted (Plan 3a, Task 13); amended (Plan 3a final review)

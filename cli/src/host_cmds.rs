@@ -5,10 +5,10 @@
 use std::io::Write;
 
 use auction_sdk::{
-    addresses::HostAddresses, chain::Chain, decode::Reader, deployment::program_id_hex, plan_host,
-    verify::verify_binding,
+    addresses::HostAddresses, chain::Chain, decode::Reader, deployment::program_id_hex,
+    error::SdkError, plan_host, verify::verify_binding,
 };
-use lee_core::account::Account;
+use lee_core::account::{Account, AccountId};
 use stablecoin_core::{LiquidationEngineState, ProtocolParameters};
 
 use crate::{
@@ -54,8 +54,8 @@ pub fn host<C: Chain>(
                 "min collateral ratio",
                 &format!("{} -> {ratio}", now.minimum_collateralization_ratio),
             )?;
-            let plan =
-                plan_host::set_minimum_collateralization_ratio(&host, env.account(admin)?, *ratio)?;
+            let signer = require_host_admin(env, &now, admin)?;
+            let plan = plan_host::set_minimum_collateralization_ratio(&host, signer, *ratio)?;
             env.send_plain(
                 &plan,
                 "set_minimum_collateralization_ratio",
@@ -78,7 +78,8 @@ pub fn host<C: Chain>(
             );
             kv(out, "kp", &format!("{old_kp} -> {kp}"))?;
             kv(out, "ki", &format!("{old_ki} -> {ki}"))?;
-            let plan = plan_host::set_controller_gains(&host, env.account(admin)?, *kp, *ki)?;
+            let signer = require_host_admin(env, &now, admin)?;
+            let plan = plan_host::set_controller_gains(&host, signer, *kp, *ki)?;
             env.send_plain(&plan, "set_controller_gains", CHECK_HOST, out)?;
             print_params(env, out, |p| {
                 format!(
@@ -88,6 +89,24 @@ pub fn host<C: Chain>(
             })
         }
     }
+}
+
+/// The signer, refused before signing (exit 2) unless it is the host admin recorded in
+/// `ProtocolParameters`: the host would drop the transaction, and resending could not help.
+fn require_host_admin<C: Chain>(
+    env: &Env<C>,
+    params: &ProtocolParameters,
+    signer: &str,
+) -> Result<AccountId, CliError> {
+    let signer = env.account(signer)?;
+    if signer != params.admin_account_id {
+        return Err(CliError::Verify(SdkError::Mismatch {
+            what: "host admin (refusing before signing: the signer is not the host admin)",
+            expected: params.admin_account_id.to_string(),
+            found: signer.to_string(),
+        }));
+    }
+    Ok(signer)
 }
 
 /// Re-reads `ProtocolParameters` after inclusion and prints one summary of it.
@@ -172,14 +191,8 @@ fn bind<C: Chain>(env: &Env<C>, admin: &str, out: &mut dyn Write) -> Result<(), 
         "engine authority",
         &v.engine.engine_authority.to_string(),
     )?;
-    let signer = env.account(admin)?;
     let host = host_addresses(env);
-    let host_admin = protocol_parameters(env, &host)?.admin_account_id;
-    if signer != host_admin {
-        return Err(CliError::Usage(format!(
-            "refusing before signing: {signer} is not the host admin {host_admin}"
-        )));
-    }
+    let signer = require_host_admin(env, &protocol_parameters(env, &host)?, admin)?;
     kv(out, "currently bound", &current_binding(env, &host))?;
     let plan = plan_host::set_liquidation_engine(
         &host,

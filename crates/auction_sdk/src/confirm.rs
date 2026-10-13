@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use lee_core::account::AccountId;
+use lee_core::account::{AccountId, Nonce};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -289,6 +289,43 @@ impl InFlightLock {
         &self.path
     }
 
+    /// Rewrites the record with `height` (the baseline re-read under the lock), so the lock and the
+    /// confirmation share one baseline. The new record goes to a private temp file that is renamed
+    /// over the lock, so a reader sees the old or the new record, never a torn one. Only a lock this
+    /// process still owns is rewritten; a lock taken over meanwhile is `InFlight`.
+    pub fn rebase(&self, nonce: u128, height: u64) -> SdkResult<()> {
+        let taken_over = || SdkError::InFlight {
+            signer: self
+                .path
+                .file_stem()
+                .map_or_else(String::new, |s| s.to_string_lossy().into_owned()),
+            lock: self.path.display().to_string(),
+            blocks: 0,
+        };
+        match read_lock(&self.path)? {
+            Some(Found::Record(r)) if r.owner == self.owner => {}
+            _ => return Err(taken_over()),
+        }
+        let record = serde_json::to_string(&LockRecord {
+            nonce,
+            height,
+            owner: self.owner.clone(),
+        })
+        .map_err(|e| SdkError::Io {
+            path: self.path.display().to_string(),
+            reason: e.to_string(),
+        })?;
+        let tmp = self
+            .path
+            .with_extension(format!("lock.{}.rebase.tmp", self.owner));
+        fs::write(&tmp, record.as_bytes())
+            .and_then(|()| fs::rename(&tmp, &self.path))
+            .map_err(|e| {
+                let _ = fs::remove_file(&tmp);
+                io_err(&self.path, &e)
+            })
+    }
+
     pub fn owner(&self) -> &str {
         &self.owner
     }
@@ -313,6 +350,58 @@ impl Drop for InFlightLock {
     }
 }
 
+/// Attempts at taking the lock with a baseline that is still current once the lock is held.
+const LOCK_ATTEMPTS: u32 = 3;
+
+/// The signers' nonces, then the height: one baseline for the lock and for confirmation.
+fn baseline<C: Chain + ?Sized>(chain: &C, signers: &[AccountId]) -> SdkResult<(Vec<Nonce>, u64)> {
+    let nonces = chain.nonces(signers)?;
+    if nonces.len() != signers.len() || nonces.is_empty() {
+        return Err(SdkError::Chain(format!(
+            "the node returned {} nonces for {} signers",
+            nonces.len(),
+            signers.len()
+        )));
+    }
+    Ok((nonces, chain.last_block_id()?))
+}
+
+/// Takes the signer's lock, then re-reads the baseline under it. A nonce that moved between the
+/// first read and the lock (another transaction of this signer landed meanwhile) would make the
+/// lock record and the confirmation baseline stale, and a later poll could report that other
+/// transaction as this one (`Included`): the lock is released and the read repeated. The height is
+/// taken from the re-read and written into the lock record (`rebase`), so the lock and the
+/// confirmation share one baseline and the drop window starts no earlier than the signing. A height
+/// that already moved a whole drop window (the record would look resolved to others) also retries.
+fn lock_with_current_baseline<C: Chain + ?Sized>(
+    chain: &C,
+    signers: &[AccountId],
+    lock_dir: &Path,
+    s: &ConfirmSettings,
+) -> SdkResult<(InFlightLock, Vec<Nonce>, u64)> {
+    let primary = signers[0];
+    for _ in 0..LOCK_ATTEMPTS {
+        let (nonces, h0) = baseline(chain, signers)?;
+        let lock = InFlightLock::acquire(lock_dir, &primary, nonces[0].0, h0, s)?;
+        let (current, h1) = baseline(chain, signers)?;
+        if current == nonces && h1 < h0.saturating_add(s.drop_after_blocks) {
+            if h1 != h0 {
+                lock.rebase(current[0].0, h1)?;
+            }
+            return Ok((lock, current, h1));
+        }
+        drop(lock);
+    }
+    Err(SdkError::InFlight {
+        signer: primary.to_string(),
+        lock: lock_dir
+            .join(format!("{primary}.lock"))
+            .display()
+            .to_string(),
+        blocks: s.drop_after_blocks,
+    })
+}
+
 pub fn submit<C: Chain + ?Sized>(
     chain: &C,
     keys: &dyn KeySource,
@@ -325,13 +414,9 @@ pub fn submit<C: Chain + ?Sized>(
         .signing_requirements
         .first()
         .ok_or_else(|| SdkError::Encode("plan has no signer".into()))?;
-    let nonces = chain.nonces(&plan.signing_requirements)?;
-    let n0 = nonces
-        .first()
-        .map(|n| n.0)
-        .ok_or_else(|| SdkError::Chain(format!("the node returned no nonce for {primary}")))?;
-    let h0 = chain.last_block_id()?;
-    let mut lock = InFlightLock::acquire(lock_dir, &primary, n0, h0, s)?;
+    let (mut lock, nonces, h0) =
+        lock_with_current_baseline(chain, &plan.signing_requirements, lock_dir, s)?;
+    let n0 = nonces[0].0;
     let tx = sign(plan, &nonces, keys)?;
     // From the send attempt until a definite verdict the lock stays on disk, whatever happens
     // (an unwinding panic included): the transaction may still land.
@@ -355,382 +440,5 @@ pub fn submit<C: Chain + ?Sized>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::testing::standard::{self, k, ORACLE};
-    use crate::testing::{id, SendMode, TestKeys};
-    use crate::verify::verify_config;
-
-    fn fast() -> ConfirmSettings {
-        ConfirmSettings {
-            poll_interval: Duration::ZERO,
-            drop_after_blocks: 5,
-            max_polls: 50,
-        }
-    }
-
-    fn observe_plan(fx: &standard::Fixture) -> Plan {
-        let v = verify_config(&fx.chain, &fx.deployment, &standard::config_id()).expect("verifies");
-        crate::plan::observe_feed(&v, id(k::CALLER), ORACLE).expect("plan")
-    }
-
-    fn read_record(path: &Path) -> LockRecord {
-        let text = fs::read_to_string(path).expect("lock file exists");
-        serde_json::from_str(&text).expect("lock parses")
-    }
-
-    fn is_empty_dir(dir: &Path) -> bool {
-        fs::read_dir(dir).expect("dir").next().is_none()
-    }
-
-    fn run_observe(
-        fx: &standard::Fixture,
-        dir: &Path,
-        s: &ConfirmSettings,
-    ) -> SdkResult<Submitted> {
-        submit(
-            &fx.chain,
-            &TestKeys::of(&[k::CALLER]),
-            &observe_plan(fx),
-            dir,
-            s,
-            &|_| {},
-        )
-    }
-
-    /// A chain whose transaction lands between the first and the second read of one poll: before the
-    /// first read the nonce is `n0` and the tip is `h0`; after it the nonce is `n0 + 1` and the tip is
-    /// `h0 + 5` (the sequencer applies state before it moves the tip).
-    struct LandsBetweenReads {
-        reads: std::cell::Cell<u32>,
-        h0: u64,
-    }
-
-    impl LandsBetweenReads {
-        fn landed(&self) -> bool {
-            let n = self.reads.get();
-            self.reads.set(n + 1);
-            n >= 1
-        }
-    }
-
-    impl Chain for LandsBetweenReads {
-        fn account(&self, _: &AccountId) -> SdkResult<lee_core::account::Account> {
-            Ok(lee_core::account::Account::default())
-        }
-        fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<lee_core::account::Nonce>> {
-            let n = u128::from(self.landed());
-            Ok(ids.iter().map(|_| lee_core::account::Nonce(n)).collect())
-        }
-        fn last_block_id(&self) -> SdkResult<u64> {
-            Ok(if self.landed() { self.h0 + 5 } else { self.h0 })
-        }
-        fn blocks(&self, _: u64, _: u64) -> SdkResult<Vec<crate::chain::BlockSummary>> {
-            Ok(vec![])
-        }
-        fn send(&self, _: &lee::PublicTransaction) -> SdkResult<[u8; 32]> {
-            Ok([0; 32])
-        }
-    }
-
-    #[test]
-    fn a_transaction_landing_between_the_reads_is_included_not_dropped() {
-        let chain = LandsBetweenReads {
-            reads: std::cell::Cell::new(0),
-            h0: 10,
-        };
-        let o = confirm(&chain, &id(k::CALLER), 0, 10, &fast(), &|_| {}).expect("verdict");
-        assert_eq!(o, Outcome::Included { nonce_after: 1 });
-    }
-
-    #[test]
-    fn included_transaction_reports_the_new_nonce_and_releases_the_lock() {
-        let fx = standard::standard();
-        let dir = tempfile::tempdir().expect("tmp");
-        let s = run_observe(&fx, dir.path(), &fast()).expect("submitted");
-        assert_eq!(s.outcome, Outcome::Included { nonce_after: 1 });
-        assert!(is_empty_dir(dir.path()), "lock released");
-    }
-
-    #[test]
-    fn dropped_transaction_reports_dropped_and_releases_the_lock() {
-        let fx = standard::standard();
-        fx.chain.set_send_mode(SendMode::Drop);
-        fx.chain.set_height_step(1);
-        let dir = tempfile::tempdir().expect("tmp");
-        let s = run_observe(&fx, dir.path(), &fast()).expect("a verdict");
-        assert!(matches!(s.outcome, Outcome::Dropped { .. }));
-        assert_eq!(
-            fx.chain.nonces(&[id(k::CALLER)]).expect("nonce")[0].0,
-            0,
-            "nothing applied"
-        );
-        assert_eq!(fx.chain.sent().len(), 1, "never resent automatically");
-        assert!(is_empty_dir(dir.path()), "lock released");
-    }
-
-    #[test]
-    fn a_second_transaction_of_the_same_signer_is_refused_while_one_is_in_flight() {
-        let fx = standard::standard();
-        let dir = tempfile::tempdir().expect("tmp");
-        let h = fx.chain.last_block_id().expect("height");
-        let held = InFlightLock::acquire(dir.path(), &id(k::CALLER), 0, h, &fast()).expect("first");
-        let e = run_observe(&fx, dir.path(), &fast()).expect_err("in flight");
-        assert!(matches!(e, SdkError::InFlight { .. }));
-        assert!(fx.chain.sent().is_empty(), "nothing was sent");
-        assert_eq!(
-            read_record(held.path()).owner,
-            held.owner(),
-            "the live lock is untouched"
-        );
-        drop(held);
-        run_observe(&fx, dir.path(), &fast()).expect("free again");
-    }
-
-    #[test]
-    fn a_lock_left_by_a_crashed_process_is_recovered() {
-        let fx = standard::standard();
-        let dir = tempfile::tempdir().expect("tmp");
-        let lock = dir.path().join(format!("{}.lock", id(k::CALLER)));
-        // A crashed process left a lock taken at height 0, nonce 0 (no owner field).
-        fs::write(&lock, "{\"nonce\":0,\"height\":0}").expect("write");
-        let left = read_record(&lock);
-        assert_eq!(left.owner, "");
-
-        // Height 3 is inside the window 0..5: the lock is live and must not be stolen.
-        let h = fx.chain.last_block_id().expect("height");
-        assert_eq!(h, 3);
-        assert!(!left.is_stale(0, h, &fast()));
-        assert!(matches!(
-            InFlightLock::acquire(dir.path(), &id(k::CALLER), 0, h, &fast()),
-            Err(SdkError::InFlight { .. })
-        ));
-        assert_eq!(read_record(&lock), left, "the live lock was not modified");
-
-        // Three more blocks: height 6 is past the window, so the lock is stale and is replaced.
-        for _ in 0..3 {
-            fx.chain.push_block(vec![]);
-        }
-        let h = fx.chain.last_block_id().expect("height");
-        assert_eq!(h, 6);
-        assert!(left.is_stale(0, h, &fast()), "detected as stale");
-        let taken =
-            InFlightLock::acquire(dir.path(), &id(k::CALLER), 0, h, &fast()).expect("recovered");
-        let now = read_record(&lock);
-        assert_eq!(
-            now.owner,
-            taken.owner(),
-            "the file holds the new owner's identity"
-        );
-        assert_ne!(now.owner, left.owner);
-        assert_eq!(
-            (now.nonce, now.height),
-            (0, 6),
-            "with the new owner's nonce and height"
-        );
-        drop(taken);
-        assert!(is_empty_dir(dir.path()), "the new owner releases it");
-
-        // End to end: a stale lock does not block a submission.
-        fs::write(&lock, "{\"nonce\":0,\"height\":0}").expect("write");
-        let s = run_observe(&fx, dir.path(), &fast())
-            .expect("height 6 passed the window of a lock taken at height 0");
-        assert_eq!(s.outcome, Outcome::Included { nonce_after: 1 });
-
-        // A torn lock (crash mid-write) is replaced too.
-        fs::write(&lock, "{ torn").expect("write");
-        let again = InFlightLock::acquire(dir.path(), &id(k::CALLER), 1, 6, &fast())
-            .expect("a torn lock is replaced");
-        let now = read_record(&lock);
-        assert_eq!(now.owner, again.owner());
-        assert_eq!((now.nonce, now.height), (1, 6));
-    }
-
-    #[test]
-    fn a_lock_is_stale_once_the_nonce_moved_or_the_window_ended() {
-        let r = LockRecord {
-            nonce: 0,
-            height: 10,
-            owner: "x".into(),
-        };
-        assert!(!r.is_stale(0, 12, &fast()));
-        assert!(r.is_stale(1, 12, &fast()), "applied: resolved");
-        assert!(!r.is_stale(0, 14, &fast()));
-        assert!(r.is_stale(0, 15, &fast()), "window over: dropped");
-    }
-
-    #[test]
-    fn an_old_owner_does_not_remove_a_lock_taken_over_by_another() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let signer = id(k::CALLER);
-        let first = InFlightLock::acquire(dir.path(), &signer, 0, 0, &fast()).expect("first");
-        // The window passed; a second process takes over while the first is still alive.
-        let second = InFlightLock::acquire(dir.path(), &signer, 0, 9, &fast()).expect("takeover");
-        drop(first);
-        assert_eq!(
-            read_record(second.path()).owner,
-            second.owner(),
-            "second still holds it"
-        );
-        drop(second);
-        assert!(is_empty_dir(dir.path()));
-    }
-
-    #[test]
-    fn a_rejected_send_releases_the_lock_and_no_verdict_times_out() {
-        let fx = standard::standard();
-        let dir = tempfile::tempdir().expect("tmp");
-        fx.chain.set_send_mode(SendMode::Reject);
-        let e = run_observe(&fx, dir.path(), &fast()).expect_err("rejected");
-        assert!(matches!(e, SdkError::Chain(_)));
-        assert!(is_empty_dir(dir.path()));
-        fx.chain.set_send_mode(SendMode::Drop);
-        let few = ConfirmSettings {
-            max_polls: 3,
-            ..fast()
-        };
-        let e = run_observe(&fx, dir.path(), &few).expect_err("no verdict");
-        assert!(matches!(e, SdkError::Unconfirmed(m) if m.contains("no confirmation")));
-        assert!(
-            !is_empty_dir(dir.path()),
-            "an ambiguous outcome keeps the lock: the transaction may still land"
-        );
-        // The kept lock blocks a second submission inside the window and clears itself after it.
-        let e = run_observe(&fx, dir.path(), &fast()).expect_err("still guarded");
-        assert!(matches!(e, SdkError::InFlight { .. }));
-        for _ in 0..5 {
-            fx.chain.push_block(vec![]);
-        }
-        fx.chain.set_send_mode(SendMode::Include);
-        run_observe(&fx, dir.path(), &fast()).expect("the stale kept lock is replaced");
-        assert!(is_empty_dir(dir.path()));
-    }
-
-    /// Delegates to a fixture but reports every send as having an unknown result.
-    struct UncertainSend<'a>(&'a crate::testing::FixtureChain);
-
-    impl Chain for UncertainSend<'_> {
-        fn account(&self, i: &AccountId) -> SdkResult<lee_core::account::Account> {
-            self.0.account(i)
-        }
-        fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<lee_core::account::Nonce>> {
-            self.0.nonces(ids)
-        }
-        fn last_block_id(&self) -> SdkResult<u64> {
-            self.0.last_block_id()
-        }
-        fn blocks(&self, a: u64, b: u64) -> SdkResult<Vec<crate::chain::BlockSummary>> {
-            self.0.blocks(a, b)
-        }
-        fn send(&self, _: &lee::PublicTransaction) -> SdkResult<[u8; 32]> {
-            Err(SdkError::SendUncertain("connection reset".into()))
-        }
-    }
-
-    /// Delegates to a fixture, but every `nonces` call after the first (the pre-send read) fails.
-    struct FlakyPolling<'a>(&'a crate::testing::FixtureChain, std::cell::Cell<u32>);
-
-    impl Chain for FlakyPolling<'_> {
-        fn account(&self, i: &AccountId) -> SdkResult<lee_core::account::Account> {
-            self.0.account(i)
-        }
-        fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<lee_core::account::Nonce>> {
-            self.1.set(self.1.get() + 1);
-            if self.1.get() > 1 {
-                return Err(SdkError::Chain("connection lost".into()));
-            }
-            self.0.nonces(ids)
-        }
-        fn last_block_id(&self) -> SdkResult<u64> {
-            self.0.last_block_id()
-        }
-        fn blocks(&self, a: u64, b: u64) -> SdkResult<Vec<crate::chain::BlockSummary>> {
-            self.0.blocks(a, b)
-        }
-        fn send(&self, tx: &lee::PublicTransaction) -> SdkResult<[u8; 32]> {
-            self.0.send(tx)
-        }
-    }
-
-    #[test]
-    fn a_polling_failure_after_the_send_is_unconfirmed_and_keeps_the_lock() {
-        let fx = standard::standard();
-        let dir = tempfile::tempdir().expect("tmp");
-        let chain = FlakyPolling(&fx.chain, std::cell::Cell::new(0));
-        let e = submit(
-            &chain,
-            &TestKeys::of(&[k::CALLER]),
-            &observe_plan(&fx),
-            dir.path(),
-            &fast(),
-            &|_| {},
-        )
-        .expect_err("polling fails");
-        assert!(
-            matches!(&e, SdkError::Unconfirmed(m) if m.contains("connection lost")),
-            "{e}"
-        );
-        assert_eq!(fx.chain.sent().len(), 1);
-        assert!(dir.path().join(format!("{}.lock", id(k::CALLER))).exists());
-    }
-
-    #[test]
-    fn an_ambiguous_send_error_keeps_the_lock() {
-        let fx = standard::standard();
-        let dir = tempfile::tempdir().expect("tmp");
-        let chain = UncertainSend(&fx.chain);
-        let plan = observe_plan(&fx);
-        let e = submit(
-            &chain,
-            &TestKeys::of(&[k::CALLER]),
-            &plan,
-            dir.path(),
-            &fast(),
-            &|_| {},
-        )
-        .expect_err("unknown result");
-        assert!(matches!(e, SdkError::SendUncertain(_)));
-        let lock = dir.path().join(format!("{}.lock", id(k::CALLER)));
-        assert!(lock.exists(), "kept");
-        let e = submit(
-            &chain,
-            &TestKeys::of(&[k::CALLER]),
-            &plan,
-            dir.path(),
-            &fast(),
-            &|_| {},
-        )
-        .expect_err("guarded");
-        assert!(matches!(e, SdkError::InFlight { .. }));
-        assert_eq!(
-            fs::read_dir(dir.path()).expect("dir").count(),
-            1,
-            "no temp files left"
-        );
-    }
-
-    #[test]
-    fn an_empty_nonce_reply_is_an_error_not_nonce_zero() {
-        struct NoNonces;
-        impl Chain for NoNonces {
-            fn account(&self, _: &AccountId) -> SdkResult<lee_core::account::Account> {
-                Ok(lee_core::account::Account::default())
-            }
-            fn nonces(&self, _: &[AccountId]) -> SdkResult<Vec<lee_core::account::Nonce>> {
-                Ok(vec![])
-            }
-            fn last_block_id(&self) -> SdkResult<u64> {
-                Ok(0)
-            }
-            fn blocks(&self, _: u64, _: u64) -> SdkResult<Vec<crate::chain::BlockSummary>> {
-                Ok(vec![])
-            }
-            fn send(&self, _: &lee::PublicTransaction) -> SdkResult<[u8; 32]> {
-                Ok([0; 32])
-            }
-        }
-        let e =
-            confirm(&NoNonces, &id(k::CALLER), 0, 0, &fast(), &|_| {}).expect_err("empty reply");
-        assert!(matches!(e, SdkError::Chain(m) if m.contains("no nonce")));
-    }
-}
+#[path = "confirm_tests.rs"]
+mod tests;

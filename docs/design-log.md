@@ -1092,3 +1092,24 @@ Executor cycles, not proving time: proving is tiered separately (ADR-045). Refre
 Accepted (Plan 3b, Task 6)
 
 ---
+
+## ADR-049: Coverage Gate: 80 % Lines per Crate, Our Five Crates, Tests Excluded
+
+**Context**
+Spec §9: TDD throughout and at least 80 % coverage on the Rust crates. A workspace total would let a well-tested crate hide a weak one, and counting test files inflates the figure.
+
+**Options**
+- (A) `--fail-under-lines 80` on the workspace total.
+- (B) Per-crate threshold over production files only.
+- (C) No gate, a report only.
+
+**Decision**
+(B). `cargo llvm-cov` over `auction_core`, `auction_engine_core`, `auction_engine_program`, `auction_sdk` (features `testing`, `rpc`) and `auction_cli`; files matching `(/tests/|_tests\.rs$|/testing/|/methods/|/examples/)` are not counted (test code, test fixtures, the guest wrappers that run only inside the zkVM, the localnet tool). `scripts/check-coverage.py` requires 80 % of lines per crate. Measured at Plan 3b Task 8: `auction_core` 99.4 %, `auction_engine_core` 95.6 %, `auction_engine_program` 80.3 %, `auction_sdk` 93.7 %, `auction_cli` 88.5 %. Excluded production files: None.
+
+**Trade-offs**
+Line coverage, not branch coverage. Guest code (`methods/guest`) runs in the zkVM and is covered by the real-guest integration suites, not by this gate.
+
+**Status**
+Accepted (Plan 3b, Task 8)
+
+---

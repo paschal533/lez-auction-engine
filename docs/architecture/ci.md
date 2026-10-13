@@ -10,6 +10,7 @@ Workflow: `.github/workflows/core.yml` (runs on every push and pull request). Ev
 | `programs` | `core.yml` | The guests built with the pinned risc0 toolchain; workspace clippy; the engine, real-guest integration, SDK and CLI suites; the vendored stablecoin and token suites; the cycle regression check (ADR-048). |
 | `idl-drift` | `core.yml` | `tools/idl-gen` against both guest sources, diffed against the committed IDLs. |
 | `hook-patches` | `core.yml` | The exported hook patch series applied to pristine lez-programs, compared with `programs/stablecoin`. |
+| `coverage` | `core.yml` | `cargo llvm-cov` over the five Rust crates, then `scripts/check-coverage.py`: at least 80 % of lines per crate (ADR-049). |
 | `install-risc0` | `.github/actions/install-risc0` | Composite action used by `programs`: rzup and the pinned components, cached in `~/.risc0`. |
 
 ## What each job runs
@@ -41,6 +42,16 @@ The vendored upstream `integration_tests` crate is excluded from clippy (it keep
 `idl-drift` (`ubuntu-22.04`): `scripts/ci/idl-drift.sh` regenerates `idl/auction_engine-idl.json` and `idl/stablecoin-idl.json` with `idl-gen` and exits 1 with the diff if either differs from the committed file. It also catches an enum variant whose guest function was never added.
 
 `hook-patches` (`ubuntu-22.04`): clones lez-programs, checks out `64c01210adecd6b557dbd021a3cc94553f243fd8`, then runs `LEZ_PROGRAMS=<clone> scripts/check-hook-patches.sh`.
+
+`coverage` (`ubuntu-22.04`, 120 minute limit, `RISC0_DEV_MODE=1`). It runs `scripts/ci/free-disk.sh`, installs clang, libclang, pkg-config and libssl, Rust 1.94.0 with `llvm-tools-preview`, the pinned risc0 components and `cargo-llvm-cov`, then:
+
+```bash
+IGNORE='(/tests/|_tests\.rs$|/testing/|/methods/|/examples/)'
+cargo llvm-cov --locked -p auction_core -p auction_engine_core -p auction_engine_program -p auction_sdk -p auction_cli --features auction_sdk/testing,auction_sdk/rpc --ignore-filename-regex "$IGNORE" --json --summary-only --output-path "$RUNNER_TEMP/cov.json"
+python3 scripts/check-coverage.py "$RUNNER_TEMP/cov.json" --root "$GITHUB_WORKSPACE"
+```
+
+The gate is per crate (ADR-049): the checker prints each crate's line coverage and exits 1 naming every crate under 80 % or without data. Test code, fixtures, the guest wrappers and examples are matched by `IGNORE` and not counted. Run it locally inside WSL with the same two commands (prefix the first with `scripts/wsl-env.sh`), then `scripts/wsl-env.sh cargo llvm-cov clean --workspace` to delete the instrumented build.
 
 ## Pinned versions
 

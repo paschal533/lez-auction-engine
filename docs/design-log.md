@@ -1017,6 +1017,9 @@ No JSON output in the PoC (the Plan 4 FFI is the machine interface). Golden file
 - Signing commands (tx, `admin`, `host`, `dev`, and `watch --observe-with`) print `deployment: <absolute path> (network <name>)` on stderr once, because the default `deployments/localnet.json` (and the default state directory `.auction-cli`) resolve against the current directory. Run the CLI from the repository root, or pass `--deployment` and `--state-dir`, so that every invocation trusts the same file and shares the same locks.
 - Scanning commands print one `note:` line on stderr when the scanner discarded a cursor of another chain or an old cursor without an anchor (ADR-043, amended).
 
+**Amended (Plan 3b, Task 3)**
+A bounded watch exits with the most severe step error (3 before 1), the first of equals (Plan 3a N3, keep_worst). State-changing dev commands also require the deployment file's chain_genesis_hash to match the node (ADR-046, exit 2); dev resolve, dev balance and the new dev chain-id work on any network, and print no deployment note (they sign nothing).
+
 **Status**
 Accepted (Plan 3a, Task 13); amended (Plan 3a final review)
 
@@ -1045,5 +1048,26 @@ The proved guests are native builds of the same source (the deployed Docker buil
 
 **Status**
 Accepted (Plan 3b, Task 1; controller ruling PO2=19, PUSH=B, NIGHTLY=C); finalised in Task 7.
+
+---
+
+## ADR-046: Chain Identity for State-Changing Dev Commands
+
+**Context**
+Plan 3a M6: the dev commands (mock tokens, mock oracles) were guarded by the deployment file's `network` label only, so `--rpc` could aim them at any node with a file that says `localnet`. The read-only `dev resolve` and `dev balance` were blocked off localnet for no reason.
+
+**Options**
+- (A) Refuse `--rpc` for dev commands.
+- (B) Refuse non-loopback RPC URLs.
+- (C) Record the chain in the deployment file and compare it with the node before signing.
+
+**Decision**
+(C). The deployment file gains `chain_genesis_hash`, the hash of block 1. LEZ v0.2.4 builds block 1 from the sequencer config with timestamp 0, so it identifies a chain's configuration: a restarted localnet keeps it, a testnet or another configuration does not. `verify_chain_identity` compares it before any state-changing dev command signs (`Mismatch`, exit 2). The scripts record it right after starting the sequencer (`auction-cli dev chain-id`). The read-only `resolve`, `balance` and `chain-id` run on any network. The committed `deployments/localnet.json` keeps `null` (the value is recorded per run), so state-changing dev commands refuse with the committed file until a run records it.
+
+**Trade-offs**
+Two localnets started from the same config share block 1; both are throwaway, so this is accepted. The scanner keeps its own anchor at block 2 (ADR-043), which also changes across restarts.
+
+**Status**
+Accepted (Plan 3b, Task 3)
 
 ---

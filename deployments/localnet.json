@@ -6,5 +6,6 @@
   "token_program_id": "14b3bc6cc129d0359f9595ba0f60a13e4a8df08ffe8eb1a83251c47abecc67a8",
   "twap_oracle_program_id": "5681e27c27b3ece4a7c161bbf8e12e6ece6ca69925a87b77f9e193fa4a249b31",
   "engine_admin": null,
-  "config": null
+  "config": null,
+  "chain_genesis_hash": null
 }

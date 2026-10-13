@@ -62,6 +62,8 @@ Each row has a test against a local mock HTTP server (`rpc_tests.rs`, no externa
 
 Every transaction for an engine config starts with `verify_config(chain, &deployment, &config)`; `admin init-config` and the host/dev commands, which have no config to verify yet, do not. It reads the config account through `Chain` and compares it with the deployment file, so the check does not rest on caller-supplied ids alone. A mismatch is `SdkError::Mismatch { what, expected, found }` (CLI exit 2).
 
+Chain identity (ADR-046): `verify_chain_identity(chain, &deployment)` compares the hash of the node's block 1 with the deployment file's `chain_genesis_hash` (`Deployment.chain_genesis`, 64 lowercase hex characters, validated when the file is parsed). It returns `Mismatch` (CLI exit 2) when the file records none or the hashes differ. LEZ v0.2.4 builds block 1 from the sequencer config, so it identifies the chain's configuration, not one run. The CLI calls it before every state-changing dev command; it is separate from `verify_config`.
+
 Trust boundary: the RPC endpoint is trusted. There are no state proofs, so a malicious sequencer URL can serve a consistent set of fake accounts that passes every check; the deployment file and the endpoint come from the operator.
 
 `engine_admin: null` in a deployment disables the admin check (configs are permissionless, ADR-027), so operators should set it. The CLI (Tasks 13 and 15) prints the config's admin before signing.

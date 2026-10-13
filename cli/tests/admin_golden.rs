@@ -4,6 +4,7 @@
 
 mod common;
 use auction_sdk::{
+    chain::Chain,
     deployment::Deployment,
     testing::{id, standard},
 };
@@ -35,14 +36,17 @@ fn sent_host_debug(c: &Case) -> String {
     format!("{ix:?}")
 }
 
-/// The dev commands act on the localnet only; the fixture deployment names its own network.
+/// The dev commands act on the localnet only, on the chain the deployment file recorded (ADR-046).
 fn localnet_case() -> Case {
+    let c = Case::new();
+    let genesis = hex::encode(c.fx.chain.blocks(1, 1).expect("block 1")[0].hash);
     Case {
         deployment: Some(Deployment {
             network: "localnet".into(),
+            chain_genesis: Some(genesis),
             ..standard::deployment()
         }),
-        ..Case::new()
+        ..c
     }
 }
 
@@ -321,6 +325,7 @@ fn host_and_dev_commands() {
             ],
         ),
         ("dev_resolve", vec!["dev", "resolve", "--label", "keeper"]),
+        ("dev_chain_id", vec!["dev", "chain-id"]),
         (
             "dev_token_new",
             vec![
@@ -560,12 +565,25 @@ fn init_config_by_a_signer_other_than_the_named_operator_is_exit_2() {
     assert!(c.fx.chain.sent().is_empty());
 }
 
+fn transfer_args() -> Vec<&'static str> {
+    vec![
+        "dev",
+        "token-transfer",
+        "--from",
+        "owner-stable",
+        "--to",
+        "taker-stable",
+        "--amount",
+        "1",
+    ]
+}
+
 #[test]
 fn dev_commands_refuse_any_network_but_the_localnet() {
     let c = Case::new();
-    let out = c.run(&["dev", "resolve", "--label", "keeper"]);
+    let out = c.run(&transfer_args());
     assert!(
-        out.contains("dev commands are for the localnet only"),
+        out.contains("dev commands that send are for the localnet only"),
         "{out}"
     );
     assert!(
@@ -574,5 +592,53 @@ fn dev_commands_refuse_any_network_but_the_localnet() {
 "
         ),
         "{out}"
+    );
+    assert!(c.fx.chain.sent().is_empty());
+}
+
+#[test]
+fn dev_commands_refuse_a_node_with_another_genesis() {
+    let mut c = localnet_case();
+    c.deployment = Some(Deployment {
+        chain_genesis: Some("ab".repeat(32)),
+        ..c.deployment.clone().expect("deployment")
+    });
+    let out = c.run(&transfer_args());
+    assert!(out.contains("chain identity"), "{out}");
+    assert!(
+        out.ends_with(
+            "exit: 2
+"
+        ),
+        "{out}"
+    );
+    assert!(c.fx.chain.sent().is_empty(), "nothing signed or sent");
+}
+
+#[test]
+fn read_only_dev_commands_work_on_any_network() {
+    let c = Case::new();
+    let holding = id(standard::k::OWNER_COLL).to_string();
+    for args in [
+        vec!["dev", "resolve", "--label", "keeper"],
+        vec!["dev", "balance", "--account", &holding],
+        vec!["dev", "chain-id"],
+    ] {
+        let out = c.run(&args);
+        assert!(
+            out.ends_with(
+                "exit: 0
+"
+            ),
+            "{args:?}: {out}"
+        );
+    }
+    let out = localnet_case().run(&transfer_args());
+    assert!(
+        out.ends_with(
+            "exit: 0
+"
+        ),
+        "the recorded chain: {out}"
     );
 }

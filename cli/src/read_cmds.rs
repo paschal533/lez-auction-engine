@@ -333,6 +333,17 @@ fn ends_watch(e: &CliError) -> bool {
     )
 }
 
+/// The error a bounded `watch` exits with: the most severe so far (exit 3, dropped, over exit 1),
+/// the first of equals (Plan 3a N3). Setup errors (2, 4) never reach here: they end `watch` at once.
+pub fn keep_worst(worst: &mut Option<CliError>, e: CliError) {
+    if worst
+        .as_ref()
+        .is_none_or(|prev| e.exit_code() > prev.exit_code())
+    {
+        *worst = Some(e);
+    }
+}
+
 /// A step's failure: setup errors are returned (they end `watch`); any other is reported on stderr
 /// and kept as the round's error, so the loop goes on.
 fn watch_step(
@@ -340,14 +351,14 @@ fn watch_step(
     what: &str,
     round: u32,
     err: &mut dyn Write,
-    last_error: &mut Option<CliError>,
+    worst_error: &mut Option<CliError>,
 ) -> Result<(), CliError> {
     match result {
         Ok(()) => Ok(()),
         Err(e) if ends_watch(&e) => Err(e),
         Err(e) => {
             writeln!(err, "watch: round {round}: {what} failed (continuing): {e}")?;
-            *last_error = Some(e);
+            keep_worst(worst_error, e);
             Ok(())
         }
     }
@@ -355,8 +366,8 @@ fn watch_step(
 
 /// Repeats `observe_feed` (optional) and `list-auctions`. A failed step is reported on stderr and
 /// the loop goes on (a failed `observe_feed` does not skip the listing); setup errors (`ends_watch`)
-/// stop it at once. A run bounded by `--iterations` exits with the last step error if any step
-/// failed (S4: exit 0 only when every round succeeded).
+/// stop it at once. A run bounded by `--iterations` exits with the most severe step error if any step
+/// failed (3 before 1, the first of equals); exit 0 only when every round succeeded (S4).
 pub fn watch<C: Chain>(
     env: &Env<C>,
     interval_ms: u64,
@@ -367,18 +378,36 @@ pub fn watch<C: Chain>(
     err: &mut dyn Write,
 ) -> Result<(), CliError> {
     let mut round = 0u32;
-    let mut last_error = None;
+    let mut worst_error = None;
     loop {
         round = round.saturating_add(1);
         if let Some(caller) = observe_with {
             let observed = crate::tx_cmds::observe_feed(env, caller, out);
-            watch_step(observed, "observe-feed", round, err, &mut last_error)?;
+            watch_step(observed, "observe-feed", round, err, &mut worst_error)?;
         }
         let listed = list_auctions(env, false, args, out, err);
-        watch_step(listed, "list-auctions", round, err, &mut last_error)?;
+        watch_step(listed, "list-auctions", round, err, &mut worst_error)?;
         if iterations.is_some_and(|n| round >= n) {
-            return last_error.map_or(Ok(()), Err);
+            return worst_error.map_or(Ok(()), Err);
         }
         (env.sleep)(Duration::from_millis(interval_ms));
+    }
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::*;
+
+    #[test]
+    fn keep_worst_prefers_dropped_and_keeps_the_first_of_equals() {
+        let mut worst = None;
+        keep_worst(&mut worst, CliError::Dropped { height: 7 });
+        keep_worst(&mut worst, CliError::Unknown("later".into()));
+        assert!(matches!(worst, Some(CliError::Dropped { height: 7 })));
+        let mut worst = Some(CliError::Unknown("first".into()));
+        keep_worst(&mut worst, CliError::Usage("second".into()));
+        assert!(matches!(&worst, Some(CliError::Unknown(m)) if m == "first"));
+        keep_worst(&mut worst, CliError::Dropped { height: 9 });
+        assert!(matches!(worst, Some(CliError::Dropped { height: 9 })));
     }
 }

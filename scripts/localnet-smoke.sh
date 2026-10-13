@@ -60,7 +60,7 @@ import json, sys
 path, engine, host, tok, twap = sys.argv[1:]
 json.dump({"network": "localnet", "sequencer_url": "http://127.0.0.1:3040", "engine_program_id": engine,
            "host_program_id": host, "token_program_id": tok, "twap_oracle_program_id": twap,
-           "engine_admin": None, "config": None}, open(path, "w", encoding="utf-8"), indent=2)
+           "engine_admin": None, "config": None, "chain_genesis_hash": None}, open(path, "w", encoding="utf-8"), indent=2)
 PY
   echo "deployment file: $DEP"
 }
@@ -86,6 +86,14 @@ step_sequencer() {
     exit 1
   fi
   echo "$pid" > "$LN/sequencer.pid"
+  # ADR-046: the state-changing dev commands require the chain this deployment file was recorded on.
+  local genesis=""
+  for i in $(seq 1 15); do
+    genesis="$("$CLI_BIN" --deployment "$DEP" dev chain-id 2>/dev/null | awk '$1 == "genesis" { print $2 }')" && [[ -n "$genesis" ]] && break
+    sleep 2
+  done
+  [[ -n "$genesis" ]] || { echo "could not read block 1 from the new sequencer" >&2; exit 1; }
+  set_deployment_field chain_genesis_hash "$genesis"
 }
 
 step_accounts() {

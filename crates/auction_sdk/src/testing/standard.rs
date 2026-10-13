@@ -80,6 +80,7 @@ pub fn deployment() -> Deployment {
         twap_oracle_program: Some(TWAP),
         engine_admin: Some(id(k::ENGINE_ADMIN)),
         config: Some(config_id()),
+        chain_genesis: None,
     }
 }
 

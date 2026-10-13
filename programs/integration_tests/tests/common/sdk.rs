@@ -51,6 +51,7 @@ pub fn sdk_deployment() -> Deployment {
         twap_oracle_program: None,
         engine_admin: Some(id(k::ENGINE_ADMIN)),
         config: Some(config()),
+        chain_genesis: None,
     }
 }
 

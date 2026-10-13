@@ -22,6 +22,8 @@ pub struct DeploymentFile {
     pub engine_admin: Option<String>,
     #[serde(default)]
     pub config: Option<String>,
+    #[serde(default)]
+    pub chain_genesis_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +38,8 @@ pub struct Deployment {
     pub engine_admin: Option<AccountId>,
     /// Default config for commands that do not name one.
     pub config: Option<AccountId>,
+    /// Hex hash of block 1 of the chain this file was recorded on (ADR-046); state-changing dev commands require it.
+    pub chain_genesis: Option<String>,
 }
 
 /// ImageID as 64 hex characters (little-endian limbs, the `DEPLOYMENTS.md` / `spel program-id` form).
@@ -89,6 +93,16 @@ impl Deployment {
                 .map(|s| acct(s, "engine_admin"))
                 .transpose()?,
             config: f.config.as_deref().map(|s| acct(s, "config")).transpose()?,
+            chain_genesis: f
+                .chain_genesis_hash
+                .as_deref()
+                .map(|h| match hex::decode(h) {
+                    Ok(b) if b.len() == 32 && h == h.to_lowercase() => Ok(h.to_owned()),
+                    _ => Err(bad(
+                        "chain_genesis_hash must be 64 lowercase hex characters".into(),
+                    )),
+                })
+                .transpose()?,
         })
     }
 

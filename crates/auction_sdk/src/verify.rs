@@ -181,6 +181,33 @@ impl VerifiedConfig {
     }
 }
 
+/// ADR-046: the node's block 1 must be the one the deployment file recorded. The LEZ v0.2.4 genesis
+/// block is built from the sequencer config with timestamp 0, so it identifies the chain's
+/// configuration: two localnets started from the same config share it (both throwaway), a testnet
+/// or another configuration does not. Used by every state-changing dev command.
+pub fn verify_chain_identity<C: Chain + ?Sized>(chain: &C, d: &Deployment) -> SdkResult<()> {
+    let Some(expected) = d.chain_genesis.as_deref() else {
+        return Err(SdkError::Mismatch {
+            what: "chain identity (the deployment file records no chain_genesis_hash; run `auction-cli dev chain-id` against the intended node and record it)",
+            expected: "a chain_genesis_hash".into(),
+            found: "none".into(),
+        });
+    };
+    let found = chain
+        .blocks(1, 1)?
+        .first()
+        .map(|b| hex::encode(b.hash))
+        .ok_or_else(|| SdkError::Chain("the node returned no block 1".into()))?;
+    if found != expected {
+        return Err(SdkError::Mismatch {
+            what: "chain identity (block 1 hash: this node is not the chain the deployment file was recorded on)",
+            expected: expected.to_owned(),
+            found,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +386,39 @@ mod tests {
                 "DEPLOYMENTS.md has no row starting {row}"
             );
         }
+    }
+
+    #[test]
+    fn verify_chain_identity_compares_block_1() {
+        let fx = standard::standard();
+        let genesis = hex::encode(fx.chain.blocks(1, 1).expect("block 1")[0].hash);
+        let none = Deployment {
+            chain_genesis: None,
+            ..standard::deployment()
+        };
+        let e = verify_chain_identity(&fx.chain, &none).expect_err("no genesis recorded");
+        assert!(matches!(e, SdkError::Mismatch { .. }), "{e}");
+        let other = Deployment {
+            chain_genesis: Some("ab".repeat(32)),
+            ..standard::deployment()
+        };
+        let e = verify_chain_identity(&fx.chain, &other).expect_err("another chain");
+        assert!(e.to_string().contains(&genesis), "{e}");
+        let same = Deployment {
+            chain_genesis: Some(genesis),
+            ..standard::deployment()
+        };
+        verify_chain_identity(&fx.chain, &same).expect("the recorded chain");
+    }
+
+    #[test]
+    fn chain_genesis_hash_must_be_32_bytes_of_hex() {
+        let base = include_str!("../../../deployments/localnet.json");
+        let bad = base.replace(
+            "\"chain_genesis_hash\": null",
+            "\"chain_genesis_hash\": \"abc\"",
+        );
+        let e = Deployment::from_json(&bad, "d.json").expect_err("short hash");
+        assert!(e.to_string().contains("chain_genesis_hash"), "{e}");
     }
 }

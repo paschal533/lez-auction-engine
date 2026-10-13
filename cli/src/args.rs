@@ -343,7 +343,7 @@ pub struct InitProgramCmd {
 
 #[derive(Debug, Subcommand)]
 pub enum DevCommand {
-    /// Print the base58 id of a wallet label.
+    /// Print the base58 id of a wallet label (read-only; works on any network).
     Resolve {
         #[arg(long)]
         label: String,
@@ -387,11 +387,13 @@ pub enum DevCommand {
         #[arg(long, default_value_t = 3_600_000)]
         window_ms: u64,
     },
-    /// Token-holding balance (no transaction).
+    /// Token-holding balance (no transaction; read-only, works on any network).
     Balance {
         #[arg(long)]
         account: String,
     },
+    /// Print the hash of block 1 of the node (`chain_genesis_hash` for the deployment file, ADR-046).
+    ChainId,
 }
 
 impl Command {
@@ -407,6 +409,7 @@ impl Command {
             | Self::ListAuctions { .. }
             | Self::ListAtRisk { .. }
             | Self::Rescan { .. } => false,
+            Self::Dev(cmd) => !crate::dev_cmds::is_read_only(cmd),
             Self::Watch { observe_with, .. } => observe_with.is_some(),
             _ => true,
         }
@@ -450,7 +453,26 @@ mod tests {
         );
         assert!(note(&["admin", "verify"]).is_some());
         assert!(note(&["host", "addresses"]).is_some());
-        assert!(note(&["dev", "balance", "--account", "a"]).is_some());
+        assert!(note(&[
+            "dev",
+            "token-new",
+            "--definition",
+            "d",
+            "--holding",
+            "h",
+            "--name",
+            "N",
+            "--supply",
+            "1"
+        ])
+        .is_some());
+        for read_only in [
+            ["dev", "resolve", "--label", "a"].as_slice(),
+            &["dev", "balance", "--account", "a"],
+            &["dev", "chain-id"],
+        ] {
+            assert_eq!(note(read_only), None, "{read_only:?} signs nothing");
+        }
         assert!(note(&["watch", "--observe-with", "c"]).is_some());
         assert_eq!(note(&["watch"]), None);
         assert_eq!(note(&["list-auctions"]), None);

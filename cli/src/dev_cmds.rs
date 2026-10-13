@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use auction_sdk::{chain::Chain, error::SdkResult, plan_host};
+use auction_sdk::{chain::Chain, error::SdkResult, plan_host, verify::verify_chain_identity};
 use lee_core::account::{Account, AccountId};
 use token_core::TokenHolding;
 
@@ -18,17 +18,35 @@ use crate::{
 const LOCALNET: &str = "localnet";
 const CHECK_BALANCE: &str = "dev balance --account <account>";
 
+/// Read-only dev commands run anywhere; the others sign, so they need the localnet named by the
+/// deployment file AND the chain it recorded (ADR-046; Plan 3a M6: a label alone let `--rpc` aim them
+/// at any node).
+pub(crate) fn is_read_only(cmd: &DevCommand) -> bool {
+    matches!(
+        cmd,
+        DevCommand::Resolve { .. } | DevCommand::Balance { .. } | DevCommand::ChainId
+    )
+}
+
 pub fn dev<C: Chain>(env: &Env<C>, cmd: &DevCommand, out: &mut dyn Write) -> Result<(), CliError> {
-    if !matches!(cmd, DevCommand::Resolve { .. } | DevCommand::Balance { .. }) {
+    if !is_read_only(cmd) {
         env.refuse_at_ms()?;
-    }
-    if env.deployment.network != LOCALNET {
-        return Err(CliError::Usage(format!(
-            "dev commands are for the localnet only (the deployment file names network {:?})",
-            env.deployment.network
-        )));
+        if env.deployment.network != LOCALNET {
+            return Err(CliError::Usage(format!(
+                "dev commands that send are for the localnet only (the deployment file names network {:?})",
+                env.deployment.network
+            )));
+        }
+        verify_chain_identity(&env.chain, &env.deployment)?;
     }
     match cmd {
+        DevCommand::ChainId => {
+            let b = env.chain.blocks(1, 1)?;
+            let first = b
+                .first()
+                .ok_or_else(|| CliError::Usage("the node returned no block 1".into()))?;
+            kv(out, "genesis", &hex::encode(first.hash))
+        }
         DevCommand::Resolve { label } => {
             kv(out, "id", &env.keystore()?.resolve(label)?.to_string())
         }

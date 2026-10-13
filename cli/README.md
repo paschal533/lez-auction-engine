@@ -88,6 +88,9 @@ Every one verifies the config (exit 2 on mismatch), prints the config's admin an
     auction-cli dev token-transfer --from <l> --to <id|l> --amount <n>
     auction-cli dev oracle-create --price-source <l> --base <id> --quote <id|l> --price <n> [--window-ms 3600000]
     auction-cli dev balance --account <id|l>
+    auction-cli dev chain-id
+
+`dev resolve`, `dev balance` and `dev chain-id` are read-only and work on any network (they print no deployment note). The other dev commands sign, so they need `"network": "localnet"` in the deployment file and the chain it was recorded on: the file's `chain_genesis_hash` (64 lowercase hex characters, the hash of block 1) must equal the node's, otherwise the command exits 2 before signing (ADR-046). Record it with `auction-cli dev chain-id` against the intended node (the output line `genesis <hex>` gives the value); the smoke script does this right after it starts the sequencer. The committed `deployments/localnet.json` has `"chain_genesis_hash": null`, so the state-changing dev commands refuse with it until a run records the value.
 
 Parameter files hold `u128` values as decimal strings; the protocol-token and reference-oracle flags come from `--protocol-token` / `--ref-oracle`. An enabled protocol token must already exist as a fungible token definition (ADR-038): create it first with `dev token-new ... --mint-authority <mint authority from admin addresses>`. Every reference-price change printed by `set-engine-params` goes into `DEPLOYMENTS.md` (ADR-017).
 

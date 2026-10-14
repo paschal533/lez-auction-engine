@@ -115,7 +115,7 @@ The SDK reads untrusted input: the node's account bytes, the wallet storage file
 | `deployment_json` | any bytes read as a deployment file | `Deployment::from_json` returns a deployment or a typed error. |
 | `cursor_json` | any bytes read as a scanner cursor file | Deserialising a `Cursor` and reading `auction_ids()` and `position_ids()` never panics. |
 | `decode_accounts` | any bytes as the data of an account owned by the engine | `Reader::{config, coll_config, accounting, auction, surplus_auction, debt_auction, record_count}` each return a state or a typed error. |
-| `quote_bid` | arbitrary `coin_in_max`, `min_out`, clock offset and oracle price (0 to about 6.5 R) on the standard live auction | `quote_bid` returns an error or a fill with `charged <= coin_in_max`, `collateral_out >= min_out` and `collateral_out <= collateral_left` (invariant 3, spec 5.13). |
+| `quote_bid` | `coin_in_max` (0 to about 2 targets) and `min_out` (0 to about 2 lots) as 16-bit fractions of the standard live auction's target and lot, a clock offset, and an oracle price from 0.5 R to 1.5 R (the feed band is 0.9 R to 1.1 R); one input in 256 uses raw `u128` amounts and a price from 0 to about 6.5 R. The fixture is built once per process; each input resets only the clock and the oracle. | `quote_bid` returns an error or a fill with `charged <= coin_in_max`, `collateral_out >= min_out` and `collateral_out <= collateral_left` (invariant 3, spec 5.13). About one input in five reaches the assertions (a quote, not an error). |
 
 The targets cannot carry `#![forbid(unsafe_code)]`: `fuzz_target!` expands to a `#[no_mangle] extern "C"` entry point.
 
@@ -134,7 +134,7 @@ Crash procedure (libFuzzer writes `fuzz/artifacts/<target>/crash-<hash>`):
 3. If the panic is in our crates, add a unit test with the minimised input to the owning crate (red), fix it (green), and run the target for 60 s again.
 4. If the panic is inside LEZ, borsh or another dependency, stop and record the input as an upstream finding; the target then needs a ruling.
 
-The `fuzz-nightly` job (`.github/workflows/fuzz.yml`) runs `scripts/fuzz-smoke.sh 300` every night and uploads `fuzz/artifacts` as `fuzz-crashes` when a target crashes. See [ci.md](ci.md).
+The `fuzz-nightly` job (`.github/workflows/fuzz.yml`) runs `scripts/fuzz-smoke.sh 300` every night with `RISC0_SKIP_BUILD=1` (the fuzzers never prove, so the risc0 toolchain and guest ELFs are not installed) and uploads `fuzz/artifacts` as `fuzz-crashes` when a target crashes. See [ci.md](ci.md).
 
 ## Localnet
 

@@ -54,7 +54,7 @@ python3 scripts/check-coverage.py "$RUNNER_TEMP/cov.json" --root "$GITHUB_WORKSP
 
 The gate is per crate (ADR-049): the checker prints each crate's line coverage and exits 1 naming every crate under 80 % or without data. Test code, fixtures, the guest wrappers and examples are matched by `IGNORE` and not counted. Run it locally inside WSL with the same two commands (prefix the first with `scripts/wsl-env.sh`), then `scripts/wsl-env.sh cargo llvm-cov clean --workspace` to delete the instrumented build.
 
-`fuzz-nightly` (`ubuntu-22.04`, 90 minute limit, schedule `33 1 * * *` and `workflow_dispatch`; it never runs on push or pull request). It runs `scripts/ci/free-disk.sh`, installs clang, libclang, pkg-config and libssl, the nightly Rust toolchain and `cargo-fuzz`, then:
+`fuzz-nightly` (`ubuntu-22.04`, 90 minute limit, schedule `33 1 * * *` and `workflow_dispatch`; it never runs on push or pull request). The job sets `RISC0_SKIP_BUILD=1`: the fuzzers never prove, so the guest ELFs and the risc0 toolchain (`install-risc0`) are not needed, and the SDK's guest-building dependencies compile without them (checked locally with the variable set on a fresh build). It runs `scripts/ci/free-disk.sh`, installs clang, libclang, pkg-config and libssl, the nightly Rust toolchain and `cargo-fuzz`, then:
 
 ```bash
 scripts/fuzz-smoke.sh 300

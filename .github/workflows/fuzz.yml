@@ -7,6 +7,8 @@ jobs:
   fuzz-nightly:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
+    # The fuzzers never prove, so the risc0 guest ELFs are not needed.
+    env: { RISC0_SKIP_BUILD: "1" }
     steps:
       - uses: actions/checkout@v4
       - run: scripts/ci/free-disk.sh

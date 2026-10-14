@@ -11,6 +11,7 @@ pub mod deployment;
 pub mod encode;
 pub mod error;
 pub mod keystore;
+pub mod oracle;
 pub mod plan;
 pub mod plan_host;
 pub mod quote;

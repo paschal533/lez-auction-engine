@@ -90,6 +90,18 @@ pub fn dev<C: Chain>(env: &Env<C>, cmd: &DevCommand, out: &mut dyn Write) -> Res
             window_ms,
         } => oracle_create(env, (price_source, base, quote), (*price, *window_ms), out),
         DevCommand::Balance { account } => balance(env, account, out),
+        DevCommand::OraclePublish(a) => crate::oracle_cmds::publish(env, a, out),
+        DevCommand::Keeper {
+            publish,
+            interval_ms,
+            iterations,
+            refresh_before_ms,
+        } => crate::oracle_cmds::keeper(
+            env,
+            publish,
+            (*interval_ms, *iterations, *refresh_before_ms),
+            out,
+        ),
     }
 }
 

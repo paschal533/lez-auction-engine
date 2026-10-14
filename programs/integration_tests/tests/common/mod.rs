@@ -234,8 +234,15 @@ impl World {
     }
 
     pub fn set_oracle_full(&mut self, price: u128, timestamp: u64, confidence: u128) {
+        self.put_oracle_at(oracle(), price, timestamp, confidence);
+    }
+
+    /// The one place a RAY-scale price account is built and stored (force-inserted like `set_oracle`:
+    /// the twap guest is not part of the in-process World). `set_oracle_full` writes the default oracle;
+    /// the localnet publisher's rotation writes the new one at another address.
+    pub fn put_oracle_at(&mut self, at: AccountId, price: u128, timestamp: u64, confidence: u128) {
         self.state.force_insert_account(
-            oracle(),
+            at,
             Account {
                 program_owner: [9u32; 8],
                 balance: 0,
@@ -244,7 +251,7 @@ impl World {
                     quote_asset: collateral_def(),
                     price,
                     timestamp,
-                    source_id: oracle(),
+                    source_id: at,
                     confidence_interval: confidence,
                 }),
                 nonce: Nonce(0),

@@ -1113,3 +1113,24 @@ Line coverage, not branch coverage. Guest code (`methods/guest`) runs in the zkV
 Accepted (Plan 3b, Task 8)
 
 ---
+
+## ADR-050: Localnet Price Publisher by Oracle Rotation
+
+**Context**
+Localnet finding 2: the localnet oracle has no publisher, so it goes stale after an hour, and without a price move there is no shortfall, hence no F4 debt auction and no freeze path on localnet. The oracle is a twap_oracle `OraclePriceAccount` created at RAY scale; twap's `PublishPrice` writes a Q64.64 TWAP of ticks (lez-programs #401), and the engine and host read one scale per instance (spec §5.2, `Ray` in the PoC).
+
+**Options**
+- (A) Use twap `PublishPrice` and switch the instance to `Q64x64` (the host reads 1e27; mixing scales is the open upstream question).
+- (B) A test-only oracle program.
+- (C) Rotation: a new RAY price account for the same source at the next free window, the host's `SetMarketPriceOracle`, then the engine's `set_collateral_config` with unchanged parameters and the new oracle.
+
+**Decision**
+(C), as `auction-cli dev oracle-publish` and `dev keeper` (localnet only, ADR-046). The price is checked on the engine's own feed path (`oracle::check_new_price`: `feed::observe` + `feed::require_live`) before anything is signed; both admins are checked before signing. The keeper re-publishes the current price when the oracle's age plus `--refresh-before-ms` reaches the configured maximum age. Proved on the real guests mid-auction (`rotating_the_oracle_mid_auction_keeps_bids_on_the_new_feed`).
+
+**Trade-offs**
+Three transactions per move. Between the host rotation and the engine follow-up, `liquidate` fails with `OracleMismatch` (ADR-028); a failure there leaves the two pointing at different oracles, and re-running `oracle-publish` fixes it. Each move uses a new account (accounts are never released; localnet only). Production needs a real publisher once the oracle scale is settled (M2).
+
+**Status**
+Accepted (Plan 3b, Task 10)
+
+---

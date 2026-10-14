@@ -119,7 +119,7 @@ Plan 3 carry-overs:
 - Reproducible Docker builds, then refresh the ImageIDs in `DEPLOYMENTS.md`.
 - Done (Plan 3b Task 6; real-proof re-measure Task 7): `CYCLES.md` plus a regression check (ADR-048).
 - `REQUIREMENTS.md` plus its checker, `cargo-fuzz`, and a red-team pass.
-- An oracle price publisher / keeper.
+- Done (Plan 3b Task 10, ADR-050): oracle price publisher / keeper (`auction-cli dev oracle-publish`, `dev keeper`; localnet only).
 - Upstream issue for the stablecoin guest function order (spel mis-encodes IDL positions 8-18).
 - Done (Plan 3a Task 1): `tests/common/mod.rs` split into `mod.rs`/`engine.rs`/`system.rs`, `surplus_tests.rs` into `surplus_tests.rs` (fixtures, `start`/`close` tests and the `live_auction`/`live_accounting` helpers shared with the take tests), `system_tests.rs` and `surplus_take_tests.rs`; the drift tests are exhaustive (`Instruction::name`, `stablecoin_name`) and compare the sample sets with the IDLs.
 - Plan split: 3a (engine hardening, SDK, CLI) and 3b (CI, real proofs, reproducible builds, evidence), ADR-037.

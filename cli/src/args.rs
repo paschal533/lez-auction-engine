@@ -270,6 +270,8 @@ pub enum AdminCommand {
 pub enum HostCommand {
     /// Print the host PDAs (no transaction).
     Addresses,
+    /// Read-only: the host's freeze flag, admins, oracle and ratio.
+    Status,
     /// set_liquidation_engine, only after verify_config accepts the config (ADR-027).
     Bind {
         #[arg(long)]
@@ -394,6 +396,43 @@ pub enum DevCommand {
     },
     /// Print the hash of block 1 of the node (`chain_genesis_hash` for the deployment file, ADR-046).
     ChainId,
+    /// Move the localnet market price (ADR-050): new price account, host rotation, engine follow-up.
+    /// The price source signs more than once, so on a real localnet it must be `wallet auth-transfer
+    /// init`-ed first (ADR-018).
+    OraclePublish(OraclePublishCmd),
+    /// Re-publish the current price before the oracle reaches its age limit (localnet keeper). Same
+    /// price-source requirement as `oracle-publish`.
+    Keeper {
+        #[command(flatten)]
+        publish: OraclePublishCmd,
+        /// Pause between rounds.
+        #[arg(long, default_value_t = 60_000)]
+        interval_ms: u64,
+        /// Stop after this many rounds (default: run until interrupted).
+        #[arg(long)]
+        iterations: Option<u32>,
+        /// Publish once the oracle's age plus this reaches its configured maximum age.
+        #[arg(long, default_value_t = 600_000)]
+        refresh_before_ms: u64,
+    },
+}
+
+/// The flags `dev oracle-publish` and `dev keeper` share (ADR-050).
+#[derive(Debug, Args)]
+pub struct OraclePublishCmd {
+    /// The price-source account (signs the new price account; one per localnet).
+    #[arg(long)]
+    pub price_source: String,
+    /// Collateral per 1 stablecoin, RAY (1e27).
+    #[arg(long)]
+    pub price: u128,
+    #[arg(long)]
+    pub host_admin: String,
+    #[arg(long)]
+    pub engine_admin: String,
+    /// First window tried; each publish takes the next free one (part of the account address).
+    #[arg(long, default_value_t = 3_600_000)]
+    pub base_window_ms: u64,
 }
 
 impl Command {
@@ -409,6 +448,7 @@ impl Command {
             | Self::ListAuctions { .. }
             | Self::ListAtRisk { .. }
             | Self::Rescan { .. } => false,
+            Self::Host(HostCommand::Addresses | HostCommand::Status) => false,
             Self::Dev(cmd) => !crate::dev_cmds::is_read_only(cmd),
             Self::Watch { observe_with, .. } => observe_with.is_some(),
             _ => true,
@@ -452,7 +492,33 @@ mod tests {
             format!("deployment: {} (network localnet)", expected.display())
         );
         assert!(note(&["admin", "verify"]).is_some());
-        assert!(note(&["host", "addresses"]).is_some());
+        assert!(note(&["host", "bind", "--admin", "a"]).is_some());
+        assert!(note(&[
+            "dev",
+            "oracle-publish",
+            "--price-source",
+            "s",
+            "--price",
+            "1",
+            "--host-admin",
+            "h",
+            "--engine-admin",
+            "e"
+        ])
+        .is_some());
+        assert!(note(&[
+            "dev",
+            "keeper",
+            "--price-source",
+            "s",
+            "--price",
+            "1",
+            "--host-admin",
+            "h",
+            "--engine-admin",
+            "e"
+        ])
+        .is_some());
         assert!(note(&[
             "dev",
             "token-new",
@@ -470,6 +536,8 @@ mod tests {
             ["dev", "resolve", "--label", "a"].as_slice(),
             &["dev", "balance", "--account", "a"],
             &["dev", "chain-id"],
+            &["host", "addresses"],
+            &["host", "status"],
         ] {
             assert_eq!(note(read_only), None, "{read_only:?} signs nothing");
         }

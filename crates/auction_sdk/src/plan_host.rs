@@ -157,6 +157,21 @@ pub fn set_controller_gains(
     )
 }
 
+/// Host `SetMarketPriceOracle` (stablecoin enum index 10, IDL position 16): admin, protocol_parameters
+/// (written), new_oracle (read). The host checks the new account's shape and base/quote pair only.
+pub fn set_market_price_oracle(
+    host: &HostAddresses,
+    admin: AccountId,
+    new_oracle: AccountId,
+) -> SdkResult<Plan> {
+    Plan::new(
+        host.program,
+        vec![admin, host.protocol_parameters, new_oracle],
+        vec![admin],
+        &stablecoin_core::Instruction::SetMarketPriceOracle,
+    )
+}
+
 pub fn token_new_fungible(
     token: ProgramId,
     definition: AccountId,
@@ -240,6 +255,23 @@ mod tests {
 
     fn decode<T: serde::de::DeserializeOwned>(p: &Plan) -> T {
         risc0_zkvm::serde::from_slice(&p.instruction_words).expect("the guest decodes it")
+    }
+
+    #[test]
+    fn set_market_price_oracle_encodes_enum_index_10_with_three_accounts() {
+        let host = HostAddresses::new(standard::HOST);
+        let new_oracle = AccountId::new([0x75; 32]);
+        let p = set_market_price_oracle(&host, id(k::HOST_ADMIN), new_oracle).expect("plan");
+        assert_eq!(
+            p.variant_index(),
+            Some(10),
+            "enum index, not IDL position 16"
+        );
+        assert_eq!(
+            p.account_ids,
+            vec![id(k::HOST_ADMIN), host.protocol_parameters, new_oracle]
+        );
+        assert_eq!(p.signing_requirements, vec![id(k::HOST_ADMIN)]);
     }
 
     #[test]

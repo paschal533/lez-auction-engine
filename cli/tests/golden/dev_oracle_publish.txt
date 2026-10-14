@@ -1,0 +1,16 @@
+admin             8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx
+admin source      deployment file (checked)
+price             500000000000000000000000000 -> 950000000000000000000000000
+new oracle        6z4Dr9NQZ9pd6s7ABGeHQvmMq4oimiqgqYRnTMqKSmyL
+window ms         3600000
+plan              create_oracle_price_account (3 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+plan              set_market_price_oracle (3 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+plan              set_collateral_config (8 accounts, 1 signer(s))
+submitted         <hash>
+included          signer nonce 1
+after engine oracle 6QWeT6FpJrm8AF1btu6WH2k2Xhq6t5vbheKVfQavmeoZ
+exit: 0

@@ -1,0 +1,7 @@
+frozen            no
+admin             HNQ2aVbCErw9h3dNXu8m7WhYZCsHCZGpeRsu6AqjSqFd
+freeze authority  AsgxpkHiPwCSaYUddMfzcHtKSnv2WcSH8etwuycTPgTd
+market oracle     6QWeT6FpJrm8AF1btu6WH2k2Xhq6t5vbheKVfQavmeoZ
+min collateral ratio 2000000000000000000000000000
+max oracle age ms 900000
+exit: 0

@@ -642,3 +642,99 @@ fn read_only_dev_commands_work_on_any_network() {
         "the recorded chain: {out}"
     );
 }
+
+fn publish_args(price: u128) -> Vec<String> {
+    [
+        "dev",
+        "oracle-publish",
+        "--price-source",
+        "caller",
+        "--price",
+        &price.to_string(),
+        "--host-admin",
+        "host-admin",
+        "--engine-admin",
+        "engine-admin",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect()
+}
+
+fn run_strings(c: &Case, args: &[String]) -> String {
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    c.run(&refs)
+}
+
+#[test]
+fn dev_oracle_publish_creates_rotates_and_follows() {
+    let c = localnet_case();
+    let out = run_strings(&c, &publish_args(standard::R * 19 / 10));
+    assert!(out.ends_with("exit: 0\n"), "{out}");
+    assert_eq!(
+        c.fx.chain.sent().len(),
+        3,
+        "price account, host rotation, engine follow-up"
+    );
+    check("dev_oracle_publish", &out);
+}
+
+#[test]
+fn dev_oracle_publish_refuses_an_invalid_price_before_signing() {
+    let c = localnet_case();
+    let out = run_strings(&c, &publish_args(standard::R * 3));
+    assert!(out.contains("PriceFeedOutOfRange"), "{out}");
+    assert!(out.ends_with("exit: 1\n"), "{out}");
+    assert!(c.fx.chain.sent().is_empty(), "nothing signed");
+}
+
+#[test]
+fn dev_keeper_publishes_only_near_the_age_limit() {
+    let c = localnet_case();
+    let mut args = publish_args(standard::R);
+    args[1] = "keeper".into();
+    args.extend(["--iterations", "1", "--interval-ms", "0"].map(String::from));
+    let out = run_strings(&c, &args);
+    assert!(out.contains("fresh"), "{out}");
+    assert!(c.fx.chain.sent().is_empty(), "a fresh oracle is left alone");
+    args.extend(["--refresh-before-ms", "999999999"].map(String::from));
+    let out = run_strings(&c, &args);
+    assert!(out.contains("publishing"), "{out}");
+    assert_eq!(c.fx.chain.sent().len(), 3);
+}
+
+#[test]
+fn host_status_reads_the_protocol_parameters() {
+    let c = Case::new();
+    let out = c.run(&["host", "status"]);
+    assert!(out.contains("frozen            no"), "{out}");
+    check("host_status", &out);
+}
+
+#[test]
+fn dev_oracle_publish_refuses_signers_that_are_not_the_admins_before_signing() {
+    let c = localnet_case();
+    for (flag, label) in [("--host-admin", "caller"), ("--engine-admin", "caller")] {
+        let mut args = publish_args(standard::R);
+        let at = args.iter().position(|a| a == flag).expect("flag") + 1;
+        args[at] = label.into();
+        let out = run_strings(&c, &args);
+        assert!(out.contains("refusing before signing"), "{flag}: {out}");
+        assert!(out.ends_with("exit: 2\n"), "{flag}: {out}");
+    }
+    assert!(c.fx.chain.sent().is_empty(), "nothing signed or sent");
+}
+
+#[test]
+fn dev_oracle_publish_needs_the_twap_program_in_the_deployment_file() {
+    let mut c = localnet_case();
+    let d = c.deployment.take().expect("localnet deployment");
+    c.deployment = Some(Deployment {
+        twap_oracle_program: None,
+        ..d
+    });
+    let out = run_strings(&c, &publish_args(standard::R));
+    assert!(out.contains("twap_oracle_program_id"), "{out}");
+    assert!(out.ends_with("exit: 1\n"), "{out}");
+    assert!(c.fx.chain.sent().is_empty(), "nothing signed or sent");
+}

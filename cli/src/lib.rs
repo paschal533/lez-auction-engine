@@ -8,6 +8,7 @@ mod dev_cmds;
 pub mod env;
 pub mod error;
 mod host_cmds;
+mod oracle_cmds;
 pub mod output;
 mod params;
 mod read_cmds;

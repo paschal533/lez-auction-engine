@@ -208,6 +208,7 @@ Matches the expected end state of the task brief.
 2. **A test oracle with no publisher goes stale after 1 h** (host and engine both enforce 3_600_000 ms): the first
    `liquidate` failed `PriceFeedStale` because the slow parts of the run exceeded an hour. `step_refresh_oracle`
    creates a fresh oracle and rebinds host and engine. A real deployment needs a price publisher (Plan 3 keeper).
+   Resolved for localnet by the publisher (ADR-050, Plan 3b Task 10).
 3. **spel (rev 1ef0500) cannot resolve a PDA seeded by another PDA of the same instruction.** `init_config`
    (`accounting` and `buffer` are seeded by `config`, itself a PDA) failed with "PDA 'accounting' requires account
    'config' - provide --config" while rejecting `--config` as "unknown argument", and `liquidate` has the same

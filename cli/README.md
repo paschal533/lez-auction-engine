@@ -76,6 +76,7 @@ Every one verifies the config (exit 2 on mismatch), prints the config's admin an
     auction-cli admin set-collateral-config --admin <label> --params cli/params/localnet-collateral.json
     auction-cli admin verify
     auction-cli host addresses
+    auction-cli host status                         # read-only: freeze flag, admins, market oracle, min ratio, max oracle age
     auction-cli host bind --admin <host admin>      # refuses unless the config verifies (ADR-027)
     auction-cli host init-program --admin <l> --freeze <l> --collateral-def <l> --oracle <id> [--kp <i128>] [--ki <i128>] ...
     auction-cli host open-position --owner <l> --owner-collateral <l> [--nonce 0] --amount <n>
@@ -87,11 +88,23 @@ Every one verifies the config (exit 2 on mismatch), prints the config's admin an
     auction-cli dev token-init-account --definition <id|l> --account <l>
     auction-cli dev token-transfer --from <l> --to <id|l> --amount <n>
     auction-cli dev oracle-create --price-source <l> --base <id> --quote <id|l> --price <n> [--window-ms 3600000]
+    auction-cli dev oracle-publish --price-source <l> --price <RAY> --host-admin <l> --engine-admin <l> [--base-window-ms 3600000]
+    auction-cli dev keeper <the same flags> [--interval-ms 60000] [--iterations N] [--refresh-before-ms 600000]
     auction-cli dev balance --account <id|l>
     auction-cli dev chain-id
 
-`dev resolve`, `dev balance` and `dev chain-id` are read-only and work on any network (they print no deployment note). The other dev commands sign, so they need `"network": "localnet"` in the deployment file and the chain it was recorded on: the file's `chain_genesis_hash` (64 lowercase hex characters, the hash of block 1) must equal the node's, otherwise the command exits 2 before signing (ADR-046). Record it with `auction-cli dev chain-id` against the intended node (the output line `genesis <hex>` gives the value); the smoke script does this right after it starts the sequencer. The committed `deployments/localnet.json` has `"chain_genesis_hash": null`, so the state-changing dev commands refuse with it until a run records the value.
+`dev resolve`, `dev balance`, `dev chain-id`, `host addresses` and `host status` are read-only and work on any network (they print no deployment note). The other dev commands sign, so they need `"network": "localnet"` in the deployment file and the chain it was recorded on: the file's `chain_genesis_hash` (64 lowercase hex characters, the hash of block 1) must equal the node's, otherwise the command exits 2 before signing (ADR-046). Record it with `auction-cli dev chain-id` against the intended node (the output line `genesis <hex>` gives the value); the smoke script does this right after it starts the sequencer. The committed `deployments/localnet.json` has `"chain_genesis_hash": null`, so the state-changing dev commands refuse with it until a run records the value.
 
 Parameter files hold `u128` values as decimal strings; the protocol-token and reference-oracle flags come from `--protocol-token` / `--ref-oracle`. An enabled protocol token must already exist as a fungible token definition (ADR-038): create it first with `dev token-new ... --mint-authority <mint authority from admin addresses>`. Every reference-price change printed by `set-engine-params` goes into `DEPLOYMENTS.md` (ADR-017).
 
 `set-engine-params` rewrites the protocol-token and reference-oracle slots from its flags, so an omitted flag would disable a slot the config has: the command refuses unless `--disable-protocol-token` / `--disable-ref-oracle` is passed, and prints `old -> new` for every slot that changes. `--protocol-token` is checked client-side (ADR-038) to be a fungible definition of the token program. `admin init-config` refuses a signer other than the deployment file `engine_admin`. `dev` commands only run when the deployment file names the network `localnet`. `host bind` prints the engine the host is bound to now before it re-binds; `host set-min-cr` / `set-controller-gains` print `old -> new`.
+
+### Localnet price publisher and keeper (ADR-050)
+
+`dev oracle-publish` moves the localnet market price by rotation, in three transactions: a new twap_oracle price account for the same `--price-source` at the next free window (starting at `--base-window-ms`), the host's `SetMarketPriceOracle`, then the engine's `set_collateral_config` with unchanged parameters and the new oracle (ADR-028: the engine must follow the host). It is localnet-only (the dev-command guard, ADR-046). Before anything is signed it verifies the config, checks that `--host-admin` and `--engine-admin` are the recorded admins (exit 2) and runs the engine's own feed validation on the new price: a price outside `[R/2, 2R]` (R the redemption price) or zero is refused, naming the engine error (`PriceFeedOutOfRange`, ...), with exit 1 and nothing sent.
+
+`dev keeper` repeats it: every `--interval-ms` it reads the oracle's age and publishes `--price` again when age plus `--refresh-before-ms` reaches the configured maximum age; otherwise it prints `fresh`. `--iterations N` stops after N rounds (default: run until interrupted).
+
+The price source signs the new price account on every publish, so on a real localnet that account must be initialised with `wallet auth-transfer init` first (ADR-018).
+
+Partial failure: between the host rotation and the engine follow-up the host and the engine point at different oracles, and `liquidate` fails with `OracleMismatch`. If the command stops after the second transaction, run `dev oracle-publish` again: it creates the next window's account and rotates both. `host status` shows the host's current market oracle and the freeze flag.

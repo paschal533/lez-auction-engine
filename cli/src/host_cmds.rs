@@ -27,11 +27,12 @@ pub fn host<C: Chain>(
     cmd: &HostCommand,
     out: &mut dyn Write,
 ) -> Result<(), CliError> {
-    if !matches!(cmd, HostCommand::Addresses) {
+    if !matches!(cmd, HostCommand::Addresses | HostCommand::Status) {
         env.refuse_at_ms()?;
     }
     match cmd {
         HostCommand::Addresses => addresses(env, out),
+        HostCommand::Status => status(env, out),
         HostCommand::Bind { admin } => bind(env, admin, out),
         HostCommand::InitProgram(a) => init_program(env, a, out),
         HostCommand::OpenPosition {
@@ -93,7 +94,7 @@ pub fn host<C: Chain>(
 
 /// The signer, refused before signing (exit 2) unless it is the host admin recorded in
 /// `ProtocolParameters`: the host would drop the transaction, and resending could not help.
-fn require_host_admin<C: Chain>(
+pub(crate) fn require_host_admin<C: Chain>(
     env: &Env<C>,
     params: &ProtocolParameters,
     signer: &str,
@@ -117,6 +118,30 @@ fn print_params<C: Chain>(
 ) -> Result<(), CliError> {
     let read = protocol_parameters(env, &host_addresses(env)).map(|p| summary(&p));
     print_after(out, "protocol parameters", read)
+}
+
+/// Read-only view of the host's `ProtocolParameters` (the freeze flag is the current state; the
+/// engine's `host_frozen_by_engine` only means "has ever frozen", THREAT_MODEL runbook).
+fn status<C: Chain>(env: &Env<C>, out: &mut dyn Write) -> Result<(), CliError> {
+    let p = protocol_parameters(env, &host_addresses(env))?;
+    kv(out, "frozen", yes_no(p.is_frozen))?;
+    kv(out, "admin", &p.admin_account_id.to_string())?;
+    kv(
+        out,
+        "freeze authority",
+        &p.freeze_authority_account_id.to_string(),
+    )?;
+    kv(out, "market oracle", &p.market_price_oracle_id.to_string())?;
+    kv(
+        out,
+        "min collateral ratio",
+        &p.minimum_collateralization_ratio.to_string(),
+    )?;
+    kv(
+        out,
+        "max oracle age ms",
+        &p.maximum_oracle_price_age_milliseconds.to_string(),
+    )
 }
 
 fn addresses<C: Chain>(env: &Env<C>, out: &mut dyn Write) -> Result<(), CliError> {

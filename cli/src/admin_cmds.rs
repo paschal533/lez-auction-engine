@@ -83,7 +83,7 @@ fn check_network<C: Chain>(env: &Env<C>, host: &HostAddresses) -> Result<(), Cli
 }
 
 /// I4, then the admin the user is about to sign against, then the signer check (all before signing).
-fn begin<C: Chain>(
+pub(crate) fn begin<C: Chain>(
     env: &Env<C>,
     signer: &str,
     out: &mut dyn Write,

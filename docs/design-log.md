@@ -1117,7 +1117,7 @@ Accepted (Plan 3b, Task 8)
 ## ADR-050: Localnet Price Publisher by Oracle Rotation
 
 **Context**
-Localnet finding 2: the localnet oracle has no publisher, so it goes stale after an hour, and without a price move there is no shortfall, hence no F4 debt auction and no freeze path on localnet. The oracle is a twap_oracle `OraclePriceAccount` created at RAY scale; twap's `PublishPrice` writes a Q64.64 TWAP of ticks (lez-programs #401), and the engine and host read one scale per instance (spec ง5.2, `Ray` in the PoC).
+Localnet finding 2: the localnet oracle has no publisher, so it goes stale after an hour, and without a price move there is no shortfall, hence no F4 debt auction and no freeze path on localnet. The oracle is a twap_oracle `OraclePriceAccount` created at RAY scale; twap's `PublishPrice` writes a Q64.64 TWAP of ticks (lez-programs #401), and the engine and host read one scale per instance (spec ยง5.2, `Ray` in the PoC).
 
 **Options**
 - (A) Use twap `PublishPrice` and switch the instance to `Q64x64` (the host reads 1e27; mixing scales is the open upstream question).

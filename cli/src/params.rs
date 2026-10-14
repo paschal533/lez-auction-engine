@@ -145,4 +145,15 @@ mod tests {
         let e = engine_params(&f, false, false).expect_err("bad number");
         assert!(e.to_string().contains("global_cap"), "{e}");
     }
+
+    #[test]
+    fn the_demo_files_carry_the_pinned_scenario() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("params");
+        let p = engine_params(&dir.join("demo-engine.json"), true, false).expect("engine params");
+        assert_eq!(p, auction_sdk::demo::engine_params());
+        p.validate().expect("valid");
+        let c = collateral_args(&dir.join("demo-collateral.json")).expect("collateral args");
+        assert_eq!(c, auction_sdk::demo::collateral_args());
+        c.validate(p.global_cap).expect("valid");
+    }
 }

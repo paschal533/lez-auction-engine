@@ -1134,3 +1134,24 @@ Three transactions per move. Between the host rotation and the engine follow-up,
 Accepted (Plan 3b, Task 10)
 
 ---
+
+## ADR-051: Demo Scenario Parameters
+
+**Context**
+Spec §1.1: the one-command reproduction must drive a shortfall into the debt auction, a surplus into the surplus auction, and show the "no protocol token, so the host freezes new debt" path. With the default band (9000–11000 bps) the clamped price cannot leave the lot short of the debt, and a localnet run is too slow to tune by trial.
+
+**Options**
+- (A) Make positions underwater through the stability fee (slow, host-parameter dependent).
+- (B) Move the market price inside the validity range with a wider band.
+- (C) Inject state (not possible on a real node).
+
+**Decision**
+(B), pinned on the real guests by `demo_scenario_runs_f1_to_f5_and_the_freeze_path` with `auction_sdk::demo` (the same values as `cli/params/demo-*.json`, pinned by `the_demo_files_carry_the_pinned_scenario`). The defaults change in three places: `band_hi_bps = 20000` (the bound in spec §5.12), `debt_lot = 5000` and `bad_debt_freeze_threshold = 5000`. The price moves to 1.9 R (valid: R/2 ≤ 1.9 R ≤ 2R). A 500_000 / 300_000 position (R = 1) then raises at most about 257_850 coin from its lot, leaving a shortfall of at least about 42_150 whatever the discount at inclusion (2 % to 10 %). After the buffer (29_500) and one debt lot (5_000), at least about 7_650 of bad debt remains, above the threshold, so disabling the protocol token lets `check_solvency` freeze the host.
+
+**Trade-offs**
+The demo's band is wider than the PoC default; that is a parameter choice within spec bounds, stated in DEMO.md. The in-process scenario runs at R = 0.5 with twice the debt (the harness's standard position): same proportions, different absolute numbers.
+
+**Status**
+Accepted (Plan 3b, Task 11)
+
+---

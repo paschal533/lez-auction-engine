@@ -7,6 +7,7 @@ pub mod addresses;
 pub mod chain;
 pub mod confirm;
 pub mod decode;
+pub mod demo;
 pub mod deployment;
 pub mod encode;
 pub mod error;

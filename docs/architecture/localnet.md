@@ -102,6 +102,22 @@ from there. The run found two script defects, both fixed: `step_stop` did not wa
 `step_sequencer` saw port 3040 still in use), and `step_accounts` kept the previous wallet's `engine_admin`/`config`
 in the run's deployment file (now reset to `null`).
 
+### Plan 3b Task 5 re-run (2026-10-14, Docker binaries)
+
+The same 14 steps (`step_build` to `step_stop`) were repeated on a fresh sequencer, now deploying the committed
+binaries in `artifacts/guests` (ADR-047) instead of the native ELFs; `step_build` reads the ImageIDs from
+`artifacts/guests/manifest.json`. Result: 34 transactions `included`, `no failed execution check`, and the same final
+balances (owner-coll 99_998_999_950, owner-stable 70_000, keeper-coll 50, taker-stable 500, taker-protocol 9_800,
+buffer 29_500). `host bind` and `admin verify` print the Docker ImageIDs:
+
+| Program | ImageID (Docker, deployed) | Native (in-process tests only) |
+|---|---|---|
+| stablecoin | `bda698c4e929e4f63ad7b2949c8e413c26fc69df02434844067baded95c7b40d` | `91c790a2...6953` |
+| auction_engine | `bb506524bfab7ce5d45a4f4836c00a90d7f23a769a2b6c988c66eb82d456f342` | `de829674...fc68` |
+
+The native ids are unchanged since the Plan 3a run above (no guest source changed in Plan 3b so far); token and
+twap_oracle are the upstream ids as before.
+
 ## Plan 2 run (spel)
 
 History, kept unchanged below. The Plan 2 script (spel based, with `step_verify_and_bind` and `localnet.env`) is `git show cb21843:scripts/localnet-smoke.sh`; the current `scripts/localnet-smoke.sh` is the Plan 3a one. Its engine ImageID `3d0d15fa...` is superseded by the one above.

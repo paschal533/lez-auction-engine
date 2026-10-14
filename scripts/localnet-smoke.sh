@@ -3,8 +3,9 @@
 # Run INSIDE WSL. Steps, in order (several may be given in one call):
 #   step_build step_sequencer step_accounts step_auth step_deploy step_host step_engine step_bind
 #   step_collateral step_holdings step_flow step_system step_check step_peak step_stop
-# Requires the S1 builds (sequencer_service, wallet) and S1's Docker-built upstream guests (token, twap_oracle,
-# token_mint_authority). The wallet binary still does wallet business: key creation, auth-transfer init and
+# Requires the S1 builds (sequencer_service, wallet). The guests deployed are the committed Docker-built
+# binaries in artifacts/guests (ADR-047), their ImageIDs read from artifacts/guests/manifest.json; the S1
+# guest builds are no longer needed. The wallet binary still does wallet business: key creation, auth-transfer init and
 # program deployment. Only the sequencer started by step_sequencer (pid file) is ever signalled.
 # SEQ_RISC0_DEV_MODE=0 runs the sequencer with dev mode off (RFP S2).
 set -euo pipefail
@@ -12,15 +13,11 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 S1="$HOME/lez-spikes/s1"
 LN="$HOME/lez-target/plan3a-localnet"
 W="$S1/lez/target/debug/wallet"
-UP="$S1/lez-programs/target/guest"
 CLI_BIN="${CARGO_TARGET_DIR:-$HOME/lez-target/plan2}/debug/auction-cli"
 export LEE_WALLET_HOME_DIR="$LN/wallet-home"
 # shellcheck disable=SC1091
 . "$S1/env.sh"
 mkdir -p "$LN/logs" "$LN/guest"
-# Fixed by S1 (same upstream binaries -> same ids):
-TOK=14b3bc6cc129d0359f9595ba0f60a13e4a8df08ffe8eb1a83251c47abecc67a8
-TWAP=5681e27c27b3ece4a7c161bbf8e12e6ece6ca69925a87b77f9e193fa4a249b31
 ONE=1000000000000000000000000000
 DEP="$LN/deployment.json"
 LABELS="admin freeze oracle-src coll-def owner owner-coll owner-stable engine-admin keeper keeper-coll caller protocol-def taker-protocol taker-stable"
@@ -50,17 +47,21 @@ PY
 
 step_build() {
   (cd "$REPO" && scripts/wsl-cargo.sh build -p auction_cli)
-  (cd "$REPO" && scripts/wsl-cargo.sh run -q -p engine_integration_tests --example localnet_tool -- export-guests "$LN/guest") \
-    | tee "$LN/guest/ids.txt"
-  local engine host
-  engine="$(awk '/^AUCTION_ENGINE_ID/ { print $2 }' "$LN/guest/ids.txt")"
-  host="$(awk '/^STABLECOIN_ID/ { print $2 }' "$LN/guest/ids.txt")"
-  python3 - "$DEP" "$engine" "$host" "$TOK" "$TWAP" <<'PY'
+  "$REPO/scripts/check-guests.sh" --sha-only
+  local engine host tok twap
+  read -r engine host tok twap < <(python3 - "$REPO/artifacts/guests/manifest.json" <<'PY'
+import json, sys
+g = json.load(open(sys.argv[1]))["guests"]
+print(g["auction_engine"]["image_id"], g["stablecoin"]["image_id"], g["token"]["image_id"], g["twap_oracle"]["image_id"])
+PY
+)
+  python3 - "$DEP" "$engine" "$host" "$tok" "$twap" <<'PY'
 import json, sys
 path, engine, host, tok, twap = sys.argv[1:]
 json.dump({"network": "localnet", "sequencer_url": "http://127.0.0.1:3040", "engine_program_id": engine,
            "host_program_id": host, "token_program_id": tok, "twap_oracle_program_id": twap,
-           "engine_admin": None, "config": None, "chain_genesis_hash": None}, open(path, "w", encoding="utf-8"), indent=2)
+           "engine_admin": None, "config": None, "chain_genesis_hash": None},
+          open(path, "w", encoding="utf-8"), indent=2)
 PY
   echo "deployment file: $DEP"
 }
@@ -123,9 +124,9 @@ step_auth() {
 
 step_deploy() {
   local p
-  for p in token twap_oracle token_mint_authority; do "$W" deploy-program "$UP/$p.bin"; done
-  "$W" deploy-program "$LN/guest/stablecoin.bin"
-  "$W" deploy-program "$LN/guest/auction_engine.bin"
+  for p in token twap_oracle token_mint_authority stablecoin auction_engine; do
+    "$W" deploy-program "$REPO/artifacts/guests/$p.bin"
+  done
 }
 
 step_host() {

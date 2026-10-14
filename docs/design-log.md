@@ -1072,6 +1072,27 @@ Accepted (Plan 3b, Task 3)
 
 ---
 
+## ADR-047: Reproducible Docker Guest Builds; Committed Binaries; Native ELFs Stay in Tests
+
+**Context**
+I4: clients compare a config's program ids with `DEPLOYMENTS.md`, which until now held native-build ImageIDs that nobody else could reproduce (THREAT_MODEL I4 residual). The upstream guests are Docker-built and their ImageIDs match lez-programs' own DEPLOYMENTS.md (S1).
+
+**Options**
+- (A) Keep native builds.
+- (B) `RISC0_USE_DOCKER` for every test build.
+- (C) Build the deployable guests with the upstream Docker recipe, commit the binaries with a manifest, check reproduction in CI; tests keep native ELFs.
+
+**Decision**
+(C). `scripts/build-guests.sh` runs lez-programs' recipe (builder image pinned by digest, same rustflags, the vendored `risc0-packager`) for stablecoin (with hooks) and auction_engine. The two binaries and the three upstream ones (token, twap_oracle, token_mint_authority from lez-programs `make build-programs`) are committed in `artifacts/guests/` with `manifest.json` (sha256, ImageID, source). `deployments/localnet.json` and `DEPLOYMENTS.md` carry these ImageIDs (`guest_manifest_matches_the_localnet_deployment`). CI job `guest-repro` rebuilds and requires identical bytes. The localnet scripts deploy the committed binaries, so a demo needs no Docker.
+
+**Trade-offs**
+About 2.3 MB of binaries in git. Two ImageID sets exist: the deployed Docker one and the native one of the in-process tests and of the Task 7 receipts (ADR-045). Every later guest change must rebuild and refresh the manifest in the same commit (Plan 3b Global Constraints).
+
+**Status**
+Accepted (Plan 3b, Task 5)
+
+---
+
 ## ADR-048: Cycle Baseline, Transaction Sizes and the 10 % Regression Rule
 
 **Context**

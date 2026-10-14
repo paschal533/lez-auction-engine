@@ -389,6 +389,32 @@ mod tests {
     }
 
     #[test]
+    fn guest_manifest_matches_the_localnet_deployment() {
+        // ADR-047: the deployed ImageIDs are the reproducible Docker ones in artifacts/guests.
+        let d = Deployment::from_json(
+            include_str!("../../../deployments/localnet.json"),
+            "deployments/localnet.json",
+        )
+        .expect("parses");
+        let m: serde_json::Value =
+            serde_json::from_str(include_str!("../../../artifacts/guests/manifest.json"))
+                .expect("manifest parses");
+        let id = |name: &str| {
+            m["guests"][name]["image_id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("manifest has no {name}"))
+                .to_owned()
+        };
+        assert_eq!(program_id_hex(&d.engine_program), id("auction_engine"));
+        assert_eq!(program_id_hex(&d.host_program), id("stablecoin"));
+        assert_eq!(program_id_hex(&d.token_program), id("token"));
+        let twap = d
+            .twap_oracle_program
+            .expect("localnet names the twap oracle");
+        assert_eq!(program_id_hex(&twap), id("twap_oracle"));
+    }
+
+    #[test]
     fn verify_chain_identity_compares_block_1() {
         let fx = standard::standard();
         let genesis = hex::encode(fx.chain.blocks(1, 1).expect("block 1")[0].hash);

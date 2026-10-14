@@ -1,8 +1,8 @@
 {
   "network": "localnet",
   "sequencer_url": "http://127.0.0.1:3040",
-  "engine_program_id": "de82967436371542ea2aa862b967af1776ef3fa3f4c5ae5033ea30f27253fc68",
-  "host_program_id": "91c790a23cadc2aa72be1533a4f4daa8ab6734e0dad5165fb9303cb438736953",
+  "engine_program_id": "bb506524bfab7ce5d45a4f4836c00a90d7f23a769a2b6c988c66eb82d456f342",
+  "host_program_id": "bda698c4e929e4f63ad7b2949c8e413c26fc69df02434844067baded95c7b40d",
   "token_program_id": "14b3bc6cc129d0359f9595ba0f60a13e4a8df08ffe8eb1a83251c47abecc67a8",
   "twap_oracle_program_id": "5681e27c27b3ece4a7c161bbf8e12e6ece6ca69925a87b77f9e193fa4a249b31",
   "engine_admin": null,

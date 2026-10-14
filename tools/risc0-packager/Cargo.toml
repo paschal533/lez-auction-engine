@@ -1,0 +1,16 @@
+[package]
+name = "risc0-packager"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Wraps a guest ELF with the risc0 kernel into the deployable .bin (from lez-programs 64c01210)."
+
+# A workspace of its own: the Docker build compiles it with the builder image's toolchain without
+# resolving this repository's workspace.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+risc0-binfmt = "=3.0.4"
+risc0-build = "=3.0.5"

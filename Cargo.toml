@@ -27,6 +27,7 @@ exclude = [
     "programs/auction_engine/methods/guest",
     "programs/test_programs/methods/guest",
     "fuzz",
+    "tools/risc0-packager",
 ]
 resolver = "2"
 

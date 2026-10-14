@@ -1,0 +1,32 @@
+name: guests
+on:
+  push:
+    paths: ["programs/**", "artifacts/guests/**", "scripts/build-guests*", "tools/risc0-packager/**", "patches/**"]
+  schedule:
+    - cron: "5 4 * * *"
+  workflow_dispatch:
+jobs:
+  guest-repro:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/ci/free-disk.sh
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: ./.github/actions/install-risc0
+      - uses: Swatinem/rust-cache@v2
+        with: { shared-key: programs }
+      - name: rebuild our guests in Docker
+        run: scripts/build-guests.sh "$RUNNER_TEMP/guests"
+      - name: rebuild the upstream guests (lez-programs 64c01210)
+        if: github.event_name != 'push'
+        run: |
+          git clone --filter=blob:none https://github.com/logos-blockchain/lez-programs "$RUNNER_TEMP/lez-programs"
+          git -C "$RUNNER_TEMP/lez-programs" checkout -q 64c01210adecd6b557dbd021a3cc94553f243fd8
+          make -C "$RUNNER_TEMP/lez-programs" build-programs
+          cp "$RUNNER_TEMP/lez-programs/target/guest/"{token,twap_oracle,token_mint_authority}.bin "$RUNNER_TEMP/guests/"
+      - name: on push, the upstream binaries come from the repository
+        if: github.event_name == 'push'
+        run: cp artifacts/guests/{token,twap_oracle,token_mint_authority}.bin "$RUNNER_TEMP/guests/"
+      - name: byte-for-byte equal to artifacts/guests (sha256 and ImageID)
+        run: cp artifacts/guests/manifest.json "$RUNNER_TEMP/guests/" && scripts/check-guests.sh "$RUNNER_TEMP/guests"

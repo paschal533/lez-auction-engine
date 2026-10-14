@@ -90,7 +90,7 @@ Implemented by `crates/auction_sdk` (docs/architecture/sdk.md) and `cli/` (cli/R
 - Signers that sign more than one stablecoin-program transaction must be `wallet auth-transfer init`-ed first (ADR-018).
 - Verified in Task 19 against the code: instruction order and indices = `idl/auction_engine-idl.json` (`tests/idl.rs`, R2 order 0–16), account lists and signer/writable flags = the R2 table above (stablecoin hooks 19–21 = `idl/stablecoin-idl.json`), error names and codes = `auction_engine_core::error` (the Errors section above).
 - Quote-test fixtures the SDK can reuse (`programs/integration_tests/tests/common/mod.rs`): `World::with_engine()` = `EngineParamsArgs::defaults_for_tests()` + `CollateralArgs::defaults_for_tests()` (Ray scale, 60-minute max oracle age, band 9000–11000 bps, penalty 10%) on a host with redemption price `R = 0.5` collateral per coin, min CR 1.5 and a stability fee of exactly 1.0 per ms; `World::unsafe_position()` opens the standard liquidatable position, whose expected quote is `LIQ_COLLATERAL = 500_000` (seized), `LIQ_DEBT = 600_000` (nominal debt), `LIQ_TARGET = 660_000` (amount to raise, +10%), `LIQ_REWARD = 25` collateral (`min(tip + chip·D = 605, reward_cap = 50, penalty·D = 60_000)` = 50 coin at R = 0.5), `LIQ_LOT = LIQ_COLLATERAL - LIQ_REWARD = 475_000`. Other constants: `T0` (initial clock, ms), `ONE` (= RAY = `FIXED_POINT_ONE`), `R`, `SALT = 1`, and the signer/holding seeds in `common::k`.
-- Client obligations from `THREAT_MODEL.md`: verify program ids (I4, above), knowing that the published ImageIDs come from a native build until Plan 3's Docker builds; show unsold auctions that keep their cap reservation; call `observe_feed` on refresh (S5); simulate `observed()` before every `t_eff` preview (ADR-024); never unfreeze, or advise unfreezing, while settled `unbacked_debt` is above `bad_debt_freeze_threshold` (immediate re-freeze); treat `Accounting.host_frozen_by_engine` as "has ever frozen", not as the current state.
+- Client obligations from `THREAT_MODEL.md`: verify program ids (I4, above), knowing that the published ImageIDs are the reproducible Docker ones (ADR-047) while in-process tests use native ELFs with different ids; show unsold auctions that keep their cap reservation; call `observe_feed` on refresh (S5); simulate `observed()` before every `t_eff` preview (ADR-024); never unfreeze, or advise unfreezing, while settled `unbacked_debt` is above `bad_debt_freeze_threshold` (immediate re-freeze); treat `Accounting.host_frozen_by_engine` as "has ever frozen", not as the current state.
 
 Stablecoin IDL position to enum index (the enum index is what the guest decodes and what the SDK must encode):
 
@@ -116,7 +116,7 @@ Plan 3 carry-overs:
 - Done (Plan 3a Tasks 4–8): SDK encoders keyed by enum index (`encode.rs`), proven on the real guests (`sdk_plans.rs`).
 - Done (Plan 3a Task 2, ADR-038): config-time check that an enabled `protocol_token` is a fungible token definition owned by the token program.
 - Done (Plan 3a Task 3, ADR-039): fixed relist delay between debt auctions.
-- Reproducible Docker builds, then refresh the ImageIDs in `DEPLOYMENTS.md`.
+- Reproducible Docker builds, then refresh the ImageIDs in `DEPLOYMENTS.md`. Done (Plan 3b Task 5, ADR-047).
 - Done (Plan 3b Task 6; real-proof re-measure Task 7): `CYCLES.md` plus a regression check (ADR-048).
 - `REQUIREMENTS.md` plus its checker, `cargo-fuzz`, and a red-team pass.
 - Done (Plan 3b Task 10, ADR-050): oracle price publisher / keeper (`auction-cli dev oracle-publish`, `dev keeper`; localnet only).

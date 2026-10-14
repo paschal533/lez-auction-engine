@@ -65,7 +65,7 @@ fn program_from_hex(h: &str) -> Result<ProgramId, String> {
 
 const USAGE: &str = "usage: localnet_tool export-guests <dir> | pdas <engine_hex> <host_hex> \
 <engine_admin_base58> <salt> <owner_base58> <position_nonce> <collateral_def_base58> | \
-decode-config <data_hex>";
+decode-config <data_hex> | image-id <file.bin>...";
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -151,6 +151,21 @@ fn main() {
                 cfg.host_protocol_parameters_id, cfg.stablecoin_definition_id
             );
             println!("{cfg:?}");
+        }
+        Some("image-id") if args.len() >= 2 => {
+            for path in &args[1..] {
+                let bytes = fs::read(path).unwrap_or_else(|e| fail(&format!("{path}: {e}")));
+                let digest = risc0_zkvm::compute_image_id(&bytes)
+                    .unwrap_or_else(|e| fail(&format!("{path}: not a risc0 program binary: {e}")));
+                let mut id: ProgramId = [0; 8];
+                for (limb, w) in id.iter_mut().zip(digest.as_words()) {
+                    *limb = *w;
+                }
+                let name = std::path::Path::new(path)
+                    .file_stem()
+                    .map_or_else(|| path.clone(), |s| s.to_string_lossy().into_owned());
+                println!("{name} {}", hex_of(&id));
+            }
         }
         _ => {
             eprintln!("{USAGE}");

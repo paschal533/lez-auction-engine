@@ -1,0 +1,30 @@
+{
+  "builder_image": "risczero/risc0-guest-builder:r0.1.88.0@sha256:3e12f71bacd27527a61dea96fa0e53e468c99aa261d3a1019b593f6dbd943eb3",
+  "guests": {
+    "auction_engine": {
+      "image_id": "bb506524bfab7ce5d45a4f4836c00a90d7f23a769a2b6c988c66eb82d456f342",
+      "sha256": "991779d757f089ed7acdb1f3df5698f62b27c286b86720cbc3791fc0f029a3bb",
+      "source": "this repository, scripts/build-guests.sh"
+    },
+    "stablecoin": {
+      "image_id": "bda698c4e929e4f63ad7b2949c8e413c26fc69df02434844067baded95c7b40d",
+      "sha256": "9188efcce3ae239408119492d1b70a7424c938ee43892256b303bf5293062ee4",
+      "source": "this repository, scripts/build-guests.sh (programs/stablecoin = lez-programs 64c01210 + patches/stablecoin)"
+    },
+    "token": {
+      "image_id": "14b3bc6cc129d0359f9595ba0f60a13e4a8df08ffe8eb1a83251c47abecc67a8",
+      "sha256": "bc8c24bddefc00628a7f659fe2d04dd074868250167a0334b0e6ae5c13e56bc9",
+      "source": "lez-programs 64c01210, make build-programs (S1)"
+    },
+    "token_mint_authority": {
+      "image_id": "1ea6d932d240e54e53682547e6d9f08a03a42bd9bbaa8e6b4a9974fc86d1e70e",
+      "sha256": "8ee775b631d5243849e227a701f603a61217497b0724e42d3be135f784fddbd2",
+      "source": "lez-programs 64c01210, make build-programs (S1)"
+    },
+    "twap_oracle": {
+      "image_id": "5681e27c27b3ece4a7c161bbf8e12e6ece6ca69925a87b77f9e193fa4a249b31",
+      "sha256": "53c1d995d72c42226fc41a8bbd8a042667ed91a0add0db4c18a68468db809dd5",
+      "source": "lez-programs 64c01210, make build-programs (S1)"
+    }
+  }
+}

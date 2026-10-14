@@ -1,10 +1,41 @@
 name: guests
+# The path filter lists every input of the Docker build: the root manifest and lock (the guests inherit
+# `workspace = true` keys), the guests' path-dependency crates (programs/** covers stablecoin, auction_engine,
+# their cores and token/twap_oracle cores; crates/auction_core), patches, the build and check scripts, the
+# Docker context rules, the vendored packager, the committed binaries and this workflow. The same list is
+# repeated for push and pull_request (GitHub Actions has no YAML anchors).
 on:
   push:
-    paths: ["programs/**", "artifacts/guests/**", "scripts/build-guests*", "tools/risc0-packager/**", "patches/**"]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/auction_core/**"
+      - "programs/**"
+      - "patches/**"
+      - "scripts/build-guests*"
+      - "scripts/check-guests.sh"
+      - ".dockerignore"
+      - "tools/risc0-packager/**"
+      - "artifacts/guests/**"
+      - ".github/workflows/guests.yml"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/auction_core/**"
+      - "programs/**"
+      - "patches/**"
+      - "scripts/build-guests*"
+      - "scripts/check-guests.sh"
+      - ".dockerignore"
+      - "tools/risc0-packager/**"
+      - "artifacts/guests/**"
+      - ".github/workflows/guests.yml"
   schedule:
     - cron: "5 4 * * *"
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   guest-repro:
     runs-on: ubuntu-22.04
@@ -19,14 +50,16 @@ jobs:
       - name: rebuild our guests in Docker
         run: scripts/build-guests.sh "$RUNNER_TEMP/guests"
       - name: rebuild the upstream guests (lez-programs 64c01210)
-        if: github.event_name != 'push'
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
           git clone --filter=blob:none https://github.com/logos-blockchain/lez-programs "$RUNNER_TEMP/lez-programs"
           git -C "$RUNNER_TEMP/lez-programs" checkout -q 64c01210adecd6b557dbd021a3cc94553f243fd8
           make -C "$RUNNER_TEMP/lez-programs" build-programs
           cp "$RUNNER_TEMP/lez-programs/target/guest/"{token,twap_oracle,token_mint_authority}.bin "$RUNNER_TEMP/guests/"
-      - name: on push, the upstream binaries come from the repository
-        if: github.event_name == 'push'
+      - name: on push and pull_request the upstream binaries come from the repository (hash-checked only)
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
         run: cp artifacts/guests/{token,twap_oracle,token_mint_authority}.bin "$RUNNER_TEMP/guests/"
       - name: byte-for-byte equal to artifacts/guests (sha256 and ImageID)
         run: cp artifacts/guests/manifest.json "$RUNNER_TEMP/guests/" && scripts/check-guests.sh "$RUNNER_TEMP/guests"
+      - name: committed artifacts/guests/*.bin match the manifest (sha256 and ImageID of every binary)
+        run: scripts/check-guests.sh

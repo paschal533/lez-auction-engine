@@ -71,7 +71,7 @@ Trust boundary: the RPC endpoint is trusted. There are no state proofs, so a mal
 
 `verify_config` deliberately does not check the collateral definition, the `CollateralConfig` oracle id, or the protocol token and its oracle. Those are checked at use time: `Reader::oracle` (owner = twap oracle program when the deployment names it), `Reader::token_definition` (owner = token program), `Reader::balance`, and on-chain by the engine's own account pinning.
 
-The ImageIDs in `deployments/localnet.json` are native-build values until Plan 3b's reproducible Docker builds (THREAT_MODEL I4 residual); they equal `DEPLOYMENTS.md` today and Task 16 refreshes both after the engine guest changes of Tasks 2 and 3.
+The ImageIDs in `deployments/localnet.json` are the reproducible Docker-build values of `artifacts/guests/manifest.json` (ADR-047, Plan 3b Task 5); they equal `DEPLOYMENTS.md`, and a test pins all three together.
 
 ## Quotes
 

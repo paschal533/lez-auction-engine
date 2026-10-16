@@ -118,6 +118,36 @@ buffer 29_500). `host bind` and `admin verify` print the Docker ImageIDs:
 The native ids are unchanged since the Plan 3a run above (no guest source changed in Plan 3b so far); token and
 twap_oracle are the upstream ids as before.
 
+### Plan 3b re-run (Task 12, M7, 2026-10-16)
+
+Closes Plan 3a M7: the hardened smoke had not been re-run after its last fix round. The smoke now runs on the
+shared library `scripts/lib/localnet.sh` (also used by `scripts/demo.sh` and the CI end-to-end job); the step names
+and behaviour are unchanged, and it deploys the committed guests in `artifacts/guests` (ADR-047). Run as
+`scripts/wsl-env.sh scripts/localnet-smoke.sh step_build ... step_stop` (the 14 steps), dev-mode sequencer on the S1
+builds: exit 0, 34 transactions `included`, `no failed execution check`, about 12 minutes wall time, and the same
+final balances (owner-coll 99_998_999_950, owner-stable 70_000, keeper-coll 50, taker-stable 500, taker-protocol
+9_800, buffer 29_500). The sequencer was stopped by `step_stop` and port 3040 was free afterwards.
+
+`scripts/bootstrap-lez.sh` builds the LEZ v0.2.4 sequencer and wallet a clean machine lacks. It is idempotent: it
+exits at once when both binaries and both config files (`sequencer_config.json`, `wallet_config.json`) exist,
+otherwise it fetches the pinned LEZ revision (a warm CI cache restores binaries only, so the checkout always runs
+first) and builds what is missing. `LEZ_DEPS` defaults to the S1 builds when they exist, else `$HOME/lez-deps`; it
+runs `scripts/disk-guard.sh` first, and exits 4 with the apt line when a tool is missing. Its `target/` is the one
+cargo target outside the shared plan2 directory and applies to clean machines only.
+
+Preflight (`ln_preflight`, shown by `scripts/demo.sh --preflight-only`, pinned by `scripts/tests/demo-preflight.sh`)
+stops before any sequencer starts:
+
+| Exit | Reason |
+|---|---|
+| 3 | disk: `scripts/disk-guard.sh` (thresholds `DEMO_MIN_C_GIB`, default 3, and `DEMO_MIN_HOME_GIB`, default 20) |
+| 4 | a missing LEZ binary or config file, or a missing tool (python3, ss, awk, sha256sum) |
+| 5 | port 3040 is in use |
+| 6 | the guests in `GUESTS_DIR` do not match `artifacts/guests/manifest.json` |
+
+`ln_build` refuses to build under WSL when `CARGO_TARGET_DIR` is unset: run the smoke and the demo through
+`scripts/wsl-env.sh`.
+
 ## Plan 2 run (spel)
 
 History, kept unchanged below. The Plan 2 script (spel based, with `step_verify_and_bind` and `localnet.env`) is `git show cb21843:scripts/localnet-smoke.sh`; the current `scripts/localnet-smoke.sh` is the Plan 3a one. Its engine ImageID `3d0d15fa...` is superseded by the one above.

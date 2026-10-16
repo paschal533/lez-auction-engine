@@ -88,6 +88,14 @@ unset, the job is skipped.
 - Registration: a repository runner with the labels `self-hosted,linux,x64,risc0-prover`.
 - Enabling: set the repository variable `REAL_PROOF_SELF_HOSTED=true`.
 
+Hardening before enabling it (red-team finding RT-05, `docs/security/redteam-2026-10.md`): the job runs any
+dispatched branch or pushed tag, and a self-hosted runner keeps `~/.risc0` between jobs, so an unreviewed ref
+could replace `r0vm` and later runs would trust it.
+
+- Restrict the job to the default branch (and protected tags): add a `github.ref` condition to its `if:`.
+- Use an ephemeral (just-in-time) runner, or wipe `~/.risc0`, `~/.cargo` and `target/` at the start of each job.
+- Do not persist `~/.risc0` across untrusted refs.
+
 The job has no `free-disk.sh` or `apt-get` step, so the runner must already have clang, libclang,
 pkg-config and libssl. Until such a runner exists, the committed local full run above is the evidence for
 the nightly tier.

@@ -7,7 +7,10 @@ set -euo pipefail
 seq_mode=1; keep=0; preflight_only=0
 while (( $# )); do
   case "$1" in
-    --sequencer-dev-mode) seq_mode="${2:?0 or 1}"; shift ;;
+    --sequencer-dev-mode)
+      seq_mode="${2:-}"; shift
+      [[ "$seq_mode" == 0 || "$seq_mode" == 1 ]] || { echo "usage: --sequencer-dev-mode takes 0 or 1" >&2; exit 2; }
+      ;;
     --keep) keep=1 ;;
     --preflight-only) preflight_only=1 ;;
     *) echo "usage: scripts/demo.sh [--sequencer-dev-mode 0|1] [--keep] [--preflight-only]" >&2; exit 2 ;;
@@ -21,15 +24,14 @@ ln_preflight
 if (( preflight_only )); then echo "preflight ok"; exit 0; fi
 export SEQ_RISC0_DEV_MODE="$seq_mode"
 SUMMARY="$LN/demo-summary.txt"
-phase() { printf '
-=== %s
-' "$*" | tee -a "$SUMMARY"; }
-# expect NAME ACTUAL eq|gt|ge EXPECTED (integers of any size)
+phase() { printf '\n=== %s\n' "$*" | tee -a "$SUMMARY"; }
+# expect NAME ACTUAL eq|gt|ge|le EXPECTED (integers of any size); sub A B prints A - B
+sub() { python3 -c 'import sys; print(int(sys.argv[1]) - int(sys.argv[2]))' "$1" "$2"; }
 expect() {
   local name="$1" got="$2" op="$3" want="$4"
   if python3 -c 'import sys
 a, op, b = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])
-sys.exit(0 if {"eq": a == b, "gt": a > b, "ge": a >= b}[op] else 1)' "$got" "$op" "$want"; then
+sys.exit(0 if {"eq": a == b, "gt": a > b, "ge": a >= b, "le": a <= b}[op] else 1)' "$got" "$op" "$want"; then
     echo "check $name: $got $op $want: ok" | tee -a "$SUMMARY"
   else
     echo "check $name: $got is not $op $want" | tee -a "$SUMMARY" >&2
@@ -42,8 +44,14 @@ on_exit() {
   if (( s != 0 )); then echo "demo FAILED (exit $s); logs in $LN/logs, summary in $SUMMARY" >&2; fi
 }
 
+# Never wipe an arbitrary DEMO_RUN_DIR: only an empty dir, a previous demo run (marker or summary) may be reused.
+if [[ -n "$(ls -A "$LN" 2>/dev/null)" && ! -f "$LN/.demo-run" && ! -f "$LN/demo-summary.txt" ]]; then
+  echo "demo: $LN exists and is not a demo run directory; refusing to delete it" >&2
+  exit 2
+fi
 rm -rf "${LN:?}"
 mkdir -p "$LN/logs"
+touch "$LN/.demo-run"
 : > "$SUMMARY"
 trap on_exit EXIT
 
@@ -102,12 +110,13 @@ a2="$(run_field auction liquidate --position "$p2" --keeper keeper --keeper-hold
 cli bid --auction "$a2" --coin-in-max 330000 --bidder-stable owner-stable --bidder-collateral owner-coll
 cli list-auctions --all | tee -a "$SUMMARY"
 u1="$(unbacked)"
-expect "unbacked debt after the shortfall" "$u1" gt 0
+expect "unbacked debt after the shortfall (R4 range, lower)" "$u1" ge 42154
+expect "unbacked debt after the shortfall (R4 range, upper)" "$u1" le 63200
 
 phase "F4: settle against the buffer, start a debt auction, take one lot (stablecoin burned, protocol tokens minted)"
 cli settle-debt --caller caller
 u2="$(unbacked)"
-expect "the buffer settled 29_500 of the bad debt" "$u2" eq "$((u1 - 29500))"
+expect "the buffer settled 29_500 of the bad debt" "$u2" eq "$(sub "$u1" 29500)"
 expect "enough bad debt for one lot" "$u2" ge 5000
 cli start-debt --caller caller
 cli dev token-transfer --from owner-stable --to taker-stable --amount 5000
@@ -115,7 +124,7 @@ tokens_before="$(balance_of taker-protocol)"
 cli take-debt --payer taker-stable --receiver taker-protocol --amount 5000
 expect "protocol tokens minted to the taker" "$(balance_of taker-protocol)" gt "$tokens_before"
 u3="$(unbacked)"
-expect "one lot of bad debt burned" "$u3" eq "$((u2 - 5000))"
+expect "one lot of bad debt burned" "$u3" eq "$(sub "$u2" 5000)"
 expect "bad debt still above the 5_000 freeze threshold" "$u3" gt 5000
 
 phase "freeze path: without a protocol token, bad debt above the threshold freezes new debt"

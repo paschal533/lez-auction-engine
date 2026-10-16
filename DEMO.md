@@ -11,7 +11,10 @@ auction engine and a mock protocol token. It then runs, with checks:
 All transactions are public, sent by `auction-cli` (own encoders; no spel). The guests deployed are the
 committed reproducible builds in `artifacts/guests/` (ADR-047).
 
-## Prerequisites (clean Ubuntu 22.04 or WSL Ubuntu)
+## Prerequisites (Linux or WSL Ubuntu)
+
+Tested on Ubuntu 24.04 under WSL. Ubuntu 22.04 is expected to work and will be exercised by the e2e job
+(Plan 3b Task 14, not yet added).
 
 - `sudo apt-get install -y build-essential clang libclang-dev pkg-config libssl-dev libpcsclite-dev python3 git curl`
 - Rust through rustup; `rust-toolchain.toml` selects 1.94.0.
@@ -30,6 +33,18 @@ flake (Open decision recorded in the Plan 3b plan and in SUBMISSION.md).
     scripts/demo.sh --sequencer-dev-mode 0   # RISC0_DEV_MODE=0 sequencer (RFP S2)
     scripts/demo.sh --keep                   # leave the sequencer running to explore with auction-cli
     scripts/demo.sh --preflight-only
+
+On the author's machine (WSL, repository on `/mnt/c`) run it through the wrapper, which sets the shared target
+directory: `scripts/wsl-env.sh scripts/demo.sh`. The script refuses to delete a `DEMO_RUN_DIR` that is not
+empty and not a previous demo run (exit 2).
+
+With `--keep` the sequencer stays up after the run. Explore it with `auction-cli` using the run's files:
+
+    auction-cli --deployment $HOME/lez-target/demo/deployment.json --state-dir $HOME/lez-target/demo/cli-state       --wallet-home $HOME/lez-target/demo/wallet-home host status
+
+Stop it with `kill "$(cat "$HOME/lez-target/demo/sequencer.pid")"`. Without `--keep` the script stops it itself.
+Preflight failures (exit 3 to 6) print their own `STOP`/`preflight:` reason and not `demo FAILED`; a failure
+after the preflight prints `demo FAILED (exit N)` with the log paths.
 
 A run takes about 16 minutes (blocks every 15 s; 971 s measured, warm build). The summary is written to
 `$HOME/lez-target/demo/demo-summary.txt` (`DEMO_RUN_DIR` overrides the directory).
@@ -61,5 +76,11 @@ committed guest does not match `artifacts/guests/manifest.json`.
 
 | Date | Commit | Sequencer | Result |
 |---|---|---|---|
-| 2026-10-16 | 21f5449 + Task 13 | RISC0_DEV_MODE=1 | demo complete (971 s, 37 CLI transactions submitted) |
-| | | RISC0_DEV_MODE=0 | not yet run locally (host memory); runs in CI (`e2e` workflow) |
+| 2026-10-16 | 28e31b0 | RISC0_DEV_MODE=1 | demo complete (971 s, 37 CLI transactions submitted; unbacked debt 42_289) |
+| 2026-10-16 | 28e31b0 + review fixes | RISC0_DEV_MODE=1 | demo complete (987 s, 37 CLI transactions submitted; unbacked debt 42_275, every check including the R4 range 42_154 to 63_200) |
+| | | RISC0_DEV_MODE=0 | not yet run locally (host memory); to be run by the e2e workflow (Plan 3b Task 14, not yet added) |
+
+The table above quotes the first run. The shortfall figures vary slightly from run to run, because the auction price
+decays with block time and the bid lands a few blocks earlier or later (42_289 and 42_275 in the two runs; the
+settle and lot steps then follow exactly: minus 29_500, minus 5_000). The buffer, keeper reward, token and freeze
+results are the same in every run. The demo checks the shortfall against R4's range, not an exact value.

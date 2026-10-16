@@ -25,9 +25,16 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 
 ## Reproduce in one command
 
-`scripts/demo.sh` starts a standalone LEZ v0.2.4 sequencer, deploys the programs and runs liquidation, bids, the
-surplus and debt auctions, a price move and the freeze path with checks ([DEMO.md](DEMO.md) has the prerequisites,
-flags and a recorded run).
+```bash
+scripts/bootstrap-lez.sh && scripts/demo.sh
+```
+
+`scripts/bootstrap-lez.sh` builds the LEZ v0.2.4 sequencer and wallet once (about 20 min cold). `scripts/demo.sh`
+then starts a standalone sequencer, deploys the programs and runs liquidation, bids, the surplus and debt auctions,
+a price move and the freeze path with checks. Prerequisites: Linux or WSL Ubuntu, the risc0 toolchain through
+`rzup` (pinned versions in [DEMO.md](DEMO.md)), port 3040 free, at least 20 GB free disk (3 GB on `C:` under WSL).
+On the author's machine (WSL, repository on `/mnt/c`) run it as `scripts/wsl-env.sh scripts/demo.sh`. Flags, a
+recorded run and the exit codes are in [DEMO.md](DEMO.md).
 
 ## Run the tests
 

@@ -156,7 +156,7 @@ Docker guests: `demo complete`, exit 0, 971 s, 37 transactions submitted by `auc
 what the Plan 3a run did not cover: the localnet price publisher (ADR-050), a shortfall (unbacked debt 42_289), the
 debt auction F4 (one 5_000 lot taken; 13_050 protocol tokens held afterwards) and the freeze path. Steps, values
 and the `RISC0_DEV_MODE=0` path: [DEMO.md](../../DEMO.md). The `RISC0_DEV_MODE=0` local run is deferred (host
-memory); CI runs it (`e2e` workflow).
+memory); to be run by the e2e workflow (Plan 3b Task 14, not yet added).
 
 ## Plan 2 run (spel)
 

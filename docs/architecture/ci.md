@@ -8,6 +8,7 @@ Workflows: `.github/workflows/core.yml` (every push and pull request), `fuzz.yml
 |--------------|-------|----------------|
 | `core` | `core.yml` | Format of our crates, clippy and tests of `auction_core`, the property tests with `PROPTEST_CASES=2000`, the Rust/Python differential check. No risc0 toolchain. |
 | `programs` | `core.yml` | The guests built with the pinned risc0 toolchain; workspace clippy; the engine, real-guest integration, SDK and CLI suites; the vendored stablecoin and token suites; the cycle regression check (ADR-048). |
+| `requirements` | `core.yml` | `scripts/check-requirements.py REQUIREMENTS.md`: every RFP-014 requirement has one row, and every test, golden file, script, CI job and document it names exists (an `#[ignore]`d test must be marked `[ignored]`); then the checker's own tests. It checks that evidence exists, not that a hosted job has run. |
 | `idl-drift` | `core.yml` | `tools/idl-gen` against both guest sources, diffed against the committed IDLs. |
 | `hook-patches` | `core.yml` | The exported hook patch series applied to pristine lez-programs, compared with `programs/stablecoin`. |
 | `coverage` | `core.yml` | `cargo llvm-cov` over the five Rust crates, then `scripts/check-coverage.py`: at least 80 % of lines per crate (ADR-049). |
@@ -85,6 +86,8 @@ scripts/demo.sh --sequencer-dev-mode "$N"
 
 `DEMO_MIN_HOME_GIB=5` (the default of 20 protects a WSL disk that grows into C:; a hosted runner is expected to have well over 5 GiB free after `free-disk.sh`, which prints `df` before and after, so the first hosted run gives the measured figure). `bootstrap-lez.sh` always runs: it fetches the pinned LEZ commit, which restores the sequencer and wallet configs that a cache hit lacks, and builds only the binary that is missing, so a hit never skips the configs and a miss builds everything. The cache is saved right after a successful bootstrap, so a failing demo keeps the cold build. Bootstrap has a 120 minute step limit and the demo 90, both below the job limit so the `if: always()` summary and artifact steps still run. The artifact holds `demo-summary.txt` and the sequencer log only; the run directory is never uploaded because `wallet-home` holds the throwaway keys, and the step log of `wallet account new` (which prints the throwaway recovery phrase) is not an artifact. Local equivalent: `scripts/wsl-env.sh scripts/demo.sh --sequencer-dev-mode 0` after `scripts/bootstrap-lez.sh`. The cache key carries `LEZ_REV`, read from `scripts/bootstrap-lez.sh` in a step before the restore, so bumping the pin never reuses stale binaries; a `concurrency` group keeps one run per ref at a time. Hosted cold and warm wall times: pending the first hosted run (a dispatch or schedule trigger only works from the default branch; the push trigger runs on the first push to `main`).
 
+`requirements` (`ubuntu-22.04`): `python3 scripts/check-requirements.py REQUIREMENTS.md`, then the checker tests. No toolchain is installed; the job takes seconds.
+
 ## Pinned versions
 
 Never floated, and there is no bare `rzup install` anywhere (it would float the components).
@@ -119,6 +122,7 @@ The host is Windows; cargo runs in WSL through the wrappers. From Git Bash wrap 
 | `programs`, checker tests | `python3 -m unittest discover -s scripts/tests -v` |
 | `real-proof-push` | `scripts/measure-proof.sh prove_settle_debt 19 3600` (times it and records peak RSS) |
 | `real-proof-nightly` | `scripts/prove-suite.sh 19 21600` (hours; the disk guard runs before each test) |
+| `requirements` | `python3 scripts/check-requirements.py REQUIREMENTS.md && python3 -m unittest discover -s scripts/tests -p 'test_check_requirements.py' -v` |
 | `idl-drift` | `scripts/wsl-env.sh scripts/ci/idl-drift.sh` |
 | `hook-patches` | `scripts/wsl-env.sh env LEZ_PROGRAMS=$HOME/lez-spikes/s1/lez-programs scripts/check-hook-patches.sh` |
 | `fuzz-nightly` | `scripts/wsl-env.sh scripts/fuzz-smoke.sh 60`, then `rm -rf "$HOME/lez-target/plan2/fuzz"` |

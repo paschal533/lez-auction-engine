@@ -69,6 +69,7 @@ MSYS_NO_PATHCONV=1 wsl -d Ubuntu-20.04 -e bash -lc   'cd /mnt/c/Users/user/Docum
 - Architecture: [docs/architecture/core.md](docs/architecture/core.md) (auction state machine), [docs/architecture/math.md](docs/architecture/math.md) (fixed-point arithmetic), [docs/architecture/hooks.md](docs/architecture/hooks.md) (stablecoin hooks), [docs/architecture/programs.md](docs/architecture/programs.md) (engine program, Plan 3 interfaces), [docs/architecture/sdk.md](docs/architecture/sdk.md) (SDK), [docs/architecture/security-checklist.md](docs/architecture/security-checklist.md) (per-instruction checklist)
 - Localnet smoke test: [docs/architecture/localnet.md](docs/architecture/localnet.md); deployed program ids and reference-price log: [DEPLOYMENTS.md](DEPLOYMENTS.md)
 - Threat model: [THREAT_MODEL.md](THREAT_MODEL.md)
+- RFP-014 requirements mapped to evidence, milestones and descopes: [REQUIREMENTS.md](REQUIREMENTS.md) (checked by `scripts/check-requirements.py`)
 - Plans: [docs/superpowers/plans/](docs/superpowers/plans/)
 
 ## Licence

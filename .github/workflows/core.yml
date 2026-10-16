@@ -87,3 +87,10 @@ jobs:
           --features auction_sdk/testing,auction_sdk/rpc --ignore-filename-regex "$IGNORE"
           --json --summary-only --output-path "$RUNNER_TEMP/cov.json"
       - run: python3 scripts/check-coverage.py "$RUNNER_TEMP/cov.json" --root "$GITHUB_WORKSPACE"
+
+  requirements:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check-requirements.py REQUIREMENTS.md
+      - run: python3 -m unittest discover -s scripts/tests -p 'test_check_requirements.py' -v

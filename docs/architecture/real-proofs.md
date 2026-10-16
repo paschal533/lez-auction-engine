@@ -9,6 +9,7 @@ private path call the prover. The PoC submits public transactions only (spec §8
 1. **RFP S2 / spec §9 end to end:** the localnet flow driven by `auction-cli` against a standalone
    sequencer started with `RISC0_DEV_MODE=0` (`scripts/demo.sh --sequencer-dev-mode 0`, CI job
    `localnet-e2e`; both added in Task 14). Nothing in that path accepts a dev-mode receipt.
+   CI: `.github/workflows/e2e.yml`, job `localnet-e2e` (`RISC0_DEV_MODE=0` on every push to `main`; both modes nightly).
 2. **Receipts:** every execution of an instruction's chained calls proved with the risc0 prover
    (`AUCTION_PROVE=1 RISC0_DEV_MODE=0`, external `r0vm` 3.0.5) and verified against its ImageID
    (`programs/integration_tests/tests/common/prove.rs`). These are the receipts the v0.3 port or the
@@ -34,7 +35,9 @@ Not measured in Task 1, deferred for disk space (each proving run grows the Wind
 - `prove_settle_debt` and `prove_bid_with_settlement` at po2 19, and `prove_ppe_observe_feed`: deferred
   to Task 7 (disk). The full suite then ran at po2 19 (below); `prove_ppe_observe_feed` was not re-run.
 
-Sequencer with `RISC0_DEV_MODE=0` (Plan 3a smoke, 34 transactions): deferred to Task 14 (disk).
+Sequencer with `RISC0_DEV_MODE=0`: run locally on 2026-10-16 as the full demo (`scripts/demo.sh
+--sequencer-dev-mode 0`: 973 s, 37 transactions, every check `ok`, sequencer about 84 MB, no `r0vm` process), which
+covers the Plan 3a smoke's path and more; see [DEMO.md](../../DEMO.md). CI: the `e2e` workflow (Task 14).
 
 ## Tiers
 

@@ -1,0 +1,76 @@
+name: e2e
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  localnet-e2e:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every push to main: RISC0_DEV_MODE=0 (RFP S2). Nightly and on dispatch: both modes.
+        sequencer_dev_mode: ${{ fromJSON(github.event_name == 'push' && '["0"]' || '["0","1"]') }}
+    env:
+      LEZ_DEPS: /home/runner/lez-deps
+      DEMO_RUN_DIR: /home/runner/demo
+      # The preflight default (20 GiB) protects a WSL disk that grows into C:. After free-disk.sh a hosted
+      # runner has about 30 GiB free before the LEZ build; 5 GiB still stops a run that is about to fill it.
+      DEMO_MIN_HOME_GIB: "5"
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/ci/free-disk.sh
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential clang libclang-dev pkg-config libssl-dev libpcsclite-dev
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: ./.github/actions/install-risc0
+      - uses: Swatinem/rust-cache@v2
+        with: { shared-key: e2e }
+      # The cache holds the two binaries only. bootstrap-lez.sh runs on every path: it fetches the pinned LEZ
+      # commit (which restores the sequencer and wallet configs a cache hit lacks) and builds only what is
+      # missing, so a hit never skips the configs and a miss builds everything.
+      - name: restore the LEZ v0.2.4 sequencer and wallet binaries
+        id: lez-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/runner/lez-deps/lez/target/debug/sequencer_service
+            /home/runner/lez-deps/lez/target/debug/wallet
+          key: lez-47eba256-ubuntu-22.04-bin-v1
+      - name: bootstrap the LEZ sequencer and wallet
+        id: bootstrap
+        timeout-minutes: 120
+        run: scripts/bootstrap-lez.sh
+      # Saved as soon as the build is done, so a failing demo does not throw the cold build away.
+      - name: save the LEZ binaries
+        if: always() && steps.bootstrap.outcome == 'success' && steps.lez-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /home/runner/lez-deps/lez/target/debug/sequencer_service
+            /home/runner/lez-deps/lez/target/debug/wallet
+          key: lez-47eba256-ubuntu-22.04-bin-v1
+      - name: one-command reproduction (spec §1.1) against a standalone sequencer
+        timeout-minutes: 90
+        run: scripts/demo.sh --sequencer-dev-mode ${{ matrix.sequencer_dev_mode }}
+      - name: demo summary
+        if: always()
+        run: |
+          if [[ -f "$DEMO_RUN_DIR/demo-summary.txt" ]]; then
+            { echo "### demo (RISC0_DEV_MODE=${{ matrix.sequencer_dev_mode }})"; echo '```'; tail -n 40 "$DEMO_RUN_DIR/demo-summary.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no demo-summary.txt was written" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      # Only the summary and the sequencer log: never the run directory (wallet-home holds the throwaway keys).
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: demo-${{ matrix.sequencer_dev_mode }}
+          path: |
+            /home/runner/demo/demo-summary.txt
+            /home/runner/demo/logs
+          if-no-files-found: warn

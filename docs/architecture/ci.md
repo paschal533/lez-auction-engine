@@ -1,6 +1,6 @@
 # Continuous integration
 
-Workflows: `.github/workflows/core.yml` (every push and pull request), `fuzz.yml` (nightly), `guests.yml` and `real-proofs.yml` (pushes to `main`, tags, schedule and dispatch). Everything the hosted jobs run can be run locally in WSL; the commands are listed per job below.
+Workflows: `.github/workflows/core.yml` (every push and pull request), `fuzz.yml` (nightly), `guests.yml`, `real-proofs.yml` and `e2e.yml` (pushes to `main`, tags where noted, schedule and dispatch). Everything the hosted jobs run can be run locally in WSL; the commands are listed per job below.
 
 ## Jobs
 
@@ -14,6 +14,7 @@ Workflows: `.github/workflows/core.yml` (every push and pull request), `fuzz.yml
 | `fuzz-nightly` | `fuzz.yml` | Nightly (01:33 UTC) and on dispatch: `scripts/fuzz-smoke.sh 300` runs the five `cargo-fuzz` targets of `fuzz/` for 300 s each on the nightly toolchain. |
 | `real-proof-push` | `real-proofs.yml` | Every push to `main`: `prove_settle_debt` proved with the risc0 prover (`RISC0_DEV_MODE=0`, po2 19) and its receipt verified; `scripts/check-proof-report.py` fails the job if the proof report is missing, empty, unverified or lacks `settle_debt` (ADR-045, tier B). |
 | `real-proof-nightly` | `real-proofs.yml` | Nightly (02:17 UTC), on dispatch and on `v*` / `rfp014-*` tags, on a self-hosted runner only: the whole ADR-036 suite proved, every receipt verified. Off unless the repository variable `REAL_PROOF_SELF_HOSTED` is `true` (ADR-045, tier C). |
+| `localnet-e2e` | `e2e.yml` | `scripts/bootstrap-lez.sh` then `scripts/demo.sh --sequencer-dev-mode N` against a standalone LEZ v0.2.4 sequencer: every push to `main` with `RISC0_DEV_MODE=0` (RFP S2), nightly (03:41 UTC) and on dispatch with both modes (matrix `sequencer_dev_mode`). Artifact `demo-<mode>`: `demo-summary.txt` and the sequencer log. |
 | `install-risc0` | `.github/actions/install-risc0` | Composite action used by `programs`: rzup and the pinned components, cached in `~/.risc0`. |
 
 ## What each job runs
@@ -74,6 +75,15 @@ python3 scripts/check-proof-report.py "$RUNNER_TEMP/proofs.jsonl" --expect settl
 The proving step has its own 80 minute limit (340 for the nightly job), shorter than the job limit, so the `if: always()` checker and artifact upload still run when it times out. The checker step runs `if: always()`, so a prover killed for memory or by the step timeout fails with "the prover did not finish" instead of an empty log. `proofs.jsonl` is uploaded as `real-proofs-push`. Only the cheapest instruction fits a hosted runner (ADR-045); the end-to-end real-proof requirement (RFP S2) is the `localnet-e2e` job with a `RISC0_DEV_MODE=0` sequencer (Task 14).
 
 `real-proof-nightly` (`[self-hosted, linux, x64, risc0-prover]`, 350 minute limit). Same steps as above with `--test chains -- --test-threads 1` (all three chain-budget tests under `AUCTION_PROVE=1`) and `--expect 'liquidate,take_debt,check_solvency(freeze)'`; uploads `real-proofs-nightly`. The runner is provisioned as described in [real-proofs.md](real-proofs.md); it has no `free-disk.sh` or apt step. The job is skipped, and CI stays green, while `REAL_PROOF_SELF_HOSTED` is unset. `scripts/prove-suite.sh` is the local equivalent. `.github/actionlint.yaml` declares the `risc0-prover` runner label so `actionlint` accepts it. Neither job was observed on a hosted runner in Plan 3b: dispatch and schedule need the workflow on the default branch (the push job runs on the first push to `main`), so its first hosted timing is recorded in [real-proofs.md](real-proofs.md) after the merge.
+
+`localnet-e2e` (`ubuntu-22.04`, 240 minute limit, matrix `sequencer_dev_mode`: `["0"]` on push, `["0","1"]` on schedule and dispatch). It runs `scripts/ci/free-disk.sh`, installs the build packages (including `libpcsclite-dev` for the wallet), Rust 1.94.0 and the pinned risc0 components, restores a cache of the two LEZ binaries (`sequencer_service`, `wallet`; key `lez-47eba256-ubuntu-22.04-bin-v1`), then:
+
+```bash
+scripts/bootstrap-lez.sh
+scripts/demo.sh --sequencer-dev-mode "$N"
+```
+
+`DEMO_MIN_HOME_GIB=5` (the default of 20 protects a WSL disk that grows into C:; a hosted runner has about 30 GiB free after `free-disk.sh`). `bootstrap-lez.sh` always runs: it fetches the pinned LEZ commit, which restores the sequencer and wallet configs that a cache hit lacks, and builds only the binary that is missing, so a hit never skips the configs and a miss builds everything. The cache is saved right after a successful bootstrap, so a failing demo keeps the cold build. Bootstrap has a 120 minute step limit and the demo 90, both below the job limit so the `if: always()` summary and artifact steps still run. The artifact holds `demo-summary.txt` and the sequencer log only; the run directory is never uploaded because `wallet-home` holds the throwaway keys, and the step log of `wallet account new` (which prints the throwaway recovery phrase) is not an artifact. Local equivalent: `scripts/wsl-env.sh scripts/demo.sh --sequencer-dev-mode 0` after `scripts/bootstrap-lez.sh`. Hosted cold and warm wall times: pending the first hosted run (a dispatch or schedule trigger only works from the default branch; the push trigger runs on the first push to `main`).
 
 ## Pinned versions
 

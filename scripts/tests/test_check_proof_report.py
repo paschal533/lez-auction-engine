@@ -42,6 +42,20 @@ class ReportTest(unittest.TestCase):
         errors = cpr.check(write([proof("liquidate")]), ["liquidate", "bid_with_settlement"])
         self.assertEqual(errors, ["bid_with_settlement: no proof in the report (killed or skipped?)"])
 
+    def test_malformed_json_is_an_error_not_a_traceback(self):
+        f = tempfile.NamedTemporaryFile("w", delete=False, suffix=".jsonl")
+        f.write('{"label": "liquidate"' + chr(10))
+        f.close()
+        errors = cpr.check(f.name, [])
+        self.assertIn("cannot be read", errors[0])
+        os.unlink(f.name)
+
+    def test_verified_must_be_the_boolean_true(self):
+        row = proof("liquidate")
+        row["verified"] = "false"
+        errors = cpr.check(write([row]), ["liquidate"])
+        self.assertIn("not verified", errors[0])
+
     def test_complete_report_passes(self):
         path = write([proof("liquidate"), proof("bid_with_settlement")])
         self.assertEqual(cpr.check(path, ["liquidate", "bid_with_settlement"]), [])

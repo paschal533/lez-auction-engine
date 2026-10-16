@@ -6,6 +6,8 @@ on:
   schedule:
     - cron: "17 2 * * *"
   workflow_dispatch:
+permissions:
+  contents: read
 env:
   RISC0_DEV_MODE: "0"
   AUCTION_PROVE: "1"
@@ -26,6 +28,7 @@ jobs:
         with: { shared-key: programs }
       - run: RISC0_DEV_MODE=1 cargo test --locked -p engine_integration_tests --test real_proofs --no-run
       - name: prove the cheapest instruction and verify its receipt
+        timeout-minutes: 80
         run: PROOF_REPORT="$RUNNER_TEMP/proofs.jsonl" cargo test --locked -p engine_integration_tests --test real_proofs -- --ignored --exact prove_settle_debt --test-threads 1 --nocapture
       - if: always()
         run: python3 scripts/check-proof-report.py "$RUNNER_TEMP/proofs.jsonl" --expect settle_debt
@@ -47,6 +50,7 @@ jobs:
         with: { shared-key: programs }
       - run: RISC0_DEV_MODE=1 cargo test --locked -p engine_integration_tests --test chains --no-run
       - name: prove every instruction of the ADR-036 suite
+        timeout-minutes: 340
         run: PROOF_REPORT="$RUNNER_TEMP/proofs.jsonl" cargo test --locked -p engine_integration_tests --test chains -- --test-threads 1 --nocapture
       - if: always()
         run: python3 scripts/check-proof-report.py "$RUNNER_TEMP/proofs.jsonl" --expect 'liquidate,take_debt,check_solvency(freeze)'

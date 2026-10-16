@@ -18,20 +18,25 @@ mkdir -p "$out"
 [[ -z "${fresh:-}" ]] || rm -f "$out/proofs.jsonl"
 "$repo/scripts/disk-guard.sh"
 # Build once, outside the timed runs (dev mode: the build never proves).
-exe="$("$repo/scripts/wsl-cargo.sh" test --locked -p engine_integration_tests --test chains --no-run --message-format=json 2>"$out/build.log" \
+exe="$("$repo/scripts/wsl-cargo.sh" test --locked -p engine_integration_tests --test chains --no-run --message-format=json-render-diagnostics 2>"$out/build.log" \
   | python3 -c 'import json, sys
 for line in sys.stdin:
     m = json.loads(line)
     if m.get("reason") == "compiler-artifact" and m.get("executable") and m["target"]["name"] == "chains":
-        print(m["executable"])' | tail -1)"
-[[ -x "$exe" ]] || { echo "prove-suite: chains test binary not found (build output: $out/build.log)" >&2; exit 2; }
+        print(m["executable"])' | tail -1)" || true
+# A failed build prints nothing here (|| true above); rustc diagnostics are in build.log.
+[[ -n "$exe" && -x "$exe" ]] || { echo "prove-suite: chains test binary not found (build output: $out/build.log)" >&2; exit 2; }
 # shellcheck disable=SC1090
 . "${LEZ_ENV_FILE:-$HOME/lez-spikes/s1/env.sh}"
 for t in "${tests[@]}"; do
   "$repo/scripts/disk-guard.sh"
   ( cd "$repo" && AUCTION_PROVE=1 RISC0_DEV_MODE=0 AUCTION_PROVE_PO2="$po2" PROOF_REPORT="$out/proofs.jsonl" \
-      /usr/bin/time -v timeout "$limit" "$exe" --exact "$t" --test-threads 1 --nocapture ) \
-    > "$out/$t.log" 2>&1 || { echo "prove-suite: $t failed, see $out/$t.log" >&2; exit 1; }
+      /usr/bin/time -v timeout --kill-after=30 "$limit" "$exe" --exact "$t" --test-threads 1 --nocapture ) \
+    > "$out/$t.log" 2>&1 || {
+      # timeout kills the test's whole process group (r0vm included); this also catches a test that
+      # failed on its own and left its prover child behind. Safe: one proving job at a time (see above).
+      pkill -x r0vm || true
+      echo "prove-suite: $t failed, see $out/$t.log" >&2; exit 1; }
   echo "prove-suite: $t done: $(sed -n 's/.*Elapsed (wall clock) time (h:mm:ss or m:ss): //p' "$out/$t.log")"
 done
 # A partial run (test names given) cannot expect every label; run the check again without names to finish.

@@ -23,6 +23,12 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 - `crates/auction_core`: collateral, surplus and debt logic with property tests, a differential model in Python, and Kani proof harnesses.
 - Spikes S1 to S7 are recorded, with decisions in the design log: toolchain and multi-instance build (S1, ADR-018), host authentication of the engine (S2, ADR-019), arg-seeded PDAs created on first use (S3, ADR-020), protocol token minted from an engine PDA (S7, ADR-021), piecewise-linear discount kept (S4, ADR-022), `Accounting` updated at chain end (S6, ADR-023). The S5 pause-onset policy is ADR-007 (amended).
 
+## Reproduce in one command
+
+`scripts/demo.sh` starts a standalone LEZ v0.2.4 sequencer, deploys the programs and runs liquidation, bids, the
+surplus and debt auctions, a price move and the freeze path with checks ([DEMO.md](DEMO.md) has the prerequisites,
+flags and a recorded run).
+
 ## Run the tests
 
 Git Bash on Windows cannot resolve the LEZ and risc0 git dependencies of the workspace (`programs/UPSTREAM.md`), so the core checks run in Linux/WSL through the wrapper (ADR-025, `.github/workflows/core.yml`). Rust 1.94.0 (pinned by `rust-toolchain.toml`) and Python 3 are enough. Format is checked only on our crates with `-p` (vendored code keeps its upstream formatting). From the repository root in WSL:

@@ -82,8 +82,8 @@ scripts/localnet-smoke.sh step_stop
 All program instructions are encoded by `auction_sdk` (enum index, ADR-040): the Plan 2 workarounds are gone (sorted
 host IDL copy, finding 1; IDL copy without `pda` markings, finding 3; u128 copy of the i128 gains, finding 6).
 Bind-time verification is `auction-cli host bind` itself (ADR-027), replacing Plan 2's `step_verify_and_bind` marker
-and `decode-config` check. Not covered on localnet: F4 and the freeze path (they need a shortfall, hence a moving
-price: Plan 3b oracle publisher), `settle_empty`, `close_*` (TTL 4 h), the private path.
+and `decode-config` check. F4 and the freeze path are covered by the Plan 3b demo
+([DEMO.md](../../DEMO.md)). Not covered on localnet: `settle_empty`, `close_*` (TTL 4 h), the private path.
 
 Cleanup: state lives under `$HOME/lez-target/plan3a-localnet/` (sequencer home, wallet, CLI state, logs, exported
 guests, `deployment.json` of the run); `step_stop` stops only the sequencer that `step_sequencer` started. The
@@ -147,6 +147,16 @@ stops before any sequencer starts:
 
 `ln_build` refuses to build under WSL when `CARGO_TARGET_DIR` is unset: run the smoke and the demo through
 `scripts/wsl-env.sh`.
+
+## Plan 3b demo run
+
+Run of 2026-10-16 of `scripts/demo.sh` (dev-mode sequencer, `RISC0_DEV_MODE=1`) on S1's LEZ build and the committed
+Docker guests: `demo complete`, exit 0, 971 s, 37 transactions submitted by `auction-cli`
+(`grep -c '^submitted'` on the log), every check `ok`, `host frozen: yes`, `no failed execution check`. It adds
+what the Plan 3a run did not cover: the localnet price publisher (ADR-050), a shortfall (unbacked debt 42_289), the
+debt auction F4 (one 5_000 lot taken; 13_050 protocol tokens held afterwards) and the freeze path. Steps, values
+and the `RISC0_DEV_MODE=0` path: [DEMO.md](../../DEMO.md). The `RISC0_DEV_MODE=0` local run is deferred (host
+memory); CI runs it (`e2e` workflow).
 
 ## Plan 2 run (spel)
 

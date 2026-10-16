@@ -70,6 +70,9 @@ MSYS_NO_PATHCONV=1 wsl -d Ubuntu-20.04 -e bash -lc   'cd /mnt/c/Users/user/Docum
 - Localnet smoke test: [docs/architecture/localnet.md](docs/architecture/localnet.md); deployed program ids and reference-price log: [DEPLOYMENTS.md](DEPLOYMENTS.md)
 - Threat model: [THREAT_MODEL.md](THREAT_MODEL.md)
 - RFP-014 requirements mapped to evidence, milestones and descopes: [REQUIREMENTS.md](REQUIREMENTS.md) (checked by `scripts/check-requirements.py`)
+- Submission record and hashes: [SUBMISSION.md](SUBMISSION.md); one-command demo: [DEMO.md](DEMO.md); cycles and transaction sizes: [CYCLES.md](CYCLES.md)
+- Privacy stub: [docs/PRIVACY.md](docs/PRIVACY.md); LEZ v0.3 port plan: [docs/v03-port-plan.md](docs/v03-port-plan.md)
+- Upstream and outreach drafts (unposted, unfiled): [docs/outreach/](docs/outreach/)
 - Plans: [docs/superpowers/plans/](docs/superpowers/plans/)
 
 ## Licence

@@ -17,6 +17,10 @@ if [[ -x "$LEZ_DEPS/lez/target/debug/sequencer_service" && -x "$LEZ_DEPS/lez/tar
   echo "bootstrap-lez: sequencer_service, wallet and their configs already present under $LEZ_DEPS/lez"
   exit 0
 fi
+if [[ "$LEZ_DEPS" == "$HOME/lez-spikes/s1" ]]; then
+  echo "bootstrap-lez: S1 is incomplete; set LEZ_DEPS to another directory (this script never modifies S1)" >&2
+  exit 4
+fi
 need() {
   command -v "$1" >/dev/null || {
     echo "bootstrap-lez: missing $1. On Ubuntu: sudo apt-get install -y build-essential clang libclang-dev pkg-config libssl-dev libpcsclite-dev python3 git curl; Rust via rustup (rust-toolchain.toml pins 1.94.0)" >&2

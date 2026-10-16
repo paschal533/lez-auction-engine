@@ -60,13 +60,15 @@ ln_preflight() {
     echo "preflight: missing LEZ binaries:$missing; run scripts/bootstrap-lez.sh (LEZ_DEPS=$LEZ_DEPS)" >&2
     exit 4
   fi
-  for t in python3 ss awk sha256sum; do
+  for t in python3 ss awk; do
     command -v "$t" >/dev/null || { echo "preflight: missing tool $t" >&2; exit 4; }
   done
-  local holder
-  holder="$(ss -ltnp 2>/dev/null | grep ":$PORT " | sed -n 's/.*pid=\([0-9]*\).*/pid \1/p' | head -1 || true)"
-  if ss -ltnp 2>/dev/null | grep -q ":$PORT "; then
-    echo "preflight: port $PORT is in use (${holder:-unknown process}); stop it first (scripts/localnet-smoke.sh step_stop stops a sequencer this repository started)" >&2
+  # Capture once: `ss | grep -q` under pipefail can read a SIGPIPE (141) as "port free".
+  local listeners holder
+  listeners="$(ss -ltnp 2>/dev/null || true)"
+  if grep -q ":$PORT " <<<"$listeners"; then
+    holder="$(sed -n "/:$PORT /s/.*pid=\([0-9]*\).*/pid \1/p" <<<"$listeners" | head -1)"
+    echo "preflight: port $PORT is in use (${holder:-unknown process}); stop it first (for a smoke run: scripts/localnet-smoke.sh step_stop)" >&2
     exit 5
   fi
   "$REPO/scripts/check-guests.sh" --sha-only "$GUESTS_DIR" \
@@ -129,13 +131,15 @@ ln_accounts() {
   for l in $LABELS; do echo pw | "$W" account new public --label "$l"; done
   : > "$LN/run.env"
   # New keys mean a new engine admin and config address: forget the previous run's (ln_engine records them).
-  python3 - "$DEP" <<'PY'
+  if [[ -f "$DEP" ]]; then
+    python3 - "$DEP" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1], encoding="utf-8"))
 d["engine_admin"] = None
 d["config"] = None
 json.dump(d, open(sys.argv[1], "w", encoding="utf-8"), indent=2)
 PY
+  fi
 }
 
 ln_auth() {

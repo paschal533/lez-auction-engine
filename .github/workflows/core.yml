@@ -7,6 +7,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@1.94.0
         with: { components: "rustfmt, clippy" }
       # Vendored crates keep upstream formatting (`cargo +nightly fmt` per the lez-programs Makefile); our crates are listed explicitly.
@@ -26,6 +27,7 @@ jobs:
       RISC0_DEV_MODE: "1"
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - run: scripts/ci/free-disk.sh
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev pkg-config libssl-dev
       - uses: dtolnay/rust-toolchain@1.94.0
@@ -51,6 +53,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@1.94.0
       - uses: Swatinem/rust-cache@v2
         with: { shared-key: idl }
@@ -60,7 +63,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, persist-credentials: false }
       - name: pristine lez-programs 64c01210
         run: |
           git clone --filter=blob:none https://github.com/logos-blockchain/lez-programs "$RUNNER_TEMP/lez-programs"
@@ -75,6 +78,7 @@ jobs:
       IGNORE: '(/tests/|_tests\.rs$|/testing/|/methods/|/examples/)'
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - run: scripts/ci/free-disk.sh
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev pkg-config libssl-dev
       - uses: dtolnay/rust-toolchain@1.94.0
@@ -94,5 +98,6 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - run: python3 scripts/check-requirements.py REQUIREMENTS.md
       - run: python3 -m unittest discover -s scripts/tests -p 'test_check_requirements.py' -v

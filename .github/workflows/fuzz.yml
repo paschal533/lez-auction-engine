@@ -13,6 +13,7 @@ jobs:
     env: { RISC0_SKIP_BUILD: "1" }
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - run: scripts/ci/free-disk.sh
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev pkg-config libssl-dev
       - uses: dtolnay/rust-toolchain@nightly

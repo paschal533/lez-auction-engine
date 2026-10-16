@@ -42,6 +42,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - run: scripts/ci/free-disk.sh
       - uses: dtolnay/rust-toolchain@1.94.0
       - uses: ./.github/actions/install-risc0

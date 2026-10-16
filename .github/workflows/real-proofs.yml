@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - run: scripts/ci/free-disk.sh
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev pkg-config libssl-dev
       - uses: dtolnay/rust-toolchain@1.94.0
@@ -44,6 +45,7 @@ jobs:
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@1.94.0
       - uses: ./.github/actions/install-risc0
       - uses: Swatinem/rust-cache@v2

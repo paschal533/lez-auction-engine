@@ -30,6 +30,7 @@ jobs:
       DEMO_MIN_HOME_GIB: "5"
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - run: scripts/ci/free-disk.sh
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential clang libclang-dev pkg-config libssl-dev libpcsclite-dev
       - uses: dtolnay/rust-toolchain@1.94.0

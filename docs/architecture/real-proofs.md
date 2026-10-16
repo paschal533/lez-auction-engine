@@ -18,7 +18,7 @@ private path call the prover. The PoC submits public transactions only (spec §8
 
 ## Measurement (Plan 3b Task 1, 2026-10-13)
 
-Machine: WSL Ubuntu-20.04, `nproc` = 8, 11 GiB RAM + 16 GiB swap, r0vm 3.0.5, composite receipts.
+Machine: WSL distribution `Ubuntu-20.04` (it reports Ubuntu 24.04.4), `nproc` = 8, 11 GiB RAM + 16 GiB swap, r0vm 3.0.5, composite receipts.
 
 | Test | po2 | Status | Wall | Peak RSS (MiB) | Executions / segments (from PROOF lines) |
 |---|---|---|---|---|---|
@@ -36,7 +36,7 @@ Not measured in Task 1, deferred for disk space (each proving run grows the Wind
   to Task 7 (disk). The full suite then ran at po2 19 (below); `prove_ppe_observe_feed` was not re-run.
 
 Sequencer with `RISC0_DEV_MODE=0`: run locally on 2026-10-16 as the full demo (`scripts/demo.sh
---sequencer-dev-mode 0`: 973 s, 37 transactions, every check `ok`, sequencer about 84 MB, no `r0vm` process), which
+--sequencer-dev-mode 0`: 973 s, 37 transactions, every check `ok`; sampled with `ps` early in the run: sequencer about 84 MB resident, no `r0vm` process), which
 covers the Plan 3a smoke's path and more; see [DEMO.md](../../DEMO.md). CI: the `e2e` workflow (Task 14).
 
 ## Tiers

@@ -83,8 +83,8 @@ committed guest does not match `artifacts/guests/manifest.json`.
 On CI the `e2e` workflow (job `localnet-e2e`) runs the demo with `RISC0_DEV_MODE=0` on every push to `main` and in
 both modes nightly; its first hosted run happens after the merge. The `RISC0_DEV_MODE=0` run takes about as long as
 the dev-mode one: LEZ v0.2.4's sequencer executes public transactions with the risc0 executor and never proves them
-(see [real-proofs.md](docs/architecture/real-proofs.md)), so the mode switches off the executor's dev shortcuts, not
-on a prover. The sequencer used about 84 MB of memory in that run.
+(see [real-proofs.md](docs/architecture/real-proofs.md)), so with either setting the sequencer only executes. Sampled
+with `ps` early in that run, the sequencer's resident memory was about 84 MB and no `r0vm` process was running.
 
 The table above quotes the first run. The shortfall figures vary slightly from run to run, because the auction price
 decays with block time and the bid lands a few blocks earlier or later (42_289, 42_275 and 42_276 in the three runs; the

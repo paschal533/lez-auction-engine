@@ -533,6 +533,9 @@ Spike S6 (docs/spikes/S6.md) priced updating `Accounting` per bid. Measured with
 **Status**
 Accepted (S6)
 
+**Amended (Plan 3b, Task 7)**
+The cost argument above counted executor cycles. With real proofs (po2 19) a non-final `bid` takes 1,638,400 cycles in 4 segments; adding the 94,904-cycle per-bid update gives 1,733,304, which fits the 2,097,152 cycles of those segments, so the update would add no segment and no proving time. The decision stays for the reason ADR-036 records (the final bid already writes `Accounting`), and the per-bid update is an M1 review item. See the ADR-036 amendment for the measurement.
+
 ---
 
 ## ADR-024: Plan 1 Core Amendments to the Spec
@@ -804,6 +807,9 @@ Cycle numbers are indicative; Plan 3 re-measures with the real-proof pipeline an
 **Status**
 Accepted (Plan 2, Task 17)
 
+**Amended (Plan 3b, Task 7)**
+Real-proof re-measure (ADR-045, po2 19): non-final `bid` engine execution (`scripts/measure-proof.sh prove_bid 19`) 1,638,400 total cycles in 4 segments, 938.2 s for the three executions (712.4 s engine, 126.3 s and 99.5 s for the two token calls); the `bid` of the full-suite run (a different scenario, 1,703,936 total cycles, also 4 segments) gives the same result; the S6 per-bid `Accounting` update (+94,904 cycles, 1,733,304 in all) fits the 4 x 2^19 = 2,097,152 cycles of the segments already paid for: marginal proving cost 0. Outcome: ADR-023 stands for the reason above (the final bid already writes `Accounting`); under proving the per-bid update would cost nothing, so it is an M1 review item. No engine change in Plan 3b.
+
 ---
 
 ## ADR-035: Second Host Instance via a Guest Feature
@@ -1047,7 +1053,7 @@ Spec §1.3 and §9 ask for one real-proof (`RISC0_DEV_MODE=0`) end-to-end job pe
 The proved guests are native builds of the same source (the deployed Docker builds have different ImageIDs, ADR-047): a receipt shows the source is provable within the limits, not that a particular deployed binary was proved. Hosted timing scales by an assumed factor of 4 from an 8-core machine; Task 7 records the first CI timings and moves a tier if they exceed the budgets. Tier B was established at po2 18 (4 × 367.6 s = 1470 s ≤ 2700 s); `settle_debt` and `bid_with_settlement` at po2 19 are deferred to Task 7's local full run (disk), which confirms it. On the Windows dev machine, proving memory grows the pagefile on C:, which limits how many local proofs can run.
 
 **Status**
-Accepted (Plan 3b, Task 1; controller ruling PO2=19, PUSH=B, NIGHTLY=C); finalised in Task 7.
+Accepted (Plan 3b, Task 1); finalised in Task 7 (CI tiers as built: PUSH B, NIGHTLY C, first hosted timings pending in docs/architecture/real-proofs.md; the workflow is not on `main` yet).
 
 ---
 
@@ -1104,7 +1110,7 @@ Spec §11: `CYCLES.md` records cycles per instruction against 32 Mi and transact
 - (C) Real-proof cycles as the baseline.
 
 **Decision**
-(B). `chains.rs` records every measured instruction (`CYCLES_OUT`, executor cycles and borsh size of the signed transaction, built by the same helper that submits it); `scripts/check-cycles.py` fails on growth above 10 % (exactly 10 % passes), on a label added or removed without a baseline change, on more than 10 executions and on any execution over 32 Mi; `CYCLES.md` is generated from the same file. Under `AUCTION_PROVE=1` nothing is recorded and the summary line is `PROOF[..] TOTAL`, so prover and executor cycles are never mixed. The baseline is the local native build; CI measures its own native build. Executor cycles are deterministic for one ELF and input, and toolchain differences between native builds stay well inside 10 %. The 17 measured totals are within 0.63 % of the ADR-036 table (Plan 3a and 3b code changes since). The P2 load test asserts two things: a first-round bid with 6 live auctions stays within 5 % of the same bid with exactly 1 live auction (1,611,475 to 1,612,210 cycles against a reference of 1,612,060), and the 18 interleaved bids (6 auctions, 3 rounds) are uniform within 5 % (measured spread 0.05 %).
+(B). `chains.rs` records every measured instruction (`CYCLES_OUT`, executor cycles and borsh size of the signed transaction, built by the same helper that submits it); `scripts/check-cycles.py` fails on growth above 10 % (exactly 10 % passes), on a label added or removed without a baseline change, on more than 10 executions and on any execution over 32 Mi; `CYCLES.md` is generated from the same file. Under `AUCTION_PROVE=1` nothing is recorded and the summary line is `PROOF[..] TOTAL`, so prover and executor cycles are never mixed. The baseline is the local native build; CI measures its own native build. Executor cycles are deterministic for one ELF and input, and toolchain differences between native builds stay well inside 10 %. Measured on the first hosted run: the CI cycles differ from the local baseline on 16 of the 17 labels, the largest relative difference being 0.082 % (`start_surplus(burn)`); the gate passed and the baseline was kept. The 17 measured totals are within 0.63 % of the ADR-036 table (Plan 3a and 3b code changes since). The P2 load test asserts two things: a first-round bid with 6 live auctions stays within 5 % of the same bid with exactly 1 live auction (1,611,475 to 1,612,210 cycles against a reference of 1,612,060), and the 18 interleaved bids (6 auctions, 3 rounds) are uniform within 5 % (measured spread 0.05 %).
 
 **Trade-offs**
 Executor cycles, not proving time: proving is tiered separately (ADR-045). Refreshing the baseline is a reviewed change in the same commit as its cause.

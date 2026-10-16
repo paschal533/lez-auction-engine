@@ -1,0 +1,55 @@
+name: real-proofs
+on:
+  push:
+    branches: [main]
+    tags: ["v*", "rfp014-*"]
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+env:
+  RISC0_DEV_MODE: "0"
+  AUCTION_PROVE: "1"
+  AUCTION_PROVE_PO2: "19"
+jobs:
+  # Tier B (ADR-045): the cheapest instruction, proved and verified on a hosted runner on every push to main.
+  real-proof-push:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/ci/free-disk.sh
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev pkg-config libssl-dev
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: ./.github/actions/install-risc0
+      - uses: Swatinem/rust-cache@v2
+        with: { shared-key: programs }
+      - run: RISC0_DEV_MODE=1 cargo test --locked -p engine_integration_tests --test real_proofs --no-run
+      - name: prove the cheapest instruction and verify its receipt
+        run: PROOF_REPORT="$RUNNER_TEMP/proofs.jsonl" cargo test --locked -p engine_integration_tests --test real_proofs -- --ignored --exact prove_settle_debt --test-threads 1 --nocapture
+      - if: always()
+        run: python3 scripts/check-proof-report.py "$RUNNER_TEMP/proofs.jsonl" --expect settle_debt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: real-proofs-push, path: "${{ runner.temp }}/proofs.jsonl", if-no-files-found: warn }
+
+  # Tier C (ADR-045): the whole ADR-036 suite needs more than a hosted runner can give, so this job runs on a
+  # self-hosted runner and is off unless the repository variable REAL_PROOF_SELF_HOSTED is "true".
+  real-proof-nightly:
+    if: (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/')) && vars.REAL_PROOF_SELF_HOSTED == 'true'
+    runs-on: [self-hosted, linux, x64, risc0-prover]
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.0
+      - uses: ./.github/actions/install-risc0
+      - uses: Swatinem/rust-cache@v2
+        with: { shared-key: programs }
+      - run: RISC0_DEV_MODE=1 cargo test --locked -p engine_integration_tests --test chains --no-run
+      - name: prove every instruction of the ADR-036 suite
+        run: PROOF_REPORT="$RUNNER_TEMP/proofs.jsonl" cargo test --locked -p engine_integration_tests --test chains -- --test-threads 1 --nocapture
+      - if: always()
+        run: python3 scripts/check-proof-report.py "$RUNNER_TEMP/proofs.jsonl" --expect 'liquidate,take_debt,check_solvency(freeze)'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: real-proofs-nightly, path: "${{ runner.temp }}/proofs.jsonl", if-no-files-found: warn }

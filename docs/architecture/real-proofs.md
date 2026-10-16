@@ -32,7 +32,7 @@ Not measured in Task 1, deferred for disk space (each proving run grows the Wind
 - `prove_liquidate` at po2 20: not run; expected about 9.4 GiB from the po2 18→19 doubling, above the
   5632 MiB ceiling; PO2 = 19 by controller ruling.
 - `prove_settle_debt` and `prove_bid_with_settlement` at po2 19, and `prove_ppe_observe_feed`: deferred
-  to Task 7 (disk), measured in its local full run.
+  to Task 7 (disk). The full suite then ran at po2 19 (below); `prove_ppe_observe_feed` was not re-run.
 
 Sequencer with `RISC0_DEV_MODE=0` (Plan 3a smoke, 34 transactions): deferred to Task 14 (disk).
 
@@ -47,14 +47,47 @@ Sequencer with `RISC0_DEV_MODE=0` (Plan 3a smoke, 34 transactions): deferred to 
   liquidate-bid path is proved by the Tier C self-hosted job when it is enabled, plus the committed local
   full run (R3). Tier A is out: 4 × 2729 s for `liquidate` alone exceeds the
   2700 s budget. Tier B holds at po2 18 (4 × 367.6 s = 1470 s ≤ 2700 s); the po2 19 time of
-  `settle_debt` is confirmed in Task 7.
+  `settle_debt` is confirmed in Task 7: 304 s at po2 19 in the local full run (2 segments), so the
+  assumed hosted factor of 4 gives about 1216 s, inside the 2700 s budget.
 - Nightly and on tags: Tier C: a self-hosted job (disabled unless `vars.REAL_PROOF_SELF_HOSTED == 'true'`)
   plus a committed local full run in `docs/evidence/` (R4). The hosted estimate
   4 × 2729 s × 10.12 = 110,478 s exceeds even three jobs (3 × 19,800 s = 59,400 s).
-- Privacy circuit (`observe_feed`): deferred to Task 7 (disk); not scheduled until measured (R5).
+- Privacy circuit (`observe_feed`): not scheduled (`PPE_NIGHTLY=no`); `prove_ppe_observe_feed` was not
+  re-run in Task 7's local full run.
 
-Workflow constants for Task 7: `AUCTION_PROVE_PO2=19`, `PUSH_TIER=B`, `NIGHTLY_TIER=C`, `PPE_NIGHTLY=no`
-(until Task 7 measures it).
+Workflow constants as built in Task 7 (`.github/workflows/real-proofs.yml`): `AUCTION_PROVE_PO2=19`,
+`PUSH_TIER=B`, `NIGHTLY_TIER=C`, `PPE_NIGHTLY=no`.
+
+## Local full run (Plan 3b Task 7, 2026-10-16)
+
+The whole ADR-036 suite was proved at po2 19 with `scripts/prove-suite.sh 19 21600`: 42 executions, 75
+segments, all receipts verified, 17 labels. The three chain-budget tests took 5:02:43, 32:35 and 47:52, each
+with a peak RSS of about 4.6 GiB. The numbers, the `summary.txt` and the digest of `proofs.jsonl` are in
+[docs/evidence/real-proofs-2026-10.md](../evidence/real-proofs-2026-10.md); the per-instruction proving table
+is in `CYCLES.md` ("Real proofs").
+
+## Hosted timings
+
+Pending. `real-proofs.yml` is not on `main`, and a schedule or dispatch trigger only works from the default
+branch, so no hosted run of `real-proof-push` or `real-proof-nightly` exists yet. The first timing of
+`real-proof-push` (`settle_debt`, po2 19) is recorded here after the merge to `main`. If that job is killed
+(exit 137 or "did not finish" from the checker), the rule is: lower `AUCTION_PROVE_PO2` by one and dispatch
+once more; if it still fails, move the tier down and update ADR-045 and the workflow in the same change.
+
+## Optional self-hosted runner
+
+`real-proof-nightly` (the whole ADR-036 suite) runs only on a self-hosted runner. The job is disabled by
+default and is not required for CI to be green: while the repository variable `REAL_PROOF_SELF_HOSTED` is
+unset, the job is skipped.
+
+- Requirements: Linux x64, at least 16 GiB RAM, at least 8 cores, at least 60 GB disk, and `rzup` with the
+  pinned components (see `.github/actions/install-risc0` for the versions).
+- Registration: a repository runner with the labels `self-hosted,linux,x64,risc0-prover`.
+- Enabling: set the repository variable `REAL_PROOF_SELF_HOSTED=true`.
+
+The job has no `free-disk.sh` or `apt-get` step, so the runner must already have clang, libclang,
+pkg-config and libssl. Until such a runner exists, the committed local full run above is the evidence for
+the nightly tier.
 
 ## Running a proof locally
 

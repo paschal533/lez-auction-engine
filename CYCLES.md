@@ -49,4 +49,33 @@ Every auction then settles with a final bid and `type_reserved` returns to 0.
 
 ## Real proofs
 
-See `docs/architecture/real-proofs.md` and the evidence linked from ADR-045 (Task 7).
+Proving cost per instruction, from the local full run of 2026-10-16 (`AUCTION_PROVE=1`, `RISC0_DEV_MODE=0`,
+po2 19, commit 0dec410; details and the digest of the report in
+`docs/evidence/real-proofs-2026-10.md`). Each row sums every execution of the instruction's chain: the
+engine call and the token and stablecoin calls it chains to. Seconds are prover wall time on an 8-core
+machine, not executor cycles; see `docs/architecture/real-proofs.md` (ADR-045).
+
+| Instruction | Executions | Segments | Seconds |
+|---|---|---|---|
+| `bid` | 3 | 6 | 856 |
+| `bid_final` | 4 | 7 | 1118 |
+| `check_solvency(burn+freeze)` | 3 | 5 | 883 |
+| `check_solvency(freeze)` | 2 | 4 | 693 |
+| `claim_leftover` | 2 | 3 | 520 |
+| `close_surplus` | 2 | 3 | 507 |
+| `liquidate` | 5 | 10 | 1681 |
+| `observe_feed` | 1 | 2 | 441 |
+| `set_collateral_config` | 1 | 3 | 456 |
+| `settle_debt` | 1 | 2 | 304 |
+| `settle_debt(burn)` | 2 | 3 | 500 |
+| `start_debt` | 1 | 2 | 407 |
+| `start_debt(burn)` | 2 | 4 | 521 |
+| `start_surplus` | 3 | 5 | 654 |
+| `start_surplus(burn)` | 4 | 6 | 749 |
+| `take_debt` | 3 | 5 | 732 |
+| `take_surplus` | 3 | 5 | 650 |
+| Total | 42 | 75 | 11,673 |
+
+The seconds column adds the per-execution prover times, so it excludes executor time, receipt verification
+and test setup; the three test processes took 6 h 23 min of wall time in all (5:02:43, 32:35 and 47:52).
+

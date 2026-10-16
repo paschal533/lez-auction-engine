@@ -6,9 +6,9 @@ Every required RFP-014 id must have one row. A PoC or PoC (partial) row needs ev
 token must resolve:
   `name`            a Rust fn preceded by #[test] or #[kani::proof] attributes (not #[ignore]d)
   `name`[ignored]   the same, #[ignore]d on purpose (a named CI job runs it)
-  golden:NAME       cli/tests/golden/NAME.txt exists and a CLI test names "NAME"
+  golden:NAME       cli/tests/golden/NAME.txt exists and a CLI test calls check("NAME", ..)
   script:PATH       an existing script
-  ci:FILE/JOB       job JOB exists in .github/workflows/FILE
+  ci:FILE/JOB       JOB is a key under `jobs:` in .github/workflows/FILE
   doc:PATH          an existing file or directory
 Plan 4, M1-M7 and Descoped rows need a note.
 """
@@ -38,11 +38,29 @@ def rust_sources(root):
 
 
 def find_test(sources, name):
-    """None if absent, else True when #[ignore]d."""
-    m = re.search(r"#\[(?:test|kani::proof)\]((?:[^{])*?)\bfn\s+" + re.escape(name) + r"\s*[(<]", sources)
-    if not m:
-        return None
-    return "#[ignore" in m.group(1)
+    """None if absent, else True when #[ignore]d. The order of the attributes does not matter."""
+    pattern = (r"((?:\s*(?:#\[[^\]]*\]|//[^\n]*))*)\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?"
+               r"fn\s+" + re.escape(name) + r"\s*[(<]")
+    for m in re.finditer(pattern, sources):
+        attrs = m.group(1)
+        if "#[test]" in attrs or "#[kani::proof]" in attrs:
+            return "#[ignore" in attrs
+    return None
+
+
+def job_names(workflow_text):
+    """Keys directly under the top-level `jobs:` block."""
+    names, inside = [], False
+    for line in workflow_text.splitlines():
+        if re.match(r"jobs:\s*(#.*)?$", line):
+            inside = True
+        elif inside and re.match(r"\S", line) and not line.startswith("#"):
+            break
+        elif inside:
+            m = re.match(r"  ([A-Za-z0-9_-]+):", line)
+            if m:
+                names.append(m.group(1))
+    return names
 
 
 def resolve(token, root, sources):
@@ -62,14 +80,16 @@ def resolve(token, root, sources):
             return f"golden:{value} has no cli/tests/golden/{value}.txt"
         tests = "".join(open(os.path.join(root, "cli/tests", f), encoding="utf-8").read()
                         for f in os.listdir(os.path.join(root, "cli/tests")) if f.endswith(".rs"))
-        return None if f'"{value}"' in tests else f'golden:{value} is not named by any CLI test'
+        if re.search(r'check\(\s*"' + re.escape(value) + '"', tests):
+            return None
+        return f'golden:{value} is not checked by any CLI test (check("{value}", ..))'
     if kind in ("script", "doc"):
         return None if os.path.exists(path) else f"{kind}:{value} does not exist"
     wf, _, job = value.partition("/")
     wf_path = os.path.join(root, ".github/workflows", wf)
     if not os.path.exists(wf_path):
         return f"ci:{value}: no workflow {wf}"
-    if not re.search(rf"^  {re.escape(job)}:\s*$", open(wf_path, encoding="utf-8").read(), re.M):
+    if job not in job_names(open(wf_path, encoding="utf-8").read()):
         return f"ci:{value}: no job {job} in .github/workflows/{wf}"
     return None
 

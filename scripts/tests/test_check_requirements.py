@@ -73,6 +73,36 @@ fn slow_test() {}
         self.assertEqual(self.errors("| F1 | x | PoC | `real_test` | |\n", required=("F1", "F2")),
                          ["F2: missing from REQUIREMENTS.md"])
 
+    def test_ci_key_outside_the_jobs_block_fails(self):
+        self.write(".github/workflows/e2e.yml",
+                   "on:\n  push:\n    branches: [main]\njobs:\n  localnet-e2e:\n    runs-on: x\nenv:\n  other:\n    a: b\n")
+        self.assertEqual(self.errors("| F1 | x | PoC | ci:e2e.yml/push, ci:e2e.yml/other | |\n"),
+                         ["F1: ci:e2e.yml/push: no job push in .github/workflows/e2e.yml",
+                          "F1: ci:e2e.yml/other: no job other in .github/workflows/e2e.yml"])
+        self.assertEqual(self.errors("| F1 | x | PoC | ci:e2e.yml/localnet-e2e | |\n"), [])
+
+    def test_ignore_before_test_is_detected(self):
+        self.write("crates/y/src/lib.rs", """
+#[ignore = "slow"]
+#[test]
+fn early_ignored() {}
+
+#[test]
+#[should_panic]
+#[ignore]
+fn middle_ignored() {}
+""")
+        self.assertEqual(self.errors("| F1 | x | PoC | `early_ignored`, `middle_ignored` | |\n"),
+                         ["F1: `early_ignored` is #[ignore]d; write `early_ignored`[ignored] and name the job that runs it",
+                          "F1: `middle_ignored` is #[ignore]d; write `middle_ignored`[ignored] and name the job that runs it"])
+        self.assertEqual(self.errors("| F1 | x | PoC | `early_ignored`[ignored], `middle_ignored`[ignored] | |\n"), [])
+
+    def test_golden_must_be_checked_not_merely_quoted(self):
+        self.write("cli/tests/golden/other.txt", "exit: 0\n")
+        self.write("cli/tests/other.rs", 'assert_eq!(name, "other");\n')
+        self.assertEqual(self.errors("| F1 | x | PoC | golden:other | |\n"),
+                         ['F1: golden:other is not checked by any CLI test (check("other", ..))'])
+
     def test_duplicate_id_fails(self):
         row = "| F1 | x | PoC | `real_test` | |\n"
         self.assertEqual(self.errors(row + row), ["F1: listed twice"])

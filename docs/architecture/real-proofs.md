@@ -33,7 +33,8 @@ Not measured in Task 1, deferred for disk space (each proving run grows the Wind
 - `prove_liquidate` at po2 20: not run; expected about 9.4 GiB from the po2 18→19 doubling, above the
   5632 MiB ceiling; PO2 = 19 by controller ruling.
 - `prove_settle_debt` and `prove_bid_with_settlement` at po2 19, and `prove_ppe_observe_feed`: deferred
-  to Task 7 (disk). The full suite then ran at po2 19 (below); `prove_ppe_observe_feed` was not re-run.
+  to Task 7 (disk). The full suite then ran at po2 19 (below); `prove_ppe_observe_feed` has never completed a run (its
+  attempts on 2026-10-14 ended when the WSL VM died from host memory pressure) and was not part of that run.
 
 Sequencer with `RISC0_DEV_MODE=0`: run locally on 2026-10-16 as the full demo (`scripts/demo.sh
 --sequencer-dev-mode 0`: 973 s, 37 transactions, every check `ok`; sampled with `ps` early in the run: sequencer about 84 MB resident, no `r0vm` process), which
@@ -55,8 +56,8 @@ covers the Plan 3a smoke's path and more; see [DEMO.md](../../DEMO.md). CI: the 
 - Nightly and on tags: Tier C: a self-hosted job (disabled unless `vars.REAL_PROOF_SELF_HOSTED == 'true'`)
   plus a committed local full run in `docs/evidence/` (R4). The hosted estimate
   4 × 2729 s × 10.12 = 110,478 s exceeds even three jobs (3 × 19,800 s = 59,400 s).
-- Privacy circuit (`observe_feed`): not scheduled (`PPE_NIGHTLY=no`); `prove_ppe_observe_feed` was not
-  re-run in Task 7's local full run.
+- Privacy circuit (`observe_feed`): not scheduled (`PPE_NIGHTLY=no`); `prove_ppe_observe_feed` has never
+  completed a run and was not part of Task 7's local full run.
 
 Workflow constants as built in Task 7 (`.github/workflows/real-proofs.yml`): `AUCTION_PROVE_PO2=19`,
 `PUSH_TIER=B`, `NIGHTLY_TIER=C`, `PPE_NIGHTLY=no`.

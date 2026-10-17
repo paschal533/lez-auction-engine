@@ -2,7 +2,8 @@
 
 Repository: this repository, at the commit tagged `rfp014-poc`. The tag does not exist yet: the author creates
 it at submission (`git rev-parse rfp014-poc` then gives the full hash). `scripts/submission-hashes.sh`
-reproduces every hash below from that commit. Until the tag exists, the work is on the branch `feat/plan-3b`,
+reproduces every hash below from that commit. Links to the files and commit are added once the `rfp014-poc`
+tag exists (Task 18 or the author). Until the tag exists, the work is on the branch `feat/plan-3b`,
 which has not been merged to `main`.
 
 ## What is built
@@ -33,6 +34,7 @@ submission. No recording exists in this repository.
 
 ## Deployable guests (artifacts/guests/manifest.json)
 - builder: `risczero/risc0-guest-builder:r0.1.88.0@sha256:3e12f71bacd27527a61dea96fa0e53e468c99aa261d3a1019b593f6dbd943eb3`
+- binaries verified against the manifest: sha256 recomputed for every artifacts/guests/*.bin; ImageIDs are echoed from the manifest
 - auction_engine: ImageID `bb506524bfab7ce5d45a4f4836c00a90d7f23a769a2b6c988c66eb82d456f342`, sha256 `991779d757f089ed7acdb1f3df5698f62b27c286b86720cbc3791fc0f029a3bb`
 - stablecoin: ImageID `bda698c4e929e4f63ad7b2949c8e413c26fc69df02434844067baded95c7b40d`, sha256 `9188efcce3ae239408119492d1b70a7424c938ee43892256b303bf5293062ee4`
 - token: ImageID `14b3bc6cc129d0359f9595ba0f60a13e4a8df08ffe8eb1a83251c47abecc67a8`, sha256 `bc8c24bddefc00628a7f659fe2d04dd074868250167a0334b0e6ae5c13e56bc9`
@@ -52,15 +54,15 @@ submission. No recording exists in this repository.
 - DEMO.md: sha256 `9a9831293c5d7cd668cee29675f8353356eb1f9e8adbead122462dcf4a6c821b`
 - THREAT_MODEL.md: sha256 `eb924d92172c179a8b72feaca4a32a27269fcde9939f198112c8e17856641095`
 - docs/security/redteam-2026-10.md: sha256 `e7bdc5c9ed2243e53e29b8daae91b91a9862f7cbc8f868d9ae524dad4450bbdf`
-- docs/architecture/real-proofs.md: sha256 `8a3c8c5cf52779efc8f32916e8f7895293d912dbd303b306c19cae54684d718b`
-- docs/evidence/real-proofs-2026-10.md: sha256 `db1dbaaa0b7d51c2958ad3a94927d301328adea5ef6f3523ca2222ec0d7c535e`
+- docs/architecture/real-proofs.md: sha256 `2e3ab27feb55186ef211ac45af2ba52f96bd0b99e29733a78c3695846030fc40`
+- docs/evidence/real-proofs-2026-10.md: sha256 `5b5c2851c9560081a21d95d7653d27acad502908cdc07a9ca7e14a802d5f7912`
 
 ## Honest notes
 - LEZ v0.2.4 executes public transactions without proving them. A `RISC0_DEV_MODE=0` sequencer therefore does
   not prove them either; real receipts are produced separately for every execution of each instruction
   (ADR-045). The `RISC0_DEV_MODE=0` demo ran locally, not on a hosted runner.
 - Real proofs: the full ADR-036 suite was proved locally (42 executions, all receipts verified;
-  `docs/evidence/real-proofs-2026-10.md`). The privacy circuit (`prove_ppe_observe_feed`) has never been run.
+  `docs/evidence/real-proofs-2026-10.md`). The privacy circuit (`prove_ppe_observe_feed`) has never completed a run.
   The hosted tiers (push tier B, nightly tier C) have not run: the workflows are not on `main`, and tier C
   needs a self-hosted runner that is off by default.
 - The localnet end-to-end workflow (`e2e.yml`) has never run on a hosted runner.

@@ -17,8 +17,8 @@ verified against the ImageID of the natively built guest.
 | Command | `scripts/prove-suite.sh 19 21600` |
 
 The three tests of `programs/integration_tests/tests/chains.rs` ran one at a time, each in its own process.
-`prove_ppe_observe_feed` (the privacy circuit over `observe_feed`) was not re-run: `PPE_NIGHTLY=no` in
-ADR-045. The `observe_feed` row below is the public-path execution of that instruction, not the privacy circuit.
+`prove_ppe_observe_feed` (the privacy circuit over `observe_feed`) was not run: `PPE_NIGHTLY=no` in
+ADR-045, and it has never completed a run (earlier attempts died with the WSL VM). The `observe_feed` row below is the public-path execution of that instruction, not the privacy circuit.
 
 An honest note on the run: two earlier attempts died before finishing because the Windows host ran out of
 commit memory (event 2004), not because of the prover. The fix was to stop other applications and cap WSL at

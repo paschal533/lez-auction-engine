@@ -28,7 +28,8 @@ spel issue draft. The patches do not touch them.)
 The engine-only hooks require both that the immediate caller program id is the bound engine program and that
 the bound engine-authority PDA is authorised in the transaction (Variant C; `docs/architecture/hooks.md`
 "Binding and authentication", ADR-019, ADR-026). The host stores both ids in `LiquidationEngineState`
-(PDA `SHA-256("STABLECOIN__LIQUIDATION_ENGINE__")` under the stablecoin program id); it does not need to know the
+(a PDA under the stablecoin program id; its seed is risc0's `sha::Impl::hash_bytes`, i.e. SHA-256, of the
+32-byte domain `STABLECOIN__LIQUIDATION_ENGINE__`); it does not need to know the
 engine's seed scheme. `set_liquidation_engine` rejects zero ids.
 
 `set_liquidation_engine` is **top-level only** (`caller_program_id == 0`). The existing admin and freeze checks
@@ -75,9 +76,13 @@ account list changes. Only the freeze authority's existing `unfreeze` clears it;
 
 ## Tests
 
-The upstream suite passes unchanged (`scripts/check-hook-patches.sh` applies the series to a pristine checkout
-of lez-programs 64c01210 and compares the result with our tree; our vendored suites run in CI job
-`programs`). The hook tests live in `programs/stablecoin` (binding, the proportional bound and its rounding,
+`scripts/check-hook-patches.sh` (in `lez-auction-engine`) checks only that the series applies with `git am` to a
+pristine checkout of lez-programs 64c01210 and that the patched tree equals our vendored tree; it does not run
+any tests. We have not run the upstream test suite against the patched tree as a separate step; our vendored
+copy of the stablecoin tests runs as part of our own CI. The series adds code and new tests and does not edit any
+existing test. The one change to existing upstream code is in `checks.rs` (patch 0003): the body of
+`assert_position_is_collateralized` moves into a new `is_position_collateralized` returning a bool, and the
+assert now calls it. The comparison is unchanged and its callers (`generate_debt`, `withdraw_collateral`) are unchanged. The hook tests live in `programs/stablecoin` (binding, the proportional bound and its rounding,
 health at the boundary, freeze); the attack cases are listed in `THREAT_MODEL.md` "Authentication of the
 engine", and the engine-side tests are named in `REQUIREMENTS.md` F7.
 

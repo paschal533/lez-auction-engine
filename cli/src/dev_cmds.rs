@@ -1,4 +1,4 @@
-//! Dev commands: the localnet setup steps (tokens, oracle, balances) that used to need spel.
+//! Dev commands: the dev-network setup steps (tokens, oracle, balances) that used to need spel.
 
 use std::io::Write;
 
@@ -14,11 +14,14 @@ use crate::{
     output::kv,
 };
 
-/// The only network the dev commands (mock tokens, mock oracles) may act on.
-const LOCALNET: &str = "localnet";
+/// The named dev networks the sending dev commands (mock tokens, mock oracles) may act on: the
+/// throwaway localnet and the public LEZ v0.2.4 legacy testnet (`scripts/testnet-legacy.sh`). Matched
+/// exactly. A name on this list is never enough on its own: the node's block 1 must also be the one the
+/// deployment file recorded (`verify_chain_identity`).
+const DEV_NETWORKS: &[&str] = &["localnet", "testnet-legacy"];
 const CHECK_BALANCE: &str = "dev balance --account <account>";
 
-/// Read-only dev commands run anywhere; the others sign, so they need the localnet named by the
+/// Read-only dev commands run anywhere; the others sign, so they need a named dev network in the
 /// deployment file AND the chain it recorded (ADR-046; Plan 3a M6: a label alone let `--rpc` aim them
 /// at any node).
 pub(crate) fn is_read_only(cmd: &DevCommand) -> bool {
@@ -31,9 +34,10 @@ pub(crate) fn is_read_only(cmd: &DevCommand) -> bool {
 pub fn dev<C: Chain>(env: &Env<C>, cmd: &DevCommand, out: &mut dyn Write) -> Result<(), CliError> {
     if !is_read_only(cmd) {
         env.refuse_at_ms()?;
-        if env.deployment.network != LOCALNET {
+        if !DEV_NETWORKS.contains(&env.deployment.network.as_str()) {
             return Err(CliError::Usage(format!(
-                "dev commands that send are for the localnet only (the deployment file names network {:?})",
+                "dev commands that send are for the named dev networks only ({}); the deployment file names network {:?}",
+                DEV_NETWORKS.join(", "),
                 env.deployment.network
             )));
         }

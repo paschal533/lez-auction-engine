@@ -9,7 +9,7 @@ pub enum CliError {
     Usage(String),
     #[error("verification failed: {0}")]
     Verify(SdkError),
-    #[error("transaction dropped (not applied by block {height}): nothing was applied; re-quote and resend (spec §6.5)")]
+    #[error("transaction dropped (not applied by block {height}): check the signer's nonce before acting; if it did not move, nothing was applied: re-quote and resend (spec §6.5)")]
     Dropped { height: u64 },
     /// Sent, but no verdict: the lock is kept and nothing is resent (exit 1, S4).
     #[error("{0}")]

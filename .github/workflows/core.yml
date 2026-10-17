@@ -19,6 +19,7 @@ jobs:
         with: { python-version: "3.12" }
       - run: cargo run --locked -q -p auction_core --example vectors > /tmp/vectors.json && python3 tools/differential/check.py /tmp/vectors.json
       - run: scripts/tests/demo-preflight.sh
+      - run: scripts/tests/testnet-legacy-preflight.sh
 
   programs:
     runs-on: ubuntu-22.04

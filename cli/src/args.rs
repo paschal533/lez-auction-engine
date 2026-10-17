@@ -29,6 +29,10 @@ pub struct Cli {
     /// Evaluate quotes at this clock (ms) instead of the chain's CLOCK_01.
     #[arg(long, global = true)]
     pub at_ms: Option<u64>,
+    /// Blocks without inclusion after which a sent transaction counts as dropped (spec §6.5).
+    /// Raise it on a slow or busy chain (scripts/testnet-legacy.sh uses 10).
+    #[arg(long, global = true, default_value_t = 5, value_parser = clap::value_parser!(u64).range(1..))]
+    pub drop_after_blocks: u64,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -396,11 +400,11 @@ pub enum DevCommand {
     },
     /// Print the hash of block 1 of the node (`chain_genesis_hash` for the deployment file, ADR-046).
     ChainId,
-    /// Move the localnet market price (ADR-050): new price account, host rotation, engine follow-up.
-    /// The price source signs more than once, so on a real localnet it must be `wallet auth-transfer
+    /// Move the dev-network market price (ADR-050): new price account, host rotation, engine follow-up.
+    /// The price source signs more than once, so on a real node it must be `wallet auth-transfer
     /// init`-ed first (ADR-018).
     OraclePublish(OraclePublishCmd),
-    /// Re-publish the current price before the oracle reaches its age limit (localnet keeper). Same
+    /// Re-publish the current price before the oracle reaches its age limit (dev-network keeper). Same
     /// price-source requirement as `oracle-publish`.
     Keeper {
         #[command(flatten)]
@@ -420,7 +424,7 @@ pub enum DevCommand {
 /// The flags `dev oracle-publish` and `dev keeper` share (ADR-050).
 #[derive(Debug, Args)]
 pub struct OraclePublishCmd {
-    /// The price-source account (signs the new price account; one per localnet).
+    /// The price-source account (signs the new price account; one per deployment).
     #[arg(long)]
     pub price_source: String,
     /// Collateral per 1 stablecoin, RAY (1e27).
@@ -433,6 +437,17 @@ pub struct OraclePublishCmd {
     /// First window tried; each publish takes the next free one (part of the account address).
     #[arg(long, default_value_t = 3_600_000)]
     pub base_window_ms: u64,
+}
+
+impl Cli {
+    /// The confirmation settings of this invocation: the defaults with `--drop-after-blocks`.
+    #[must_use]
+    pub fn confirm_settings(&self) -> auction_sdk::confirm::ConfirmSettings {
+        auction_sdk::confirm::ConfirmSettings {
+            drop_after_blocks: self.drop_after_blocks,
+            ..auction_sdk::confirm::ConfirmSettings::default()
+        }
+    }
 }
 
 impl Command {
@@ -547,6 +562,25 @@ mod tests {
         assert_eq!(note(&["config"]), None);
         let given = note(&["--deployment", "/x/d.json", "close-debt", "--caller", "c"]);
         assert!(given.expect("note").contains("d.json"));
+    }
+
+    #[test]
+    fn drop_after_blocks_defaults_to_5_and_can_be_raised_but_not_zeroed() {
+        let parse = |extra: &[&str]| {
+            let mut argv = vec!["auction-cli"];
+            argv.extend_from_slice(extra);
+            argv.extend_from_slice(&["host", "status"]);
+            Cli::try_parse_from(argv)
+        };
+        let default = parse(&[]).expect("parses");
+        assert_eq!(
+            default.confirm_settings(),
+            auction_sdk::confirm::ConfirmSettings::default()
+        );
+        assert_eq!(default.confirm_settings().drop_after_blocks, 5);
+        let raised = parse(&["--drop-after-blocks", "10"]).expect("parses");
+        assert_eq!(raised.confirm_settings().drop_after_blocks, 10);
+        assert!(parse(&["--drop-after-blocks", "0"]).is_err());
     }
 
     #[test]

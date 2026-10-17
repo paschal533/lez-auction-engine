@@ -185,7 +185,7 @@ impl<C: Chain> Env<C> {
     fn with_check_hint(&self, e: CliError, meta: &TxMeta) -> CliError {
         match e {
             CliError::Unknown(m) => CliError::Unknown(format!(
-                "outcome unknown, lock kept ({m}). Do not resend: check with `auction-cli {}` or wait {} blocks and check again; the lock in {} clears itself once the window has passed",
+                "outcome unknown, lock kept ({m}). Do not resend: check the signer's nonce before acting, with `auction-cli {}`, or wait {} blocks and check again; the lock in {} clears itself once the window has passed",
                 meta.check,
                 self.confirm.drop_after_blocks,
                 self.lock_dir().display()

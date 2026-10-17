@@ -1,5 +1,5 @@
-//! `dev oracle-publish` and `dev keeper` (ADR-050): the localnet price publisher. The dev-command guard
-//! (localnet + recorded chain, ADR-046) has already run in `dev_cmds::dev`.
+//! `dev oracle-publish` and `dev keeper` (ADR-050): the dev-network price publisher. The dev-command
+//! guard (a named dev network + the recorded chain, ADR-046) has already run in `dev_cmds::dev`.
 
 use std::io::Write;
 use std::time::Duration;

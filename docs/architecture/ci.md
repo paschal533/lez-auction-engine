@@ -8,7 +8,7 @@ Schedules are weekly, on Sunday (UTC), not nightly: the repository is private, a
 
 | Job / action | Where | What it covers |
 |--------------|-------|----------------|
-| `core` | `core.yml` | Format of our crates, clippy and tests of `auction_core`, the property tests with `PROPTEST_CASES=2000`, the Rust/Python differential check. No risc0 toolchain. |
+| `core` | `core.yml` | Format of our crates, clippy and tests of `auction_core`, the property tests with `PROPTEST_CASES=2000`, the Rust/Python differential check, the preflight script tests of `scripts/demo.sh` and `scripts/testnet-legacy.sh` (stubbed, no network). No risc0 toolchain. |
 | `programs` | `core.yml` | The guests built with the pinned risc0 toolchain; workspace clippy; the engine, real-guest integration, SDK and CLI suites; the vendored stablecoin and token suites; the cycle regression check (ADR-048). |
 | `requirements` | `core.yml` | `scripts/check-requirements.py REQUIREMENTS.md`: every RFP-014 requirement has one row, and every test, golden file, script, CI job and document it names exists (an `#[ignore]`d test must be marked `[ignored]`); then the checker's own tests. It checks that evidence exists, not that a hosted job has run. |
 | `idl-drift` | `core.yml` | `tools/idl-gen` against both guest sources, diffed against the committed IDLs. |

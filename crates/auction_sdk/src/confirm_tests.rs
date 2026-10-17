@@ -491,7 +491,8 @@ fn an_empty_nonce_reply_is_an_error_not_nonce_zero() {
         }
     }
     let e = confirm(&NoNonces, &id(k::CALLER), 0, 0, &fast(), &|_| {}).expect_err("empty reply");
-    assert!(matches!(e, SdkError::Chain(m) if m.contains("no nonce")));
+    // Never read as nonce 0: after the tolerated poll errors it is an unknown outcome naming the cause.
+    assert!(matches!(e, SdkError::Unconfirmed(m) if m.contains("no nonce")));
 }
 
 /// Height 10 at the first read and 14 afterwards, drop window 5: the re-read under the lock is one
@@ -638,4 +639,79 @@ fn a_panic_after_the_send_keeps_the_lock() {
     let lock = dir.path().join(format!("{}.lock", id(k::CALLER)));
     assert!(lock.exists(), "unwinding after the send keeps the lock");
     assert_eq!(fx.chain.sent().len(), 1);
+}
+
+/// Delegates to a fixture; the poll reads (after the two pre-send nonce reads) fail `fail` times in
+/// a row, then work again.
+struct BrieflyUnreachable<'a> {
+    fx: &'a crate::testing::FixtureChain,
+    nonce_reads: std::cell::Cell<u32>,
+    fail: u32,
+}
+
+impl Chain for BrieflyUnreachable<'_> {
+    fn account(&self, i: &AccountId) -> SdkResult<lee_core::account::Account> {
+        self.fx.account(i)
+    }
+    fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<lee_core::account::Nonce>> {
+        let n = self.nonce_reads.get() + 1;
+        self.nonce_reads.set(n);
+        if n > 2 && n <= 2 + self.fail {
+            return Err(SdkError::Chain("getAccountsNonces: HTTP 502".into()));
+        }
+        self.fx.nonces(ids)
+    }
+    fn last_block_id(&self) -> SdkResult<u64> {
+        self.fx.last_block_id()
+    }
+    fn blocks(&self, a: u64, b: u64) -> SdkResult<Vec<crate::chain::BlockSummary>> {
+        self.fx.blocks(a, b)
+    }
+    fn send(&self, tx: &lee::PublicTransaction) -> SdkResult<[u8; 32]> {
+        self.fx.send(tx)
+    }
+}
+
+fn submit_on(chain: &dyn Chain, fx: &standard::Fixture, dir: &Path) -> SdkResult<Submitted> {
+    submit(
+        chain,
+        &TestKeys::of(&[k::CALLER]),
+        &observe_plan(fx),
+        dir,
+        &fast(),
+        &|_| {},
+    )
+}
+
+#[test]
+fn a_few_consecutive_poll_errors_are_tolerated() {
+    let fx = standard::standard();
+    let dir = tempfile::tempdir().expect("tmp");
+    let chain = BrieflyUnreachable {
+        fx: &fx.chain,
+        nonce_reads: std::cell::Cell::new(0),
+        fail: MAX_CONSECUTIVE_POLL_ERRORS - 1,
+    };
+    let s = submit_on(&chain, &fx, dir.path()).expect("waits through the outage");
+    assert!(matches!(s.outcome, Outcome::Included { .. }));
+    assert_eq!(fx.chain.sent().len(), 1, "sent once");
+    assert!(is_empty_dir(dir.path()), "a verdict releases the lock");
+}
+
+#[test]
+fn poll_errors_beyond_the_limit_are_unconfirmed_and_keep_the_lock() {
+    let fx = standard::standard();
+    let dir = tempfile::tempdir().expect("tmp");
+    let chain = BrieflyUnreachable {
+        fx: &fx.chain,
+        nonce_reads: std::cell::Cell::new(0),
+        fail: MAX_CONSECUTIVE_POLL_ERRORS,
+    };
+    let e = submit_on(&chain, &fx, dir.path()).expect_err("gives up");
+    assert!(
+        matches!(&e, SdkError::Unconfirmed(m) if m.contains("HTTP 502") && m.contains("check the nonce")),
+        "{e}"
+    );
+    assert_eq!(fx.chain.sent().len(), 1, "never resent");
+    assert!(dir.path().join(format!("{}.lock", id(k::CALLER))).exists());
 }

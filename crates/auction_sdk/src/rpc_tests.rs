@@ -250,7 +250,9 @@ fn reads_use_the_documented_methods_and_fail_as_chain_errors() {
     assert_eq!(m.join()["method"], "getAccount");
 
     let m = mock(Behavior::Garbled);
-    let chain = RpcChain::connect_with_timeout(&m.url, SHORT).expect("connect");
+    let chain = RpcChain::connect_with_timeout(&m.url, SHORT)
+        .expect("connect")
+        .with_read_retry(ReadRetry::NONE);
     assert!(matches!(chain.last_block_id(), Err(SdkError::Chain(_))));
     m.join();
 }
@@ -348,4 +350,163 @@ fn live_rpc_reads_height_clock_and_blocks() {
     assert!(crate::chain::clock_ms(&c).expect("clock") > 0);
     let b = c.blocks(head, head).expect("block");
     assert_eq!(b[0].id, head);
+}
+
+/// A mock answering up to `behaviors.len()` connections in order; `join` returns how many requests
+/// it received (it stops waiting for the next one after a short idle bound).
+fn mock_seq(behaviors: Vec<Behavior>) -> (String, JoinHandle<Vec<serde_json::Value>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://{}", listener.local_addr().expect("addr"));
+    listener.set_nonblocking(true).expect("nonblocking");
+    let handle = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        for behavior in behaviors {
+            let deadline = std::time::Instant::now() + Duration::from_millis(1500);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((s, _)) => break s,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() > deadline {
+                            return seen;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(e) => panic!("accept: {e}"),
+                }
+            };
+            stream.set_nonblocking(false).expect("blocking");
+            let request = read_request(&mut stream);
+            let rid = request["id"].clone();
+            match behavior {
+                Behavior::Result(v) => respond(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({"jsonrpc":"2.0","id":rid,"result":v}).to_string(),
+                ),
+                Behavior::Status(s) => respond(&mut stream, s, ""),
+                _ => panic!("mock_seq supports Result and Status"),
+            }
+            seen.push(request);
+        }
+        seen
+    });
+    (url, handle)
+}
+
+const NO_WAIT: ReadRetry = ReadRetry {
+    attempts: 5,
+    first_delay: Duration::ZERO,
+};
+
+#[test]
+fn the_default_read_retry_is_five_tries_over_about_thirty_seconds() {
+    let r = ReadRetry::DEFAULT;
+    assert_eq!(r.attempts, 5);
+    let total: Duration = (1..r.attempts).map(|a| r.delay_before(a)).sum();
+    assert_eq!(total, Duration::from_secs(30));
+    assert_eq!(ReadRetry::NONE.attempts, 1);
+}
+
+#[test]
+fn retry_read_stops_at_the_first_success_and_backs_off() {
+    let calls = std::cell::Cell::new(0u32);
+    let slept = std::cell::RefCell::new(Vec::new());
+    let got: Result<u32, &str> = retry_read(
+        &ReadRetry::DEFAULT,
+        |_| true,
+        &|d| slept.borrow_mut().push(d),
+        || {
+            calls.set(calls.get() + 1);
+            if calls.get() < 3 {
+                Err("transient")
+            } else {
+                Ok(7)
+            }
+        },
+    );
+    assert_eq!(got, Ok(7));
+    assert_eq!(calls.get(), 3);
+    assert_eq!(
+        *slept.borrow(),
+        vec![Duration::from_secs(2), Duration::from_secs(4)]
+    );
+}
+
+#[test]
+fn retry_read_gives_up_after_the_limit() {
+    let calls = std::cell::Cell::new(0u32);
+    let got: Result<u32, &str> = retry_read(
+        &NO_WAIT,
+        |_| true,
+        &|_| {},
+        || {
+            calls.set(calls.get() + 1);
+            Err("down")
+        },
+    );
+    assert_eq!(got, Err("down"));
+    assert_eq!(calls.get(), 5);
+}
+
+#[test]
+fn retry_read_does_not_retry_a_definite_error() {
+    let calls = std::cell::Cell::new(0u32);
+    let got: Result<u32, &str> = retry_read(
+        &NO_WAIT,
+        |_| false,
+        &|_| {},
+        || {
+            calls.set(calls.get() + 1);
+            Err("invalid params")
+        },
+    );
+    assert_eq!(got, Err("invalid params"));
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
+fn a_read_is_retried_after_a_transient_http_failure() {
+    let (url, handle) = mock_seq(vec![
+        Behavior::Status(502),
+        Behavior::Status(503),
+        Behavior::Result(serde_json::json!(42)),
+    ]);
+    let chain = RpcChain::connect_with_timeout(&url, SHORT)
+        .expect("connect")
+        .with_read_retry(NO_WAIT);
+    assert_eq!(chain.last_block_id().expect("height after retries"), 42);
+    drop(chain);
+    let seen = handle.join().expect("mock");
+    assert_eq!(seen.len(), 3);
+    assert!(seen.iter().all(|r| r["method"] == "getLastBlockId"));
+}
+
+#[test]
+fn a_read_that_keeps_failing_reports_the_attempts() {
+    let (url, handle) = mock_seq((0..5).map(|_| Behavior::Status(502)).collect());
+    let chain = RpcChain::connect_with_timeout(&url, SHORT)
+        .expect("connect")
+        .with_read_retry(NO_WAIT);
+    match chain.account(&id(1)) {
+        Err(SdkError::Chain(m)) => assert!(m.contains("5 attempts"), "{m}"),
+        other => panic!("expected Chain, got {other:?}"),
+    }
+    drop(chain);
+    assert_eq!(handle.join().expect("mock").len(), 5);
+}
+
+#[test]
+fn send_is_never_retried() {
+    let (url, handle) = mock_seq(vec![
+        Behavior::Status(502),
+        Behavior::Result(serde_json::json!(hex::encode([9u8; 32]))),
+    ]);
+    let chain = RpcChain::connect_with_timeout(&url, SHORT)
+        .expect("connect")
+        .with_read_retry(NO_WAIT);
+    assert!(matches!(chain.send(&tx()), Err(SdkError::SendUncertain(_))));
+    drop(chain);
+    let seen = handle.join().expect("mock");
+    assert_eq!(seen.len(), 1, "one sendTransaction, never a second");
+    assert_eq!(seen[0]["method"], "sendTransaction");
 }

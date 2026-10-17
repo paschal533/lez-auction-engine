@@ -1079,8 +1079,11 @@ Plan 3a M6: the dev commands (mock tokens, mock oracles) were guarded by the dep
 **Trade-offs**
 Two localnets started from the same config share block 1; both are throwaway, so this is accepted. The scanner keeps its own anchor at block 2 (ADR-043), which also changes across restarts.
 
+**Amendment (2026-10-17)**
+The signing dev commands run on a short allowlist of named dev networks, `localnet` and `testnet-legacy` (the public LEZ v0.2.4 legacy testnet, `docs/architecture/testnet-legacy.md`), and still only when the recorded `chain_genesis_hash` equals the node's block 1. The label alone still never suffices. On the legacy testnet the mock token and mock oracle are our own accounts; nothing there is a market price.
+
 **Status**
-Accepted (Plan 3b, Task 3)
+Accepted (Plan 3b, Task 3); amended 2026-10-17
 
 ---
 
@@ -1158,7 +1161,7 @@ Localnet finding 2: the localnet oracle has no publisher, so it goes stale after
 - (C) Rotation: a new RAY price account for the same source at the next free window, the host's `SetMarketPriceOracle`, then the engine's `set_collateral_config` with unchanged parameters and the new oracle.
 
 **Decision**
-(C), as `auction-cli dev oracle-publish` and `dev keeper` (localnet only, ADR-046). The price is checked on the engine's own feed path (`oracle::check_new_price`: `feed::observe` + `feed::require_live`) before anything is signed; both admins are checked before signing. The keeper re-publishes the current price when the oracle's age plus `--refresh-before-ms` reaches the configured maximum age. Proved on the real guests mid-auction (`rotating_the_oracle_mid_auction_keeps_bids_on_the_new_feed`).
+(C), as `auction-cli dev oracle-publish` and `dev keeper` (localnet only, ADR-046; extended to the legacy testnet on 2026-10-17, see the ADR-046 amendment). The price is checked on the engine's own feed path (`oracle::check_new_price`: `feed::observe` + `feed::require_live`) before anything is signed; both admins are checked before signing. The keeper re-publishes the current price when the oracle's age plus `--refresh-before-ms` reaches the configured maximum age. Proved on the real guests mid-auction (`rotating_the_oracle_mid_auction_keeps_bids_on_the_new_feed`).
 
 **Trade-offs**
 Three transactions per move. Between the host rotation and the engine follow-up, `liquidate` fails with `OracleMismatch` (ADR-028); a failure there leaves the two pointing at different oracles, and re-running `oracle-publish` fixes it. Each move uses a new account (accounts are never released; localnet only). Production needs a real publisher once the oracle scale is settled (M2).

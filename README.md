@@ -45,7 +45,8 @@ then starts a standalone sequencer, deploys the programs and runs liquidation, b
 a price move and the freeze path with checks. Prerequisites: Linux or WSL Ubuntu, the risc0 toolchain through
 `rzup` (pinned versions in [DEMO.md](DEMO.md)), port 3040 free, at least 20 GB free disk (3 GB on `C:` under WSL).
 On the author's machine (WSL, repository on `/mnt/c`) run it as `scripts/wsl-env.sh scripts/demo.sh`. Flags, a
-recorded run and the exit codes are in [DEMO.md](DEMO.md).
+recorded run and the exit codes are in [DEMO.md](DEMO.md). The same scenario on the public v0.2.4 legacy testnet:
+`scripts/testnet-legacy.sh` ([testnet-legacy.md](docs/architecture/testnet-legacy.md)).
 
 ## Run the tests
 
@@ -78,7 +79,7 @@ MSYS_NO_PATHCONV=1 wsl -d Ubuntu-20.04 -e bash -lc   'cd /mnt/c/Users/user/Docum
 - Design log (ADRs): [docs/design-log.md](docs/design-log.md)
 - Spikes: [docs/spikes/](docs/spikes/) ([S1](docs/spikes/S1.md), [S2](docs/spikes/S2.md), [S3](docs/spikes/S3.md), [S4](docs/spikes/S4.md), [S5](docs/spikes/S5.md), [S6](docs/spikes/S6.md), [S7](docs/spikes/S7.md)); spike code in [spikes/](spikes/)
 - Architecture: [docs/architecture/core.md](docs/architecture/core.md) (auction state machine), [docs/architecture/math.md](docs/architecture/math.md) (fixed-point arithmetic), [docs/architecture/hooks.md](docs/architecture/hooks.md) (stablecoin hooks), [docs/architecture/programs.md](docs/architecture/programs.md) (engine program, Plan 3 interfaces), [docs/architecture/sdk.md](docs/architecture/sdk.md) (SDK), [docs/architecture/security-checklist.md](docs/architecture/security-checklist.md) (per-instruction checklist)
-- Localnet smoke test: [docs/architecture/localnet.md](docs/architecture/localnet.md); deployed program ids and reference-price log: [DEPLOYMENTS.md](DEPLOYMENTS.md)
+- Localnet smoke test: [docs/architecture/localnet.md](docs/architecture/localnet.md); legacy testnet run: [docs/architecture/testnet-legacy.md](docs/architecture/testnet-legacy.md); deployed program ids and reference-price log: [DEPLOYMENTS.md](DEPLOYMENTS.md)
 - Threat model: [THREAT_MODEL.md](THREAT_MODEL.md)
 - RFP-014 requirements mapped to evidence, milestones and descopes: [REQUIREMENTS.md](REQUIREMENTS.md) (checked by `scripts/check-requirements.py`)
 - Submission record and hashes: [SUBMISSION.md](SUBMISSION.md); one-command demo: [DEMO.md](DEMO.md); cycles and transaction sizes: [CYCLES.md](CYCLES.md)

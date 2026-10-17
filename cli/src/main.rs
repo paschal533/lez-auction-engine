@@ -11,7 +11,7 @@ use auction_cli::{
     error::CliError,
     run,
 };
-use auction_sdk::{confirm::ConfirmSettings, deployment::Deployment, rpc::RpcChain};
+use auction_sdk::{deployment::Deployment, rpc::RpcChain};
 use clap::Parser;
 use lee_core::account::AccountId;
 
@@ -63,7 +63,7 @@ fn main() -> ExitCode {
         wallet_home: cli.wallet_home.clone(),
         state_dir: cli.state_dir.clone(),
         at_ms: cli.at_ms,
-        confirm: ConfirmSettings::default(),
+        confirm: cli.confirm_settings(),
         sleep: std::thread::sleep,
     };
     let mut out = std::io::stdout().lock();

@@ -5,7 +5,9 @@
 //! Everything the node returns is untrusted input: decode failures are typed errors, response sizes
 //! and block ranges are bounded, and block ids and result lengths are checked against the request.
 //! Every request has an overall timeout (the HTTP client has no separate connect timeout, so it also
-//! bounds the connect). Nothing is retried, and `send` is never retried.
+//! bounds the connect). Idempotent reads are retried a bounded number of times with backoff on a
+//! transient failure (transport error, timeout, unparsable reply: [`ReadRetry`]); a definite
+//! JSON-RPC error is not retried, and `send` is never retried (a resend could act twice).
 //!
 //! `send` error mapping (see `docs/architecture/sdk.md`): only a definite rejection or a request that
 //! provably never left is a plain `SdkError::Chain`; every other failure is `SdkError::SendUncertain`.
@@ -40,10 +42,74 @@ const JSONRPC_INVALID_PARAMS: i32 = -32602;
 /// Longest server-provided text copied into an error message.
 const MAX_MESSAGE_CHARS: usize = 200;
 
+/// Bounded retry of idempotent reads: `attempts` tries in all, the pause before retry `n` being
+/// `first_delay * 2^(n-1)`. Never applied to `send`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadRetry {
+    pub attempts: u32,
+    pub first_delay: Duration,
+}
+
+impl ReadRetry {
+    /// One try, no retry.
+    pub const NONE: Self = Self {
+        attempts: 1,
+        first_delay: Duration::ZERO,
+    };
+    /// Five tries, waiting 2, 4, 8 and 16 s between them (30 s in all): long enough for a proxy's
+    /// brief 502 or a DNS hiccup, short against the confirmation window.
+    pub const DEFAULT: Self = Self {
+        attempts: 5,
+        first_delay: Duration::from_secs(2),
+    };
+
+    /// The pause before retry `retry` (1 for the first retry).
+    #[must_use]
+    pub fn delay_before(&self, retry: u32) -> Duration {
+        self.first_delay.saturating_mul(
+            1u32.checked_shl(retry.saturating_sub(1))
+                .unwrap_or(u32::MAX),
+        )
+    }
+}
+
+/// Runs `f` until it succeeds, fails with an error `is_transient` rejects, or `policy.attempts`
+/// tries are used up; returns the last result. Only for idempotent reads.
+pub fn retry_read<T, E>(
+    policy: &ReadRetry,
+    is_transient: impl Fn(&E) -> bool,
+    sleep: &dyn Fn(Duration),
+    mut f: impl FnMut() -> Result<T, E>,
+) -> Result<T, E> {
+    let mut tried = 1;
+    loop {
+        match f() {
+            Err(e) if tried < policy.attempts.max(1) && is_transient(&e) => {
+                sleep(policy.delay_before(tried));
+                tried += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
+/// A failure a later identical read may not repeat: the connection, the proxy (HTTP 5xx), a
+/// timeout, or a reply that did not parse. A JSON-RPC error object from the node is definite.
+fn transient(e: &ClientError) -> bool {
+    matches!(
+        e,
+        ClientError::Transport(_)
+            | ClientError::RequestTimeout
+            | ClientError::RestartNeeded(_)
+            | ClientError::ParseError(_)
+    )
+}
+
 pub struct RpcChain {
     client: SequencerClient,
     rt: tokio::runtime::Runtime,
     url: String,
+    retry: ReadRetry,
 }
 
 impl std::fmt::Debug for RpcChain {
@@ -53,7 +119,7 @@ impl std::fmt::Debug for RpcChain {
 }
 
 impl RpcChain {
-    /// Connects with the default 30 s request timeout.
+    /// Connects with the default 30 s request timeout and [`ReadRetry::DEFAULT`].
     pub fn connect(url: &str) -> SdkResult<Self> {
         Self::connect_with_timeout(url, DEFAULT_TIMEOUT)
     }
@@ -76,17 +142,36 @@ impl RpcChain {
             client,
             rt,
             url: url.to_owned(),
+            retry: ReadRetry::DEFAULT,
         })
     }
 
-    fn call<T, F>(&self, what: &str, f: F) -> SdkResult<T>
+    /// Replaces the read retry policy (default [`ReadRetry::DEFAULT`]).
+    #[must_use]
+    pub fn with_read_retry(self, retry: ReadRetry) -> Self {
+        Self { retry, ..self }
+    }
+
+    /// One idempotent read, retried per `self.retry`. `make` builds a fresh request each try.
+    fn call<T, F, Fut>(&self, what: &str, make: F) -> SdkResult<T>
     where
-        F: Future<Output = Result<T, ClientError>>,
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<T, ClientError>>,
     {
         ensure_no_runtime()?;
-        self.rt.block_on(f).map_err(|e| {
+        let tries = std::cell::Cell::new(0u32);
+        retry_read(&self.retry, transient, &std::thread::sleep, || {
+            tries.set(tries.get() + 1);
+            self.rt.block_on(make())
+        })
+        .map_err(|e| {
+            let after = if tries.get() > 1 {
+                format!(" (after {} attempts)", tries.get())
+            } else {
+                String::new()
+            };
             SdkError::Chain(format!(
-                "{what} at {}: {}",
+                "{what} at {}: {}{after}",
                 self.url,
                 truncated(&e.to_string())
             ))
@@ -169,14 +254,13 @@ fn classify_send_error(url: &str, e: &ClientError) -> SdkError {
 
 impl Chain for RpcChain {
     fn account(&self, id: &AccountId) -> SdkResult<Account> {
-        self.call("getAccount", self.client.get_account(*id))
+        self.call("getAccount", || self.client.get_account(*id))
     }
 
     fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<Nonce>> {
-        let nonces = self.call(
-            "getAccountsNonces",
-            self.client.get_accounts_nonces(ids.to_vec()),
-        )?;
+        let nonces = self.call("getAccountsNonces", || {
+            self.client.get_accounts_nonces(ids.to_vec())
+        })?;
         if nonces.len() != ids.len() {
             return Err(SdkError::Chain(format!(
                 "getAccountsNonces at {}: asked for {} nonces, got {}",
@@ -189,7 +273,7 @@ impl Chain for RpcChain {
     }
 
     fn last_block_id(&self) -> SdkResult<u64> {
-        self.call("getLastBlockId", self.client.get_last_block_id())
+        self.call("getLastBlockId", || self.client.get_last_block_id())
     }
 
     fn blocks(&self, from: u64, to: u64) -> SdkResult<Vec<BlockSummary>> {
@@ -198,7 +282,7 @@ impl Chain for RpcChain {
                 "getBlockRange: range {from}..={to} is empty or wider than {MAX_BLOCK_RANGE} blocks"
             )));
         }
-        let blocks = self.call("getBlockRange", self.client.get_block_range(from, to))?;
+        let blocks = self.call("getBlockRange", || self.client.get_block_range(from, to))?;
         let expected = to - from + 1;
         if u64::try_from(blocks.len()).ok() != Some(expected) {
             return Err(SdkError::Chain(format!(

@@ -29,6 +29,9 @@ use crate::{
 /// Re-reads of an empty lock file (a writer between `create_new` and its single `write_all`).
 const EMPTY_LOCK_RETRIES: u32 = 5;
 const EMPTY_LOCK_WAIT: Duration = Duration::from_millis(10);
+/// Consecutive failed poll reads (node or proxy briefly unreachable) `confirm` waits through before
+/// it reports the outcome as unknown. Each failed poll still counts against `max_polls`.
+pub const MAX_CONSECUTIVE_POLL_ERRORS: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfirmSettings {
@@ -81,13 +84,32 @@ pub fn confirm<C: Chain + ?Sized>(
     s: &ConfirmSettings,
     sleep: &dyn Fn(Duration),
 ) -> SdkResult<Outcome> {
+    let mut errors = 0u32;
     for _ in 0..s.max_polls {
         // Height FIRST, then nonce: the sequencer applies state (the nonce moves) before it moves the
         // tip, so a transaction that lands while we poll shows up in the later nonce read. Reading the
         // nonce first could pair a stale nonce with a fresh height and report a false Dropped, which
         // the caller would answer by acting twice.
-        let height = chain.last_block_id()?;
-        let nonce = signer_nonce(chain, signer)?;
+        let read = chain
+            .last_block_id()
+            .and_then(|h| signer_nonce(chain, signer).map(|n| (h, n)));
+        let (height, nonce) = match read {
+            Ok(r) => {
+                errors = 0;
+                r
+            }
+            Err(e @ SdkError::Chain(_)) => {
+                errors += 1;
+                if errors >= MAX_CONSECUTIVE_POLL_ERRORS {
+                    return Err(SdkError::Unconfirmed(format!(
+                        "{errors} consecutive poll reads failed (last: {e}); the transaction may still land: check the nonce of {signer} before acting"
+                    )));
+                }
+                sleep(s.poll_interval);
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         if nonce > n0 {
             return Ok(Outcome::Included { nonce_after: nonce });
         }

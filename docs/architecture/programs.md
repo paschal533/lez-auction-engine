@@ -119,8 +119,8 @@ Plan 3 carry-overs:
 - Done (Plan 3b Task 5, ADR-047): reproducible Docker builds, then refreshed the ImageIDs in `DEPLOYMENTS.md`.
 - Done (Plan 3b Task 6; real-proof re-measure Task 7): `CYCLES.md` plus a regression check (ADR-048).
 - Done (Plan 3b Task 15): `REQUIREMENTS.md` plus its checker (rows without hosted evidence are marked PoC (partial)). Done (Plan 3b Task 9): `cargo-fuzz` targets. Done (Plan 3b Task 16): red-team pass (`docs/security/redteam-2026-10.md`, 0 Critical/High/Medium); its Low follow-ups RT-01, RT-02, RT-03 and RT-06 are parked to M1, not done.
-- Done (Plan 3b Task 10, ADR-050): oracle price publisher / keeper (`auction-cli dev oracle-publish`, `dev keeper`; localnet only).
-- Drafted (docs/outreach/2026-10-13-upstream-issue-spel-idl-order.md); filing is the author's.
+- Done (Plan 3b Task 10, ADR-050): oracle price publisher / keeper (`auction-cli dev oracle-publish`, `dev keeper`; dev networks only: localnet and the legacy testnet, ADR-046).
+- Superseded: the spel IDL-order issue was fixed upstream (spel #288, on `main` after v0.7.0); the draft (docs/outreach/2026-10-13-upstream-issue-spel-idl-order.md) is kept as a record and is not to be filed.
 - Done (Plan 3a Task 1): `tests/common/mod.rs` split into `mod.rs`/`engine.rs`/`system.rs`, `surplus_tests.rs` into `surplus_tests.rs` (fixtures, `start`/`close` tests and the `live_auction`/`live_accounting` helpers shared with the take tests), `system_tests.rs` and `surplus_take_tests.rs`; the drift tests are exhaustive (`Instruction::name`, `stablecoin_name`) and compare the sample sets with the IDLs.
 - Plan split: 3a (engine hardening, SDK, CLI) and 3b (CI, real proofs, reproducible builds, evidence), ADR-037.
 

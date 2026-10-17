@@ -36,13 +36,19 @@ fn sent_host_debug(c: &Case) -> String {
     format!("{ix:?}")
 }
 
-/// The dev commands act on the localnet only, on the chain the deployment file recorded (ADR-046).
+/// The sending dev commands act on a named dev network only (localnet, testnet-legacy), on the chain
+/// the deployment file recorded (ADR-046).
 fn localnet_case() -> Case {
+    dev_network_case("localnet")
+}
+
+/// A deployment file naming `network` that records the fixture's own block 1.
+fn dev_network_case(network: &str) -> Case {
     let c = Case::new();
     let genesis = hex::encode(c.fx.chain.blocks(1, 1).expect("block 1")[0].hash);
     Case {
         deployment: Some(Deployment {
-            network: "localnet".into(),
+            network: network.into(),
             chain_genesis: Some(genesis),
             ..standard::deployment()
         }),
@@ -579,11 +585,11 @@ fn transfer_args() -> Vec<&'static str> {
 }
 
 #[test]
-fn dev_commands_refuse_any_network_but_the_localnet() {
+fn dev_commands_refuse_any_network_but_the_named_dev_networks() {
     let c = Case::new();
     let out = c.run(&transfer_args());
     assert!(
-        out.contains("dev commands that send are for the localnet only"),
+        out.contains("dev commands that send are for the named dev networks only"),
         "{out}"
     );
     assert!(
@@ -594,6 +600,92 @@ fn dev_commands_refuse_any_network_but_the_localnet() {
         "{out}"
     );
     assert!(c.fx.chain.sent().is_empty());
+}
+
+#[test]
+fn dev_commands_send_on_the_localnet_and_the_legacy_testnet() {
+    for network in ["localnet", "testnet-legacy"] {
+        let c = dev_network_case(network);
+        let out = c.run(&transfer_args());
+        assert!(
+            out.ends_with(
+                "exit: 0
+"
+            ),
+            "{network}: {out}"
+        );
+        assert_eq!(c.fx.chain.sent().len(), 1, "{network}: one transfer sent");
+    }
+}
+
+#[test]
+fn dev_commands_refuse_other_network_names_even_on_the_recorded_chain() {
+    // A label is never enough, and it is matched exactly: the recorded genesis does not widen the list.
+    for network in [
+        "testnet",
+        "mainnet",
+        "fixture",
+        "Localnet",
+        "testnet-legacy ",
+        "",
+    ] {
+        let c = dev_network_case(network);
+        let out = c.run(&transfer_args());
+        assert!(
+            out.contains("dev commands that send are for the named dev networks only"),
+            "{network:?}: {out}"
+        );
+        assert!(
+            out.contains("localnet, testnet-legacy"),
+            "{network:?}: {out}"
+        );
+        assert!(
+            out.ends_with(
+                "exit: 1
+"
+            ),
+            "{network:?}: {out}"
+        );
+        assert!(c.fx.chain.sent().is_empty(), "{network:?}: nothing sent");
+    }
+}
+
+#[test]
+fn dev_commands_on_the_legacy_testnet_refuse_a_node_with_another_genesis() {
+    let mut c = dev_network_case("testnet-legacy");
+    c.deployment = Some(Deployment {
+        chain_genesis: Some("ab".repeat(32)),
+        ..c.deployment.clone().expect("deployment")
+    });
+    let out = c.run(&transfer_args());
+    assert!(out.contains("chain identity"), "{out}");
+    assert!(
+        out.ends_with(
+            "exit: 2
+"
+        ),
+        "{out}"
+    );
+    assert!(c.fx.chain.sent().is_empty(), "nothing signed or sent");
+}
+
+#[test]
+fn dev_commands_on_the_legacy_testnet_refuse_a_file_without_a_genesis() {
+    let mut c = dev_network_case("testnet-legacy");
+    c.deployment = Some(Deployment {
+        chain_genesis: None,
+        ..c.deployment.clone().expect("deployment")
+    });
+    let out = c.run(&transfer_args());
+    assert!(out.contains("records no chain_genesis_hash"), "{out}");
+    assert!(
+        out.ends_with(
+            "exit: 2
+"
+        ),
+        "{out}"
+    );
+    assert!(c.fx.chain.sent().is_empty(), "nothing signed or sent");
 }
 
 #[test]

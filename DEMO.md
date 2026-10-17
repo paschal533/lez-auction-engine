@@ -67,6 +67,13 @@ Parameters: `cli/params/demo-engine.json`, `cli/params/demo-collateral.json` (th
 `band_hi_bps` of 20_000, a debt lot and freeze threshold of 5_000; ADR-051). The same economics run in-process in
 `programs/integration_tests/tests/demo_scenario.rs`.
 
+## Public legacy testnet
+
+`scripts/testnet-legacy.sh` runs the same scenario (`scripts/lib/demo-scenario.sh`) on the public LEZ v0.2.4
+legacy testnet instead of a standalone sequencer: `--preflight-only` checks the node read-only, `--send` deploys
+the stablecoin and the engine and runs the phases above on 60 s blocks. Why, how and the caveats (one run per
+chain, possible resets, the mock oracle keeper): [testnet-legacy.md](docs/architecture/testnet-legacy.md).
+
 ## Preflight exit codes
 
 3 low disk; 4 LEZ binaries or tools missing (run `scripts/bootstrap-lez.sh`); 5 port 3040 in use; 6 a

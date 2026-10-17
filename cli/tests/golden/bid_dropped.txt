@@ -4,5 +4,5 @@ quoted out        51963
 min out           51703
 plan              bid (11 accounts, 1 signer(s))
 submitted         <hash>
-error: transaction dropped (not applied by block 8): nothing was applied; re-quote and resend (spec §6.5)
+error: transaction dropped (not applied by block 8): check the signer's nonce before acting; if it did not move, nothing was applied: re-quote and resend (spec §6.5)
 exit: 3

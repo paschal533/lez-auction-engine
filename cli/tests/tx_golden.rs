@@ -142,7 +142,7 @@ fn bid_dropped() {
     c.fx.chain.set_height_step(1);
     let out = run_owned(&c, &bid_args(&c.fx.live_auction.to_string(), "100000"));
     assert!(
-        out.contains("nothing was applied; re-quote and resend"),
+        out.contains("check the signer's nonce before acting; if it did not move, nothing was applied: re-quote and resend"),
         "{out}"
     );
     assert!(out.ends_with("exit: 3\n"), "{out}");

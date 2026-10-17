@@ -47,7 +47,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.0
       - uses: ./.github/actions/install-risc0
       - uses: Swatinem/rust-cache@v2
-        with: { shared-key: programs }
+        with: { shared-key: programs, save-if: "${{ false }}" }
       - name: rebuild our guests in Docker
         run: scripts/build-guests.sh "$RUNNER_TEMP/guests"
       - name: rebuild the upstream guests (lez-programs 64c01210)

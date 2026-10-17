@@ -26,7 +26,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.0
       - uses: ./.github/actions/install-risc0
       - uses: Swatinem/rust-cache@v2
-        with: { shared-key: programs }
+        with: { shared-key: programs, save-if: "${{ false }}" }
       - run: RISC0_DEV_MODE=1 cargo test --locked -p engine_integration_tests --test real_proofs --no-run
       - name: prove the cheapest instruction and verify its receipt
         timeout-minutes: 80
@@ -49,7 +49,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.94.0
       - uses: ./.github/actions/install-risc0
       - uses: Swatinem/rust-cache@v2
-        with: { shared-key: programs }
+        with: { shared-key: programs, save-if: "${{ false }}" }
       - run: RISC0_DEV_MODE=1 cargo test --locked -p engine_integration_tests --test chains --no-run
       - name: prove every instruction of the ADR-036 suite
         timeout-minutes: 340

@@ -11,7 +11,9 @@ Status update on my RFP-014 (Liquidation & Auction Engine) proof of concept, LEZ
 
 Built: liquidation with a keeper reward (F1); increasing discount with early termination (F2); partial bids (F3); debt auction and the freeze-new-debt path, with a mock protocol token (F4); surplus auction with burn (F5); an SDK and CLI with their own encoders; a three-instruction stablecoin hook patch series; real-proof CI per ADR-045 (workflows written, not yet run on a hosted runner) and a one-command localnet demo.
 
-Not built: the GUI (next), the private path (M4), testnet (blocked by v0.3 and SPEL support).
+Testnet: deployed and tested on the public legacy testnet (`testnet-legacy.lez.logos.co`, LEZ v0.2.4) on 2026-10-17; the full demo scenario completed with every check ok. Testnet 0.4 waits for the port (blocked by the 0.4 release and SPEL support).
+
+Not built: the GUI (next), the private path (M4).
 
 State: a feature branch in a private repository; the hosted demo and real-proof jobs have not run. The red-team pass found nothing above Low.
 

@@ -2,7 +2,8 @@
 
 `scripts/testnet-legacy.sh` runs the demo scenario of [DEMO.md](../../DEMO.md) on the public LEZ v0.2.4 legacy
 testnet, `https://testnet-legacy.lez.logos.co/` (JSON-RPC over HTTPS, `POST /`), instead of a standalone
-sequencer. No testnet run is recorded in this document yet; the rehearsals below ran on a local sequencer.
+sequencer. The public run of 2026-10-17 is recorded under [Public run](#public-run-2026-10-17); the rehearsals
+ran on a local sequencer.
 
 ## Why (interim)
 
@@ -98,6 +99,63 @@ in-flight locks.
 (`DEV_NETWORKS` in `cli/src/dev_cmds.rs`), and on both the node's block 1 must equal the deployment file's
 `chain_genesis_hash` (ADR-046; a name alone is never enough, Plan 3a M6). Any other name, or a file without the
 hash, is refused before signing.
+
+## Public run (2026-10-17)
+
+One run, `run-20261017T171726Z`, started at 17:17:26Z and ended with `demo complete` at 20:07:26Z (the second
+`--resume`, exit 0). The summary, the transaction list and the deployment file are copied unchanged to
+[docs/evidence/testnet-legacy-2026-10-17/](../evidence/testnet-legacy-2026-10-17/). Nothing from `wallet-home`
+or `cli-state` is copied; the run directory, with the admin keys, stays on the author's machine.
+
+| Item | Value |
+|---|---|
+| Node | `https://testnet-legacy.lez.logos.co/`, LEZ `v0.2.4-lez-legacy`, block 1 `c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011` |
+| stablecoin (+ hooks) | `bda698c4e929e4f63ad7b2949c8e413c26fc69df02434844067baded95c7b40d`, deployed in block 5280, transaction `aa1ad271654084f2a98eaba5fcae71e26c12f8a807657e92dd367758c6eb387f` |
+| auction_engine | `bb506524bfab7ce5d45a4f4836c00a90d7f23a769a2b6c988c66eb82d456f342`, deployed in block 5281, transaction `9f5bd3455ac87cc1c399ef3d3d31dc421b5135308e72d03dbd4e178d033dc2e7` |
+| Upstream guests | token, twap_oracle and token_mint_authority already deployed (blocks 2301, 2308, 2298); not deployed by this run |
+| Engine config | `Bg3nHnQjPtzngmXBxQ7Zby3sSXqj5Jk9yn8Edmnh7mNS` (admin `7JyKg2s8d7KupBSqSn3kMjmsdTK8w1GhEvgTLVvWH14L`, salt 1); host `ProtocolParameters` `H7XSZV2ksnQW3sHwMqCUBg5nQfgPntd6K8ijQnXStKNW` |
+| Transactions | 8 wallet transactions (6 `auth-transfer init` in blocks 5274-5279, then the two deployments) and 38 `auction-cli` submissions, of which 37 were included and one (`start_surplus_auction` `3acd969f…`) was dropped by the node and resent |
+| Result | `demo complete`, every check `ok`; last block 5406 |
+
+The two deployment hashes equal `scripts/lib/lez_rpc.py deploy-hash` of `artifacts/guests/stablecoin.bin` and
+`auction_engine.bin`. No block explorer link is given: none is documented for the legacy testnet. The hashes can
+be looked up with `getTransaction` on the node.
+
+The checks, as written in the summary:
+
+- buffer holds the 10 % penalty: 30000 eq 30000
+- buffer after the surplus lot: 29500 eq 29500
+- unbacked debt after the shortfall, R4 range: 42624 ge 42154 and 42624 le 63200
+- the buffer settled 29_500 of the bad debt: 13124 eq 13124
+- enough bad debt for one lot: 13124 ge 5000
+- protocol tokens minted to the taker: 13050 gt 9800
+- one lot of bad debt burned: 8124 eq 8124
+- bad debt still above the 5_000 freeze threshold: 8124 gt 5000
+- host frozen: yes
+
+### Incidents, in order
+
+1. **An earlier run was abandoned before any deployment.** Run `run-20261017T135223Z` (13:52Z) stopped in the
+   `auth` phase: four `auth-transfer init` transactions were included (blocks 5109-5112), the fifth, for the
+   `caller` account (`ffd853a0…`), was not, and the wallet gave up (`All pollers failed`, exit 1 at 14:20:00Z).
+   Nothing was deployed and the host was not claimed, so the next run started fresh.
+2. **RPC outage during F5.** At 18:13Z the node's RPC answered `502` to 5 confirmation polls in a row while
+   `check_solvency` (signer `caller`, nonce 3) was in flight. The CLI reported an unknown outcome and kept the
+   in-flight lock; nothing was resent, and the run stopped (exit 1).
+3. **`--resume` stopped with exit 10**, as designed (19:31:20Z): phase `f5` had an in-flight lock. The `caller`
+   nonce on chain was still 3, so `check_solvency` had not landed. Following the exit-10 procedure, the rest of
+   F5 was finished by hand with the run's own deployment file, state directory, wallet and
+   `--drop-after-blocks 10`: `check_solvency` was sent and included (`bad2fb2e…`, caller nonce 3 -> 4);
+   `start_surplus_auction` `3acd969f…` was dropped by the node (not applied by block 5391, nonce unchanged, so
+   nothing was applied) and resent as `2e7b3afe…`, included; `take_surplus` (`6784450b…`) was included; the buffer
+   check gave 29500. `PHASE_f5_done=1` was then added to `run.env`, and `--resume` completed the price move,
+   shortfall, F4, freeze path and final check.
+
+Follow-up for `scripts/testnet-legacy.sh` (not changed here): the script stops on any failed send, including a
+confirmed drop. The by-hand step resent only on a confirmed drop (the CLI's "transaction dropped", decided on
+the signer's nonce not moving within the drop window), up to three times, and stopped on an unknown outcome or
+any other error. Doing the same inside the script would let a run continue past a drop like `3acd969f…`
+without stopping; an unknown outcome, as in incident 2, would still stop it.
 
 ## Rehearsals (local sequencer, not the testnet)
 

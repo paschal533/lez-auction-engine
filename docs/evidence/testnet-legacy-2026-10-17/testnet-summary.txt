@@ -1,0 +1,529 @@
+
+=== testnet-legacy: https://testnet-legacy.lez.logos.co/, block 1 c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011, run directory /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z
+node              https://testnet-legacy.lez.logos.co/ (last block 5272)
+chain identity    block 1 c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011 (expected)
+guest token: deployed in block 2301
+guest twap_oracle: deployed in block 2308
+guest token_mint_authority: deployed in block 2298
+guest stablecoin: not deployed yet (this run deploys it)
+guest auction_engine: not deployed yet (this run deploys it)
+
+=== build auction-cli; committed guests (artifacts/guests, ADR-047); deployment file (network testnet-legacy)
+chain identity: block 1 c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011
+stablecoin host   ProtocolParameters H7XSZV2ksnQW3sHwMqCUBg5nQfgPntd6K8ijQnXStKNW uninitialised (free)
+
+=== accounts (fresh keys), auth-transfer init, deploy stablecoin (+hooks) and auction_engine unless already deployed
+
+=== host: collateral token, oracle at R = 1, initialize_program
+stablecoin host   ProtocolParameters H7XSZV2ksnQW3sHwMqCUBg5nQfgPntd6K8ijQnXStKNW uninitialised (free)
+
+=== engine: mock protocol token (mint authority = engine PDA), init_config (demo parameters), bind, collateral config
+
+=== positions p0, p1, p2; min collateral ratio 1.5 -> 2.0 makes p0 and p2 liquidatable
+scanned to block  5298
+BxedCo4k7vL4bZAgbV6AmCFGE8WwoCkyvBTmBEgTZxuF  owner Fk28rzRfsc5DKkHL9JFgUkZQEYhmPgSVqq9YCCYWgnB1  collateral 500000  debt 300000  unsafe at min CR
+GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh  owner Fk28rzRfsc5DKkHL9JFgUkZQEYhmPgSVqq9YCCYWgnB1  collateral 500000  debt 300000  unsafe at min CR
+
+=== F1-F3: liquidate p0 (keeper reward), partial bid, final bid, leftover claimed
+position          GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh
+owner             Fk28rzRfsc5DKkHL9JFgUkZQEYhmPgSVqq9YCCYWgnB1
+unsafe (min CR)   yes
+nonce             0
+auction           3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU
+collateral        500000
+vault balance     500000
+nominal debt      300000
+amount to raise   330000
+keeper reward     50
+lot               499950
+price (RAY)       1000000000000000000000000000
+clock (ms)        1792258994010
+auction           3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU
+clock (ms)        1792259054265
+t_eff (ms)        60255
+discount          217.85 bps
+price (RAY)       1000000000000000000000000000
+remaining target  330000
+collateral left   499950
+charged           100000
+collateral out    102227
+min out (50 bps)  101715
+debt part         100000
+penalty part      0
+ends auction      no
+instruction       bid
+check buffer holds the 10 % penalty: 30000 eq 30000: ok
+
+=== F5: surplus auction sells buffer coin for protocol tokens, which are burned
+
+=== evidence (send, exit 1, 2026-10-17T18:13:05Z)
+last block        unreadable
+deployment file   /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z/deployment.json
+{
+  "network": "testnet-legacy",
+  "sequencer_url": "https://testnet-legacy.lez.logos.co/",
+  "engine_program_id": "bb506524bfab7ce5d45a4f4836c00a90d7f23a769a2b6c988c66eb82d456f342",
+  "host_program_id": "bda698c4e929e4f63ad7b2949c8e413c26fc69df02434844067baded95c7b40d",
+  "token_program_id": "14b3bc6cc129d0359f9595ba0f60a13e4a8df08ffe8eb1a83251c47abecc67a8",
+  "twap_oracle_program_id": "5681e27c27b3ece4a7c161bbf8e12e6ece6ca69925a87b77f9e193fa4a249b31",
+  "engine_admin": "7JyKg2s8d7KupBSqSn3kMjmsdTK8w1GhEvgTLVvWH14L",
+  "config": "Bg3nHnQjPtzngmXBxQ7Zby3sSXqj5Jk9yn8Edmnh7mNS",
+  "chain_genesis_hash": "c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011"
+}
+accounts (label id)
+  admin HeWbN5chqf4dkQT6raegpCTAVvSqXA9rzEpYVKgthsCd
+  freeze GJoWD6zASVqyfKck9moh3KR8KRrHpYp8eCNoYytfGx1R
+  oracle-src 44QiDRK3qz6PnBpDPAQbaix6DKScFfxMxZghHHNySUtF
+  coll-def BbiaA1TxuYF4sjuGJmKTM73AiLGXqjeuvZ9g835ST81h
+  owner Fk28rzRfsc5DKkHL9JFgUkZQEYhmPgSVqq9YCCYWgnB1
+  owner-coll BMKM2S2bU3Wb4pgsb9gTMo4Vk2uyHptE3rddRihDg45n
+  owner-stable TWy4SdPoQUd9jyMmJRQYvpFu47idtYHtbHjJBkdUthB
+  engine-admin 7JyKg2s8d7KupBSqSn3kMjmsdTK8w1GhEvgTLVvWH14L
+  keeper BP4FvecFuBVQViCayxWR1okFQM1kBbPcytZku7Gi5w8H
+  keeper-coll 5W5sXn7Ei776n5bcb1CNB2ns4P17NHrY1wCCAhA5Ssmi
+  caller 2iUUR2zj4xiEga8moj42ee1E49hg3qoxZD44c6b95U9m
+  protocol-def 9MqvY7jWt6ksizxvk1NJeRYHhWo3qbvxhx6sTUguhvmz
+  taker-protocol 6wpSvChwXT6TxbUoZRdYvMGPMAzQLnCGYiKknKvxmfXL
+  taker-stable Fnxz8WVZjAndrFUp1TtEqgvhujvKmk4hP8QGng9KMJMb
+scenario ids and phases (run.env)
+  PHASE_accounts_done=1
+  PHASE_auth_nonces=0 0 0 0 0 0 0 0 0 0 0 0 0 0
+  PHASE_auth_started=1
+  PHASE_auth_done=1
+  PHASE_deploy_nonces=1 0 1 0 1 0 0 1 1 0 1 0 0 0
+  PHASE_deploy_started=1
+  PHASE_deploy_done=1
+  SCAN_FROM=5281
+  PHASE_host_nonces=1 0 1 0 1 0 0 1 1 0 1 0 0 0
+  PHASE_host_started=1
+  SDEF=6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr
+  ORACLE=Hue5zBq5oNfUihgREQd1NWM1kRMUCDNhheV5UacDveeY
+  PHASE_host_done=1
+  PHASE_engine_nonces=2 0 2 1 1 1 0 1 1 0 1 0 0 0
+  PHASE_engine_started=1
+  PHASE_engine_done=1
+  PHASE_bind_nonces=2 0 2 1 1 1 0 2 1 0 1 1 1 0
+  PHASE_bind_started=1
+  PHASE_bind_done=1
+  PHASE_collateral_nonces=3 0 2 1 1 1 0 2 1 0 1 1 1 0
+  PHASE_collateral_started=1
+  PHASE_collateral_done=1
+  PHASE_holdings_nonces=3 0 2 1 1 1 0 3 1 0 1 1 1 0
+  PHASE_holdings_started=1
+  PHASE_holdings_done=1
+  PHASE_tick_positions_nonces=3 0 2 1 1 1 1 3 1 1 1 1 1 1
+  PHASE_tick_positions_started=1
+  PHASE_tick_positions_done=1
+  PHASE_positions_nonces=3 0 2 1 1 1 1 3 1 1 1 1 1 1
+  PHASE_positions_started=1
+  P0=GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh
+  P1=6dTwRfxeCFQXiBMtVRGgZbfd8HhV4LntCQsULrrktQoK
+  P2=BxedCo4k7vL4bZAgbV6AmCFGE8WwoCkyvBTmBEgTZxuF
+  PHASE_positions_done=1
+  PHASE_tick_f1f3_nonces=4 0 2 1 7 4 1 3 1 1 1 1 1 1
+  PHASE_tick_f1f3_started=1
+  PHASE_tick_f1f3_done=1
+  PHASE_f1f3_nonces=4 0 2 1 7 4 1 3 1 1 1 1 1 1
+  PHASE_f1f3_started=1
+  A0=3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU
+  BUFFER=Aje9F32Kfu2ASwd6ov24VBMgDCD4bWHT1hm1oqMpxNdZ
+  PHASE_f1f3_done=1
+  PHASE_tick_f5_nonces=4 0 2 1 8 4 3 3 2 1 1 1 1 1
+  PHASE_tick_f5_started=1
+  PHASE_tick_f5_done=1
+  PHASE_f5_nonces=4 0 2 1 8 4 3 3 2 1 1 1 1 1
+  PHASE_f5_started=1
+program deployments and auth-transfer init (wallet: transaction hash, inclusion block)
+  Transaction hash is b34e2d8f7ecd2d4cc7bb18526c63a8b57a0d547821a0e0872e762087c1a03b29
+  Transaction is included in block 5274
+  Transaction hash is 0371b33c4b7e609bba866fb2cf53e9abec73695ed0de69111239a0fd7203899e
+  Transaction is included in block 5275
+  Transaction hash is a8bf134408cf44373647003ed2314f204f12d6129dee267dc081331d6eed6ee8
+  Transaction is included in block 5276
+  Transaction hash is c5486f5489090fd4eaafb99bd76f0b3e4fa8551dabaecfe7de9f6af6f739b70a
+  Transaction is included in block 5277
+  Transaction hash is ea660d41ed313afdb8e82d1ecc1da9519e3f429b3b21f73bff0fb70ad14c50f7
+  Transaction is included in block 5278
+  Transaction hash is 22211d3d7360a16eacef989210e2d7494e6f29480a8fd70583076ebc59d39dbc
+  Transaction is included in block 5279
+  Transaction hash is aa1ad271654084f2a98eaba5fcae71e26c12f8a807657e92dd367758c6eb387f
+  Transaction is included in block 5280
+  Transaction hash is 9f5bd3455ac87cc1c399ef3d3d31dc421b5135308e72d03dbd4e178d033dc2e7
+  Transaction is included in block 5281
+auction-cli transactions (command | instruction | hash): 23
+  dev token-new --definition coll-def --holding owner-coll --name COLL --supply 100000000000 | new_fungible_definition | 1ecf2b3e30d88dc9143791079e680a14506b12199e9a4ef3c9b3c8c1df86aad3
+  dev oracle-create --price-source oracle-src --base 6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr --quote coll-def --price 1000000000000000000000000000 --window-ms 3600000 | create_oracle_price_account | f3522904a8d54885956bd55dfc31f8e9e774bdffe20d29ad63263b42a1da2c85
+  host init-program --admin admin --freeze freeze --collateral-def coll-def --oracle Hue5zBq5oNfUihgREQd1NWM1kRMUCDNhheV5UacDveeY --min-cr 1500000000000000000000000000 --redemption-price 1000000000000000000000000000 | initialize_program | 376bbba0d36c79cca5d4509bf0c8a122334fc517d333f9e8680b72efb82cc6a0
+  dev token-new --definition protocol-def --holding taker-protocol --name MOCK --supply 10000 --mint-authority 92osddeKVsPJ37dKQoBEtRY743VNvnmpJHbXr6oWhM3B | new_fungible_definition | cb84bdba6182fb8efd1c3c7a8c3d4d0acd16777c2fdf1782fd21aadb36ae4692
+  admin init-config --admin engine-admin --salt 1 --params /mnt/c/Users/user/Documents/basecamp/lez-auction-engine/cli/params/demo-engine.json --protocol-token protocol-def | init_config | 89551d16f507a291a8de2204f3bba4957f9612f56ffac0a1c5b99b7a64a10ed6
+  host bind --admin admin | set_liquidation_engine | 6255538e0e8d164d26398a973a97b0007d269f725363b8af2a461b674d4d9394
+  admin set-collateral-config --admin engine-admin --params /mnt/c/Users/user/Documents/basecamp/lez-auction-engine/cli/params/demo-collateral.json | set_collateral_config | eeeaa926498b5c47d9322a899aabf73060eb4dce73b944c7716098fa9b588256
+  dev token-init-account --definition 6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr --account owner-stable | initialize_account | a98f9c0e0ed311ea7862373c6b8b0b566d1d0e5e981fa5fbdf120ae01645577a
+  dev token-init-account --definition coll-def --account keeper-coll | initialize_account | e6a65332b177af880c4397532c83f92b4ca5f4351fcdf9b0940f0d594590289f
+  dev token-init-account --definition 6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr --account taker-stable | initialize_account | c87dbf28c5182a83e29d98d6efc8ac2caf082e881df739857177c12290c15460
+  host open-position --owner owner --owner-collateral owner-coll --nonce 0 --amount 500000 | open_position | 6b348a1e1bb9723e708f4a47a3a5c017370d6c3ec6dc06e358cf457d45a5f0bc
+  host generate-debt --owner owner --position GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh --owner-stable owner-stable --amount 300000 | generate_debt | 9ffdd3ec60788c046d5e8d1d50eac2b16bbad45664e29453611ac79e284fb75d
+  host open-position --owner owner --owner-collateral owner-coll --nonce 1 --amount 1000000 | open_position | feb8c478287d34a247607bfad19da5f6fbc81d476dbbd8540399a130dbf95a22
+  host generate-debt --owner owner --position 6dTwRfxeCFQXiBMtVRGgZbfd8HhV4LntCQsULrrktQoK --owner-stable owner-stable --amount 100000 | generate_debt | adb43c5c5d37c12860fa38c4dac5e5bbf82265d88ba486ac6729f967b2ab1d26
+  host open-position --owner owner --owner-collateral owner-coll --nonce 2 --amount 500000 | open_position | 9b8668a2bb16fbee2fbe0ff8d94b2d27146eaa5548386e82cc8dc64b9b4680ec
+  host generate-debt --owner owner --position BxedCo4k7vL4bZAgbV6AmCFGE8WwoCkyvBTmBEgTZxuF --owner-stable owner-stable --amount 300000 | generate_debt | d98fe570c1c456b9add5bc59dd2bf51639c7d4f8e8b3cc88aaccb1f26aa92954
+  host set-min-cr --admin admin --ratio 2000000000000000000000000000 | set_minimum_collateralization_ratio | e01fe37dc3a528ea8d4257104a60945827d5e361f61b9d8780fdafeca4cc9ffe
+  liquidate --position GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh --keeper keeper --keeper-holding keeper-coll | liquidate | 475211c5de4f64640212afd007f386263ffa29a04a0ec7b4cff39a2fc4971273
+  bid --auction 3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU --coin-in-max 100000 --bidder-stable owner-stable --bidder-collateral owner-coll | bid | 62d6d1e9072dabc48a32ee63f0c5fa855f50a624570bf6fcd9a8f8efaa0bc0ef
+  bid --auction 3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU --coin-in-max 230000 --bidder-stable owner-stable --bidder-collateral owner-coll | bid_with_settlement | bc71aac8333a9e5366fd429ecbda841af8ed04e83c6c77d9b33059865d174841
+  claim-leftover --owner owner --owner-holding owner-coll --auction 3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU | claim_leftover | 19dd4b94370e77f726d7055aee820c6bd47135228147b81869b0f3faaced5e5b
+  observe-feed --caller caller | observe_feed | 77175044e6974930c477affc2b0a3aef44b02d0dc6f2ba0bf95a3459cc0aac10
+  settle-debt --caller caller | settle_debt | 8f3462e028ef0563de27a9175eeceb2646f83dc4027eadfc29ee27590410be99
+testnet-legacy FAILED (exit 1); log /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z/logs/run.log, summary /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z/testnet-summary.txt
+host may be claimed; admin keys are in /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z/wallet-home; resume with: scripts/wsl-env.sh scripts/testnet-legacy.sh --resume /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z; check nonces before acting
+
+=== testnet-legacy resume: https://testnet-legacy.lez.logos.co/, block 1 c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011, run directory /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z
+node              https://testnet-legacy.lez.logos.co/ (last block 5374)
+chain identity    block 1 c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011 (expected)
+guest token: deployed in block 2301
+guest twap_oracle: deployed in block 2308
+guest token_mint_authority: deployed in block 2298
+guest stablecoin: deployed in block 5280
+guest auction_engine: deployed in block 5281
+
+=== build auction-cli (the run's deployment file is kept)
+chain identity: block 1 c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011
+
+=== F5: surplus auction sells buffer coin for protocol tokens, which are burned
+
+=== evidence (resume, exit 10, 2026-10-17T19:31:20Z)
+last block        5375
+deployment file   /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z/deployment.json
+{
+  "network": "testnet-legacy",
+  "sequencer_url": "https://testnet-legacy.lez.logos.co/",
+  "engine_program_id": "bb506524bfab7ce5d45a4f4836c00a90d7f23a769a2b6c988c66eb82d456f342",
+  "host_program_id": "bda698c4e929e4f63ad7b2949c8e413c26fc69df02434844067baded95c7b40d",
+  "token_program_id": "14b3bc6cc129d0359f9595ba0f60a13e4a8df08ffe8eb1a83251c47abecc67a8",
+  "twap_oracle_program_id": "5681e27c27b3ece4a7c161bbf8e12e6ece6ca69925a87b77f9e193fa4a249b31",
+  "engine_admin": "7JyKg2s8d7KupBSqSn3kMjmsdTK8w1GhEvgTLVvWH14L",
+  "config": "Bg3nHnQjPtzngmXBxQ7Zby3sSXqj5Jk9yn8Edmnh7mNS",
+  "chain_genesis_hash": "c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011"
+}
+accounts (label id)
+  admin HeWbN5chqf4dkQT6raegpCTAVvSqXA9rzEpYVKgthsCd
+  freeze GJoWD6zASVqyfKck9moh3KR8KRrHpYp8eCNoYytfGx1R
+  oracle-src 44QiDRK3qz6PnBpDPAQbaix6DKScFfxMxZghHHNySUtF
+  coll-def BbiaA1TxuYF4sjuGJmKTM73AiLGXqjeuvZ9g835ST81h
+  owner Fk28rzRfsc5DKkHL9JFgUkZQEYhmPgSVqq9YCCYWgnB1
+  owner-coll BMKM2S2bU3Wb4pgsb9gTMo4Vk2uyHptE3rddRihDg45n
+  owner-stable TWy4SdPoQUd9jyMmJRQYvpFu47idtYHtbHjJBkdUthB
+  engine-admin 7JyKg2s8d7KupBSqSn3kMjmsdTK8w1GhEvgTLVvWH14L
+  keeper BP4FvecFuBVQViCayxWR1okFQM1kBbPcytZku7Gi5w8H
+  keeper-coll 5W5sXn7Ei776n5bcb1CNB2ns4P17NHrY1wCCAhA5Ssmi
+  caller 2iUUR2zj4xiEga8moj42ee1E49hg3qoxZD44c6b95U9m
+  protocol-def 9MqvY7jWt6ksizxvk1NJeRYHhWo3qbvxhx6sTUguhvmz
+  taker-protocol 6wpSvChwXT6TxbUoZRdYvMGPMAzQLnCGYiKknKvxmfXL
+  taker-stable Fnxz8WVZjAndrFUp1TtEqgvhujvKmk4hP8QGng9KMJMb
+scenario ids and phases (run.env)
+  PHASE_accounts_done=1
+  PHASE_auth_nonces=0 0 0 0 0 0 0 0 0 0 0 0 0 0
+  PHASE_auth_started=1
+  PHASE_auth_done=1
+  PHASE_deploy_nonces=1 0 1 0 1 0 0 1 1 0 1 0 0 0
+  PHASE_deploy_started=1
+  PHASE_deploy_done=1
+  SCAN_FROM=5281
+  PHASE_host_nonces=1 0 1 0 1 0 0 1 1 0 1 0 0 0
+  PHASE_host_started=1
+  SDEF=6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr
+  ORACLE=Hue5zBq5oNfUihgREQd1NWM1kRMUCDNhheV5UacDveeY
+  PHASE_host_done=1
+  PHASE_engine_nonces=2 0 2 1 1 1 0 1 1 0 1 0 0 0
+  PHASE_engine_started=1
+  PHASE_engine_done=1
+  PHASE_bind_nonces=2 0 2 1 1 1 0 2 1 0 1 1 1 0
+  PHASE_bind_started=1
+  PHASE_bind_done=1
+  PHASE_collateral_nonces=3 0 2 1 1 1 0 2 1 0 1 1 1 0
+  PHASE_collateral_started=1
+  PHASE_collateral_done=1
+  PHASE_holdings_nonces=3 0 2 1 1 1 0 3 1 0 1 1 1 0
+  PHASE_holdings_started=1
+  PHASE_holdings_done=1
+  PHASE_tick_positions_nonces=3 0 2 1 1 1 1 3 1 1 1 1 1 1
+  PHASE_tick_positions_started=1
+  PHASE_tick_positions_done=1
+  PHASE_positions_nonces=3 0 2 1 1 1 1 3 1 1 1 1 1 1
+  PHASE_positions_started=1
+  P0=GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh
+  P1=6dTwRfxeCFQXiBMtVRGgZbfd8HhV4LntCQsULrrktQoK
+  P2=BxedCo4k7vL4bZAgbV6AmCFGE8WwoCkyvBTmBEgTZxuF
+  PHASE_positions_done=1
+  PHASE_tick_f1f3_nonces=4 0 2 1 7 4 1 3 1 1 1 1 1 1
+  PHASE_tick_f1f3_started=1
+  PHASE_tick_f1f3_done=1
+  PHASE_f1f3_nonces=4 0 2 1 7 4 1 3 1 1 1 1 1 1
+  PHASE_f1f3_started=1
+  A0=3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU
+  BUFFER=Aje9F32Kfu2ASwd6ov24VBMgDCD4bWHT1hm1oqMpxNdZ
+  PHASE_f1f3_done=1
+  PHASE_tick_f5_nonces=4 0 2 1 8 4 3 3 2 1 1 1 1 1
+  PHASE_tick_f5_started=1
+  PHASE_tick_f5_done=1
+  PHASE_f5_nonces=4 0 2 1 8 4 3 3 2 1 1 1 1 1
+  PHASE_f5_started=1
+program deployments and auth-transfer init (wallet: transaction hash, inclusion block)
+  Transaction hash is b34e2d8f7ecd2d4cc7bb18526c63a8b57a0d547821a0e0872e762087c1a03b29
+  Transaction is included in block 5274
+  Transaction hash is 0371b33c4b7e609bba866fb2cf53e9abec73695ed0de69111239a0fd7203899e
+  Transaction is included in block 5275
+  Transaction hash is a8bf134408cf44373647003ed2314f204f12d6129dee267dc081331d6eed6ee8
+  Transaction is included in block 5276
+  Transaction hash is c5486f5489090fd4eaafb99bd76f0b3e4fa8551dabaecfe7de9f6af6f739b70a
+  Transaction is included in block 5277
+  Transaction hash is ea660d41ed313afdb8e82d1ecc1da9519e3f429b3b21f73bff0fb70ad14c50f7
+  Transaction is included in block 5278
+  Transaction hash is 22211d3d7360a16eacef989210e2d7494e6f29480a8fd70583076ebc59d39dbc
+  Transaction is included in block 5279
+  Transaction hash is aa1ad271654084f2a98eaba5fcae71e26c12f8a807657e92dd367758c6eb387f
+  Transaction is included in block 5280
+  Transaction hash is 9f5bd3455ac87cc1c399ef3d3d31dc421b5135308e72d03dbd4e178d033dc2e7
+  Transaction is included in block 5281
+auction-cli transactions (command | instruction | hash): 23
+  dev token-new --definition coll-def --holding owner-coll --name COLL --supply 100000000000 | new_fungible_definition | 1ecf2b3e30d88dc9143791079e680a14506b12199e9a4ef3c9b3c8c1df86aad3
+  dev oracle-create --price-source oracle-src --base 6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr --quote coll-def --price 1000000000000000000000000000 --window-ms 3600000 | create_oracle_price_account | f3522904a8d54885956bd55dfc31f8e9e774bdffe20d29ad63263b42a1da2c85
+  host init-program --admin admin --freeze freeze --collateral-def coll-def --oracle Hue5zBq5oNfUihgREQd1NWM1kRMUCDNhheV5UacDveeY --min-cr 1500000000000000000000000000 --redemption-price 1000000000000000000000000000 | initialize_program | 376bbba0d36c79cca5d4509bf0c8a122334fc517d333f9e8680b72efb82cc6a0
+  dev token-new --definition protocol-def --holding taker-protocol --name MOCK --supply 10000 --mint-authority 92osddeKVsPJ37dKQoBEtRY743VNvnmpJHbXr6oWhM3B | new_fungible_definition | cb84bdba6182fb8efd1c3c7a8c3d4d0acd16777c2fdf1782fd21aadb36ae4692
+  admin init-config --admin engine-admin --salt 1 --params /mnt/c/Users/user/Documents/basecamp/lez-auction-engine/cli/params/demo-engine.json --protocol-token protocol-def | init_config | 89551d16f507a291a8de2204f3bba4957f9612f56ffac0a1c5b99b7a64a10ed6
+  host bind --admin admin | set_liquidation_engine | 6255538e0e8d164d26398a973a97b0007d269f725363b8af2a461b674d4d9394
+  admin set-collateral-config --admin engine-admin --params /mnt/c/Users/user/Documents/basecamp/lez-auction-engine/cli/params/demo-collateral.json | set_collateral_config | eeeaa926498b5c47d9322a899aabf73060eb4dce73b944c7716098fa9b588256
+  dev token-init-account --definition 6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr --account owner-stable | initialize_account | a98f9c0e0ed311ea7862373c6b8b0b566d1d0e5e981fa5fbdf120ae01645577a
+  dev token-init-account --definition coll-def --account keeper-coll | initialize_account | e6a65332b177af880c4397532c83f92b4ca5f4351fcdf9b0940f0d594590289f
+  dev token-init-account --definition 6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr --account taker-stable | initialize_account | c87dbf28c5182a83e29d98d6efc8ac2caf082e881df739857177c12290c15460
+  host open-position --owner owner --owner-collateral owner-coll --nonce 0 --amount 500000 | open_position | 6b348a1e1bb9723e708f4a47a3a5c017370d6c3ec6dc06e358cf457d45a5f0bc
+  host generate-debt --owner owner --position GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh --owner-stable owner-stable --amount 300000 | generate_debt | 9ffdd3ec60788c046d5e8d1d50eac2b16bbad45664e29453611ac79e284fb75d
+  host open-position --owner owner --owner-collateral owner-coll --nonce 1 --amount 1000000 | open_position | feb8c478287d34a247607bfad19da5f6fbc81d476dbbd8540399a130dbf95a22
+  host generate-debt --owner owner --position 6dTwRfxeCFQXiBMtVRGgZbfd8HhV4LntCQsULrrktQoK --owner-stable owner-stable --amount 100000 | generate_debt | adb43c5c5d37c12860fa38c4dac5e5bbf82265d88ba486ac6729f967b2ab1d26
+  host open-position --owner owner --owner-collateral owner-coll --nonce 2 --amount 500000 | open_position | 9b8668a2bb16fbee2fbe0ff8d94b2d27146eaa5548386e82cc8dc64b9b4680ec
+  host generate-debt --owner owner --position BxedCo4k7vL4bZAgbV6AmCFGE8WwoCkyvBTmBEgTZxuF --owner-stable owner-stable --amount 300000 | generate_debt | d98fe570c1c456b9add5bc59dd2bf51639c7d4f8e8b3cc88aaccb1f26aa92954
+  host set-min-cr --admin admin --ratio 2000000000000000000000000000 | set_minimum_collateralization_ratio | e01fe37dc3a528ea8d4257104a60945827d5e361f61b9d8780fdafeca4cc9ffe
+  liquidate --position GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh --keeper keeper --keeper-holding keeper-coll | liquidate | 475211c5de4f64640212afd007f386263ffa29a04a0ec7b4cff39a2fc4971273
+  bid --auction 3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU --coin-in-max 100000 --bidder-stable owner-stable --bidder-collateral owner-coll | bid | 62d6d1e9072dabc48a32ee63f0c5fa855f50a624570bf6fcd9a8f8efaa0bc0ef
+  bid --auction 3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU --coin-in-max 230000 --bidder-stable owner-stable --bidder-collateral owner-coll | bid_with_settlement | bc71aac8333a9e5366fd429ecbda841af8ed04e83c6c77d9b33059865d174841
+  claim-leftover --owner owner --owner-holding owner-coll --auction 3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU | claim_leftover | 19dd4b94370e77f726d7055aee820c6bd47135228147b81869b0f3faaced5e5b
+  observe-feed --caller caller | observe_feed | 77175044e6974930c477affc2b0a3aef44b02d0dc6f2ba0bf95a3459cc0aac10
+  settle-debt --caller caller | settle_debt | 8f3462e028ef0563de27a9175eeceb2646f83dc4027eadfc29ee27590410be99
+testnet-legacy FAILED (exit 10); log /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z/logs/run.log, summary /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z/testnet-summary.txt
+host may be claimed; admin keys are in /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z/wallet-home; resume with: scripts/wsl-env.sh scripts/testnet-legacy.sh --resume /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z; check nonces before acting
+(f5 finished by hand after the 502 outage; check_solvency nonce 3 confirmed not included)
+check buffer after the surplus lot: 29500 eq 29500: ok
+
+=== testnet-legacy resume: https://testnet-legacy.lez.logos.co/, block 1 c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011, run directory /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z
+node              https://testnet-legacy.lez.logos.co/ (last block 5395)
+chain identity    block 1 c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011 (expected)
+guest token: deployed in block 2301
+guest twap_oracle: deployed in block 2308
+guest token_mint_authority: deployed in block 2298
+guest stablecoin: deployed in block 5280
+guest auction_engine: deployed in block 5281
+
+=== build auction-cli (the run's deployment file is kept)
+chain identity: block 1 c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011
+
+=== price move: the mock (self-signed) publisher sets the market price to 1.9 R (ADR-050)
+frozen            no
+admin             HeWbN5chqf4dkQT6raegpCTAVvSqXA9rzEpYVKgthsCd
+freeze authority  GJoWD6zASVqyfKck9moh3KR8KRrHpYp8eCNoYytfGx1R
+market oracle     572NJZY1HFkLtMjn879QJPyGVymPcs7DUb4jyK3iSqpE
+min collateral ratio 2000000000000000000000000000
+max oracle age ms 3600000
+
+=== shortfall: liquidate p2 at 1.9 R; the lot-binding bid raises less than the debt
+scanned to block  5400
+3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU  settled  sold 337781  raised 330000/330000  leftover 162169 (claimed 162169)
+5xgNNEimXciemShYxxypfKcukBXZjYkWBZePBgW5HXfk  settled  sold 499905  raised 257376/330000  leftover 0 (claimed 0)
+check unbacked debt after the shortfall (R4 range, lower): 42624 ge 42154: ok
+check unbacked debt after the shortfall (R4 range, upper): 42624 le 63200: ok
+
+=== F4: settle against the buffer, start a debt auction, take one lot (stablecoin burned, protocol tokens minted)
+check the buffer settled 29_500 of the bad debt: 13124 eq 13124: ok
+check enough bad debt for one lot: 13124 ge 5000: ok
+check protocol tokens minted to the taker: 13050 gt 9800: ok
+check one lot of bad debt burned: 8124 eq 8124: ok
+check bad debt still above the 5_000 freeze threshold: 8124 gt 5000: ok
+
+=== freeze path: without a protocol token, bad debt above the threshold freezes new debt
+check host frozen: yes
+
+=== final check
+verified          config owner, address, host and token program ids, admin, host ProtocolParameters
+config            Bg3nHnQjPtzngmXBxQ7Zby3sSXqj5Jk9yn8Edmnh7mNS
+admin             7JyKg2s8d7KupBSqSn3kMjmsdTK8w1GhEvgTLVvWH14L
+salt              1
+host program      bda698c4e929e4f63ad7b2949c8e413c26fc69df02434844067baded95c7b40d
+token program     14b3bc6cc129d0359f9595ba0f60a13e4a8df08ffe8eb1a83251c47abecc67a8
+protocol token    none
+ref price (RAY)   2000000000000000000000000000
+freeze threshold  5000
+freeze on bad debt yes
+global cap        10000000
+bound by the host yes
+disk-guard: C: 29 GiB free (min 3), home 107 GiB free (min 20)
+demo complete
+
+=== evidence (resume, exit 0, 2026-10-17T20:07:26Z)
+last block        5406
+deployment file   /home/paschal533/lez-target/testnet-legacy/run-20261017T171726Z/deployment.json
+{
+  "network": "testnet-legacy",
+  "sequencer_url": "https://testnet-legacy.lez.logos.co/",
+  "engine_program_id": "bb506524bfab7ce5d45a4f4836c00a90d7f23a769a2b6c988c66eb82d456f342",
+  "host_program_id": "bda698c4e929e4f63ad7b2949c8e413c26fc69df02434844067baded95c7b40d",
+  "token_program_id": "14b3bc6cc129d0359f9595ba0f60a13e4a8df08ffe8eb1a83251c47abecc67a8",
+  "twap_oracle_program_id": "5681e27c27b3ece4a7c161bbf8e12e6ece6ca69925a87b77f9e193fa4a249b31",
+  "engine_admin": "7JyKg2s8d7KupBSqSn3kMjmsdTK8w1GhEvgTLVvWH14L",
+  "config": "Bg3nHnQjPtzngmXBxQ7Zby3sSXqj5Jk9yn8Edmnh7mNS",
+  "chain_genesis_hash": "c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011"
+}
+accounts (label id)
+  admin HeWbN5chqf4dkQT6raegpCTAVvSqXA9rzEpYVKgthsCd
+  freeze GJoWD6zASVqyfKck9moh3KR8KRrHpYp8eCNoYytfGx1R
+  oracle-src 44QiDRK3qz6PnBpDPAQbaix6DKScFfxMxZghHHNySUtF
+  coll-def BbiaA1TxuYF4sjuGJmKTM73AiLGXqjeuvZ9g835ST81h
+  owner Fk28rzRfsc5DKkHL9JFgUkZQEYhmPgSVqq9YCCYWgnB1
+  owner-coll BMKM2S2bU3Wb4pgsb9gTMo4Vk2uyHptE3rddRihDg45n
+  owner-stable TWy4SdPoQUd9jyMmJRQYvpFu47idtYHtbHjJBkdUthB
+  engine-admin 7JyKg2s8d7KupBSqSn3kMjmsdTK8w1GhEvgTLVvWH14L
+  keeper BP4FvecFuBVQViCayxWR1okFQM1kBbPcytZku7Gi5w8H
+  keeper-coll 5W5sXn7Ei776n5bcb1CNB2ns4P17NHrY1wCCAhA5Ssmi
+  caller 2iUUR2zj4xiEga8moj42ee1E49hg3qoxZD44c6b95U9m
+  protocol-def 9MqvY7jWt6ksizxvk1NJeRYHhWo3qbvxhx6sTUguhvmz
+  taker-protocol 6wpSvChwXT6TxbUoZRdYvMGPMAzQLnCGYiKknKvxmfXL
+  taker-stable Fnxz8WVZjAndrFUp1TtEqgvhujvKmk4hP8QGng9KMJMb
+scenario ids and phases (run.env)
+  PHASE_accounts_done=1
+  PHASE_auth_nonces=0 0 0 0 0 0 0 0 0 0 0 0 0 0
+  PHASE_auth_started=1
+  PHASE_auth_done=1
+  PHASE_deploy_nonces=1 0 1 0 1 0 0 1 1 0 1 0 0 0
+  PHASE_deploy_started=1
+  PHASE_deploy_done=1
+  SCAN_FROM=5281
+  PHASE_host_nonces=1 0 1 0 1 0 0 1 1 0 1 0 0 0
+  PHASE_host_started=1
+  SDEF=6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr
+  ORACLE=Hue5zBq5oNfUihgREQd1NWM1kRMUCDNhheV5UacDveeY
+  PHASE_host_done=1
+  PHASE_engine_nonces=2 0 2 1 1 1 0 1 1 0 1 0 0 0
+  PHASE_engine_started=1
+  PHASE_engine_done=1
+  PHASE_bind_nonces=2 0 2 1 1 1 0 2 1 0 1 1 1 0
+  PHASE_bind_started=1
+  PHASE_bind_done=1
+  PHASE_collateral_nonces=3 0 2 1 1 1 0 2 1 0 1 1 1 0
+  PHASE_collateral_started=1
+  PHASE_collateral_done=1
+  PHASE_holdings_nonces=3 0 2 1 1 1 0 3 1 0 1 1 1 0
+  PHASE_holdings_started=1
+  PHASE_holdings_done=1
+  PHASE_tick_positions_nonces=3 0 2 1 1 1 1 3 1 1 1 1 1 1
+  PHASE_tick_positions_started=1
+  PHASE_tick_positions_done=1
+  PHASE_positions_nonces=3 0 2 1 1 1 1 3 1 1 1 1 1 1
+  PHASE_positions_started=1
+  P0=GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh
+  P1=6dTwRfxeCFQXiBMtVRGgZbfd8HhV4LntCQsULrrktQoK
+  P2=BxedCo4k7vL4bZAgbV6AmCFGE8WwoCkyvBTmBEgTZxuF
+  PHASE_positions_done=1
+  PHASE_tick_f1f3_nonces=4 0 2 1 7 4 1 3 1 1 1 1 1 1
+  PHASE_tick_f1f3_started=1
+  PHASE_tick_f1f3_done=1
+  PHASE_f1f3_nonces=4 0 2 1 7 4 1 3 1 1 1 1 1 1
+  PHASE_f1f3_started=1
+  A0=3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU
+  BUFFER=Aje9F32Kfu2ASwd6ov24VBMgDCD4bWHT1hm1oqMpxNdZ
+  PHASE_f1f3_done=1
+  PHASE_tick_f5_nonces=4 0 2 1 8 4 3 3 2 1 1 1 1 1
+  PHASE_tick_f5_started=1
+  PHASE_tick_f5_done=1
+  PHASE_f5_nonces=4 0 2 1 8 4 3 3 2 1 1 1 1 1
+  PHASE_f5_started=1
+  PHASE_f5_done=1
+  PHASE_price_move_nonces=4 0 2 1 8 4 3 3 2 1 5 1 2 1
+  PHASE_price_move_started=1
+  PHASE_price_move_done=1
+  PHASE_tick_shortfall_nonces=5 0 3 1 8 4 3 4 2 1 5 1 2 1
+  PHASE_tick_shortfall_started=1
+  PHASE_tick_shortfall_done=1
+  PHASE_shortfall_nonces=5 0 3 1 8 4 3 4 2 1 5 1 2 1
+  PHASE_shortfall_started=1
+  A2=5xgNNEimXciemShYxxypfKcukBXZjYkWBZePBgW5HXfk
+  U1=42624
+  PHASE_shortfall_done=1
+  PHASE_tick_f4_nonces=5 0 3 1 8 4 4 4 3 1 5 1 2 1
+  PHASE_tick_f4_started=1
+  PHASE_tick_f4_done=1
+  PHASE_f4_nonces=5 0 3 1 8 4 4 4 3 1 5 1 2 1
+  PHASE_f4_started=1
+  PHASE_f4_done=1
+  PHASE_tick_freeze_nonces=5 0 3 1 8 4 5 4 3 1 7 1 2 2
+  PHASE_tick_freeze_started=1
+  PHASE_tick_freeze_done=1
+  PHASE_freeze_nonces=5 0 3 1 8 4 5 4 3 1 7 1 2 2
+  PHASE_freeze_started=1
+  PHASE_freeze_done=1
+  PHASE_final_nonces=5 0 3 1 8 4 5 5 3 1 8 1 2 2
+  PHASE_final_started=1
+  PHASE_final_done=1
+program deployments and auth-transfer init (wallet: transaction hash, inclusion block)
+  Transaction hash is b34e2d8f7ecd2d4cc7bb18526c63a8b57a0d547821a0e0872e762087c1a03b29
+  Transaction is included in block 5274
+  Transaction hash is 0371b33c4b7e609bba866fb2cf53e9abec73695ed0de69111239a0fd7203899e
+  Transaction is included in block 5275
+  Transaction hash is a8bf134408cf44373647003ed2314f204f12d6129dee267dc081331d6eed6ee8
+  Transaction is included in block 5276
+  Transaction hash is c5486f5489090fd4eaafb99bd76f0b3e4fa8551dabaecfe7de9f6af6f739b70a
+  Transaction is included in block 5277
+  Transaction hash is ea660d41ed313afdb8e82d1ecc1da9519e3f429b3b21f73bff0fb70ad14c50f7
+  Transaction is included in block 5278
+  Transaction hash is 22211d3d7360a16eacef989210e2d7494e6f29480a8fd70583076ebc59d39dbc
+  Transaction is included in block 5279
+  Transaction hash is aa1ad271654084f2a98eaba5fcae71e26c12f8a807657e92dd367758c6eb387f
+  Transaction is included in block 5280
+  Transaction hash is 9f5bd3455ac87cc1c399ef3d3d31dc421b5135308e72d03dbd4e178d033dc2e7
+  Transaction is included in block 5281
+auction-cli transactions (command | instruction | hash): 38
+  dev token-new --definition coll-def --holding owner-coll --name COLL --supply 100000000000 | new_fungible_definition | 1ecf2b3e30d88dc9143791079e680a14506b12199e9a4ef3c9b3c8c1df86aad3
+  dev oracle-create --price-source oracle-src --base 6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr --quote coll-def --price 1000000000000000000000000000 --window-ms 3600000 | create_oracle_price_account | f3522904a8d54885956bd55dfc31f8e9e774bdffe20d29ad63263b42a1da2c85
+  host init-program --admin admin --freeze freeze --collateral-def coll-def --oracle Hue5zBq5oNfUihgREQd1NWM1kRMUCDNhheV5UacDveeY --min-cr 1500000000000000000000000000 --redemption-price 1000000000000000000000000000 | initialize_program | 376bbba0d36c79cca5d4509bf0c8a122334fc517d333f9e8680b72efb82cc6a0
+  dev token-new --definition protocol-def --holding taker-protocol --name MOCK --supply 10000 --mint-authority 92osddeKVsPJ37dKQoBEtRY743VNvnmpJHbXr6oWhM3B | new_fungible_definition | cb84bdba6182fb8efd1c3c7a8c3d4d0acd16777c2fdf1782fd21aadb36ae4692
+  admin init-config --admin engine-admin --salt 1 --params /mnt/c/Users/user/Documents/basecamp/lez-auction-engine/cli/params/demo-engine.json --protocol-token protocol-def | init_config | 89551d16f507a291a8de2204f3bba4957f9612f56ffac0a1c5b99b7a64a10ed6
+  host bind --admin admin | set_liquidation_engine | 6255538e0e8d164d26398a973a97b0007d269f725363b8af2a461b674d4d9394
+  admin set-collateral-config --admin engine-admin --params /mnt/c/Users/user/Documents/basecamp/lez-auction-engine/cli/params/demo-collateral.json | set_collateral_config | eeeaa926498b5c47d9322a899aabf73060eb4dce73b944c7716098fa9b588256
+  dev token-init-account --definition 6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr --account owner-stable | initialize_account | a98f9c0e0ed311ea7862373c6b8b0b566d1d0e5e981fa5fbdf120ae01645577a
+  dev token-init-account --definition coll-def --account keeper-coll | initialize_account | e6a65332b177af880c4397532c83f92b4ca5f4351fcdf9b0940f0d594590289f
+  dev token-init-account --definition 6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr --account taker-stable | initialize_account | c87dbf28c5182a83e29d98d6efc8ac2caf082e881df739857177c12290c15460
+  host open-position --owner owner --owner-collateral owner-coll --nonce 0 --amount 500000 | open_position | 6b348a1e1bb9723e708f4a47a3a5c017370d6c3ec6dc06e358cf457d45a5f0bc
+  host generate-debt --owner owner --position GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh --owner-stable owner-stable --amount 300000 | generate_debt | 9ffdd3ec60788c046d5e8d1d50eac2b16bbad45664e29453611ac79e284fb75d
+  host open-position --owner owner --owner-collateral owner-coll --nonce 1 --amount 1000000 | open_position | feb8c478287d34a247607bfad19da5f6fbc81d476dbbd8540399a130dbf95a22
+  host generate-debt --owner owner --position 6dTwRfxeCFQXiBMtVRGgZbfd8HhV4LntCQsULrrktQoK --owner-stable owner-stable --amount 100000 | generate_debt | adb43c5c5d37c12860fa38c4dac5e5bbf82265d88ba486ac6729f967b2ab1d26
+  host open-position --owner owner --owner-collateral owner-coll --nonce 2 --amount 500000 | open_position | 9b8668a2bb16fbee2fbe0ff8d94b2d27146eaa5548386e82cc8dc64b9b4680ec
+  host generate-debt --owner owner --position BxedCo4k7vL4bZAgbV6AmCFGE8WwoCkyvBTmBEgTZxuF --owner-stable owner-stable --amount 300000 | generate_debt | d98fe570c1c456b9add5bc59dd2bf51639c7d4f8e8b3cc88aaccb1f26aa92954
+  host set-min-cr --admin admin --ratio 2000000000000000000000000000 | set_minimum_collateralization_ratio | e01fe37dc3a528ea8d4257104a60945827d5e361f61b9d8780fdafeca4cc9ffe
+  liquidate --position GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh --keeper keeper --keeper-holding keeper-coll | liquidate | 475211c5de4f64640212afd007f386263ffa29a04a0ec7b4cff39a2fc4971273
+  bid --auction 3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU --coin-in-max 100000 --bidder-stable owner-stable --bidder-collateral owner-coll | bid | 62d6d1e9072dabc48a32ee63f0c5fa855f50a624570bf6fcd9a8f8efaa0bc0ef
+  bid --auction 3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU --coin-in-max 230000 --bidder-stable owner-stable --bidder-collateral owner-coll | bid_with_settlement | bc71aac8333a9e5366fd429ecbda841af8ed04e83c6c77d9b33059865d174841
+  claim-leftover --owner owner --owner-holding owner-coll --auction 3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU | claim_leftover | 19dd4b94370e77f726d7055aee820c6bd47135228147b81869b0f3faaced5e5b
+  observe-feed --caller caller | observe_feed | 77175044e6974930c477affc2b0a3aef44b02d0dc6f2ba0bf95a3459cc0aac10
+  settle-debt --caller caller | settle_debt | 8f3462e028ef0563de27a9175eeceb2646f83dc4027eadfc29ee27590410be99
+  check-solvency --caller caller | check_solvency | bad2fb2e7ac528bc475cdc64e3fe9982970d8a4b4e0f0685ca0b8a050f8560df
+  start-surplus --caller caller | start_surplus_auction | 3acd969fd81e036355526fdea7e0d3c735061bd0ffb1627101e7d56a0ed1f920
+  start-surplus --caller caller | start_surplus_auction | 2e7b3afe8dc3c457a1c6595237720575ea283f2e51c1b8a911c90ac62a788d92
+  take-surplus --payer taker-protocol --receiver taker-stable --amount 500 | take_surplus | 6784450b299b7a2cf7f0345a6ee77b0c58711323a6b1fd5ba78d5161dae1fa62
+  dev oracle-publish --price-source oracle-src --price 1900000000000000000000000000 --host-admin admin --engine-admin engine-admin | create_oracle_price_account | 75bf60fda3e45bd6b9e99f0c83eca13f11890c5701bc419493997f29108402b6
+  dev oracle-publish --price-source oracle-src --price 1900000000000000000000000000 --host-admin admin --engine-admin engine-admin | set_market_price_oracle | f140af111d8da9c4d4651747c638d5f91b2346a6de0f409d45ca07a3c44811d6
+  dev oracle-publish --price-source oracle-src --price 1900000000000000000000000000 --host-admin admin --engine-admin engine-admin | set_collateral_config | 7be643fa73f7b531931f7bc35f9be069bc1a9b34480bd49318b92c9f4bb08c91
+  liquidate --position BxedCo4k7vL4bZAgbV6AmCFGE8WwoCkyvBTmBEgTZxuF --keeper keeper --keeper-holding keeper-coll | liquidate | aaecb88b9b47434ee788e0937e65c014d1115dc116f45e0fc901f3ef3ce394e8
+  bid --auction 5xgNNEimXciemShYxxypfKcukBXZjYkWBZePBgW5HXfk --coin-in-max 330000 --bidder-stable owner-stable --bidder-collateral owner-coll | bid_with_settlement | b5c502a14829f7ee80a5f5e4c04db3944b0336259a198ebda135fa0642dac42c
+  settle-debt --caller caller | settle_debt | ee6a34514016c2e7b78e74d56fcd7cdb36f385f7209399b53e1012128c11127f
+  start-debt --caller caller | start_debt_auction | aef01cc542528dfcc0df186c2565a5ed153bc7738c9cd14784c51e9bcfc8c247
+  dev token-transfer --from owner-stable --to taker-stable --amount 5000 | transfer | d6da41a99815285821f3954200bcad3b97fd82e72c4b5ded3200d089e55a5f85
+  take-debt --payer taker-stable --receiver taker-protocol --amount 5000 | take_debt | ab89bcacb72a6451a09be2d3019cfb9c655c97970e83f292cd343966a4ea1e58
+  admin set-engine-params --admin engine-admin --params /mnt/c/Users/user/Documents/basecamp/lez-auction-engine/cli/params/demo-engine.json --disable-protocol-token | set_engine_params | 4046dd35014c20a9b888788f7e60e5efb4a7866bf3d5fa4553fc5a82bbd9d11b
+  check-solvency --caller caller | check_solvency | 309df79f13d90c55a927e851972b51df6ff0107adabd6accbef945d473fcbf8f

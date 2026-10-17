@@ -1,0 +1,11 @@
+{
+  "network": "testnet-legacy",
+  "sequencer_url": "https://testnet-legacy.lez.logos.co/",
+  "engine_program_id": "bb506524bfab7ce5d45a4f4836c00a90d7f23a769a2b6c988c66eb82d456f342",
+  "host_program_id": "bda698c4e929e4f63ad7b2949c8e413c26fc69df02434844067baded95c7b40d",
+  "token_program_id": "14b3bc6cc129d0359f9595ba0f60a13e4a8df08ffe8eb1a83251c47abecc67a8",
+  "twap_oracle_program_id": "5681e27c27b3ece4a7c161bbf8e12e6ece6ca69925a87b77f9e193fa4a249b31",
+  "engine_admin": "7JyKg2s8d7KupBSqSn3kMjmsdTK8w1GhEvgTLVvWH14L",
+  "config": "Bg3nHnQjPtzngmXBxQ7Zby3sSXqj5Jk9yn8Edmnh7mNS",
+  "chain_genesis_hash": "c8e3bb9ec8f246e5c2759e0e8152840aeb7df29948a9ad12c9c302a641230011"
+}

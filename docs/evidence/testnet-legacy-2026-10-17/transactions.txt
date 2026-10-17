@@ -1,0 +1,38 @@
+dev token-new --definition coll-def --holding owner-coll --name COLL --supply 100000000000 | new_fungible_definition | 1ecf2b3e30d88dc9143791079e680a14506b12199e9a4ef3c9b3c8c1df86aad3
+dev oracle-create --price-source oracle-src --base 6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr --quote coll-def --price 1000000000000000000000000000 --window-ms 3600000 | create_oracle_price_account | f3522904a8d54885956bd55dfc31f8e9e774bdffe20d29ad63263b42a1da2c85
+host init-program --admin admin --freeze freeze --collateral-def coll-def --oracle Hue5zBq5oNfUihgREQd1NWM1kRMUCDNhheV5UacDveeY --min-cr 1500000000000000000000000000 --redemption-price 1000000000000000000000000000 | initialize_program | 376bbba0d36c79cca5d4509bf0c8a122334fc517d333f9e8680b72efb82cc6a0
+dev token-new --definition protocol-def --holding taker-protocol --name MOCK --supply 10000 --mint-authority 92osddeKVsPJ37dKQoBEtRY743VNvnmpJHbXr6oWhM3B | new_fungible_definition | cb84bdba6182fb8efd1c3c7a8c3d4d0acd16777c2fdf1782fd21aadb36ae4692
+admin init-config --admin engine-admin --salt 1 --params /mnt/c/Users/user/Documents/basecamp/lez-auction-engine/cli/params/demo-engine.json --protocol-token protocol-def | init_config | 89551d16f507a291a8de2204f3bba4957f9612f56ffac0a1c5b99b7a64a10ed6
+host bind --admin admin | set_liquidation_engine | 6255538e0e8d164d26398a973a97b0007d269f725363b8af2a461b674d4d9394
+admin set-collateral-config --admin engine-admin --params /mnt/c/Users/user/Documents/basecamp/lez-auction-engine/cli/params/demo-collateral.json | set_collateral_config | eeeaa926498b5c47d9322a899aabf73060eb4dce73b944c7716098fa9b588256
+dev token-init-account --definition 6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr --account owner-stable | initialize_account | a98f9c0e0ed311ea7862373c6b8b0b566d1d0e5e981fa5fbdf120ae01645577a
+dev token-init-account --definition coll-def --account keeper-coll | initialize_account | e6a65332b177af880c4397532c83f92b4ca5f4351fcdf9b0940f0d594590289f
+dev token-init-account --definition 6ng2TNeqxgP8LdZ1AF2L8AYjtibE2ReeNKTJjpskQQqr --account taker-stable | initialize_account | c87dbf28c5182a83e29d98d6efc8ac2caf082e881df739857177c12290c15460
+host open-position --owner owner --owner-collateral owner-coll --nonce 0 --amount 500000 | open_position | 6b348a1e1bb9723e708f4a47a3a5c017370d6c3ec6dc06e358cf457d45a5f0bc
+host generate-debt --owner owner --position GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh --owner-stable owner-stable --amount 300000 | generate_debt | 9ffdd3ec60788c046d5e8d1d50eac2b16bbad45664e29453611ac79e284fb75d
+host open-position --owner owner --owner-collateral owner-coll --nonce 1 --amount 1000000 | open_position | feb8c478287d34a247607bfad19da5f6fbc81d476dbbd8540399a130dbf95a22
+host generate-debt --owner owner --position 6dTwRfxeCFQXiBMtVRGgZbfd8HhV4LntCQsULrrktQoK --owner-stable owner-stable --amount 100000 | generate_debt | adb43c5c5d37c12860fa38c4dac5e5bbf82265d88ba486ac6729f967b2ab1d26
+host open-position --owner owner --owner-collateral owner-coll --nonce 2 --amount 500000 | open_position | 9b8668a2bb16fbee2fbe0ff8d94b2d27146eaa5548386e82cc8dc64b9b4680ec
+host generate-debt --owner owner --position BxedCo4k7vL4bZAgbV6AmCFGE8WwoCkyvBTmBEgTZxuF --owner-stable owner-stable --amount 300000 | generate_debt | d98fe570c1c456b9add5bc59dd2bf51639c7d4f8e8b3cc88aaccb1f26aa92954
+host set-min-cr --admin admin --ratio 2000000000000000000000000000 | set_minimum_collateralization_ratio | e01fe37dc3a528ea8d4257104a60945827d5e361f61b9d8780fdafeca4cc9ffe
+liquidate --position GEJb9ytC44jbgd9SoXMGWT5Wd6tstVEhjrRSfTTZLgCh --keeper keeper --keeper-holding keeper-coll | liquidate | 475211c5de4f64640212afd007f386263ffa29a04a0ec7b4cff39a2fc4971273
+bid --auction 3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU --coin-in-max 100000 --bidder-stable owner-stable --bidder-collateral owner-coll | bid | 62d6d1e9072dabc48a32ee63f0c5fa855f50a624570bf6fcd9a8f8efaa0bc0ef
+bid --auction 3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU --coin-in-max 230000 --bidder-stable owner-stable --bidder-collateral owner-coll | bid_with_settlement | bc71aac8333a9e5366fd429ecbda841af8ed04e83c6c77d9b33059865d174841
+claim-leftover --owner owner --owner-holding owner-coll --auction 3G6MyctHjBnV7Rm9RD8TPVheC3gzGKZLvu11Gb4pFxJU | claim_leftover | 19dd4b94370e77f726d7055aee820c6bd47135228147b81869b0f3faaced5e5b
+observe-feed --caller caller | observe_feed | 77175044e6974930c477affc2b0a3aef44b02d0dc6f2ba0bf95a3459cc0aac10
+settle-debt --caller caller | settle_debt | 8f3462e028ef0563de27a9175eeceb2646f83dc4027eadfc29ee27590410be99
+check-solvency --caller caller | check_solvency | bad2fb2e7ac528bc475cdc64e3fe9982970d8a4b4e0f0685ca0b8a050f8560df
+start-surplus --caller caller | start_surplus_auction | 3acd969fd81e036355526fdea7e0d3c735061bd0ffb1627101e7d56a0ed1f920
+start-surplus --caller caller | start_surplus_auction | 2e7b3afe8dc3c457a1c6595237720575ea283f2e51c1b8a911c90ac62a788d92
+take-surplus --payer taker-protocol --receiver taker-stable --amount 500 | take_surplus | 6784450b299b7a2cf7f0345a6ee77b0c58711323a6b1fd5ba78d5161dae1fa62
+dev oracle-publish --price-source oracle-src --price 1900000000000000000000000000 --host-admin admin --engine-admin engine-admin | create_oracle_price_account | 75bf60fda3e45bd6b9e99f0c83eca13f11890c5701bc419493997f29108402b6
+dev oracle-publish --price-source oracle-src --price 1900000000000000000000000000 --host-admin admin --engine-admin engine-admin | set_market_price_oracle | f140af111d8da9c4d4651747c638d5f91b2346a6de0f409d45ca07a3c44811d6
+dev oracle-publish --price-source oracle-src --price 1900000000000000000000000000 --host-admin admin --engine-admin engine-admin | set_collateral_config | 7be643fa73f7b531931f7bc35f9be069bc1a9b34480bd49318b92c9f4bb08c91
+liquidate --position BxedCo4k7vL4bZAgbV6AmCFGE8WwoCkyvBTmBEgTZxuF --keeper keeper --keeper-holding keeper-coll | liquidate | aaecb88b9b47434ee788e0937e65c014d1115dc116f45e0fc901f3ef3ce394e8
+bid --auction 5xgNNEimXciemShYxxypfKcukBXZjYkWBZePBgW5HXfk --coin-in-max 330000 --bidder-stable owner-stable --bidder-collateral owner-coll | bid_with_settlement | b5c502a14829f7ee80a5f5e4c04db3944b0336259a198ebda135fa0642dac42c
+settle-debt --caller caller | settle_debt | ee6a34514016c2e7b78e74d56fcd7cdb36f385f7209399b53e1012128c11127f
+start-debt --caller caller | start_debt_auction | aef01cc542528dfcc0df186c2565a5ed153bc7738c9cd14784c51e9bcfc8c247
+dev token-transfer --from owner-stable --to taker-stable --amount 5000 | transfer | d6da41a99815285821f3954200bcad3b97fd82e72c4b5ded3200d089e55a5f85
+take-debt --payer taker-stable --receiver taker-protocol --amount 5000 | take_debt | ab89bcacb72a6451a09be2d3019cfb9c655c97970e83f292cd343966a4ea1e58
+admin set-engine-params --admin engine-admin --params /mnt/c/Users/user/Documents/basecamp/lez-auction-engine/cli/params/demo-engine.json --disable-protocol-token | set_engine_params | 4046dd35014c20a9b888788f7e60e5efb4a7866bf3d5fa4553fc5a82bbd9d11b
+check-solvency --caller caller | check_solvency | 309df79f13d90c55a927e851972b51df6ff0107adabd6accbef945d473fcbf8f

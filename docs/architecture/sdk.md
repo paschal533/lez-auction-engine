@@ -47,7 +47,7 @@ Each row has a test against a local mock HTTP server (`rpc_tests.rs`, no externa
 |---|---|---|
 | `chain`, `encode`, `error`, `plan`, `testing` | 4 | trait, encoders, errors, plan type, fixtures |
 | `addresses`, `decode` | 5 | PDAs from the engine's and host's own functions; decoders that check initialisation, owner and tag |
-| `deployment`, `verify` | 5 | `deployments/<network>.json` (must match `DEPLOYMENTS.md`); `verify_config` refuses a config not owned by the engine ImageID, not at `["CONFIG", admin, salt]`, or storing another host/token program, admin, `ProtocolParameters` or stablecoin definition, or whose host `ProtocolParameters` has another owner (I4, ADR-027); `verify_binding` checks the host binds this config |
+| `deployment`, `verify` | 5 | `deployments/<network>.json` (must match `DEPLOYMENTS.md`, which is checked by hand); `verify_config` refuses a config not owned by the engine ImageID, not at `["CONFIG", admin, salt]`, or storing another host/token program, admin, `ProtocolParameters` or stablecoin definition, or whose host `ProtocolParameters` has another owner (I4, ADR-027); `verify_binding` checks the host binds this config |
 | `testing::standard` | 5 | the "standard world" fixture (`standard()`, `deployment()`, `config_id()` and the shared constants) used by SDK, CLI and golden tests; built from direct account inserts, no program runs |
 | `quote` | 6 | liquidation, bid, surplus-take and debt-take quotes on the handler's own path; auction view (held at max discount, paused reason); slippage helpers; next debt start (ADR-039) |
 | `plan` (builders) | 7 | one builder per engine instruction (Shared Reference S1 lists, checked against `idl/auction_engine-idl.json`); fresh recipient holdings added as signers; slots from the config (ADR-030); `bid` vs `bid_with_settlement` chosen by the caller from `BidQuote::needs_settlement` (ADR-029) |
@@ -71,7 +71,7 @@ Trust boundary: the RPC endpoint is trusted. There are no state proofs, so a mal
 
 `verify_config` deliberately does not check the collateral definition, the `CollateralConfig` oracle id, or the protocol token and its oracle. Those are checked at use time: `Reader::oracle` (owner = twap oracle program when the deployment names it), `Reader::token_definition` (owner = token program), `Reader::balance`, and on-chain by the engine's own account pinning.
 
-The ImageIDs in `deployments/localnet.json` are the reproducible Docker-build values of `artifacts/guests/manifest.json` (ADR-047, Plan 3b Task 5); they equal `DEPLOYMENTS.md`, and a test pins all three together.
+The ImageIDs in `deployments/localnet.json` are the reproducible Docker-build values of `artifacts/guests/manifest.json` (ADR-047, Plan 3b Task 5); `deployments/localnet.json` is pinned to the manifest by the test `guest_manifest_matches_the_localnet_deployment`; `DEPLOYMENTS.md` carries the same values and is kept equal by hand (no test reads it).
 
 ## Quotes
 
@@ -145,7 +145,7 @@ The CLI-driven run on a real standalone sequencer (every program instruction sen
 
 - Confirmation and scanner (Task 2): a rebase margin in `confirm.rs`, anchorless cursors reset on rescan in `scan.rs`, lock edge cases pinned in `confirm_tests.rs` (ADR-042, ADR-043 amendments).
 - Dev commands and watch (Task 3): state-changing dev commands require the recorded chain identity (`verify.rs`, `deployment.rs`, ADR-046); `watch` exits with the worst step error (ADR-044 amendment).
-- Reproducible guests (Task 5): `verify.rs` pins `deployments/localnet.json` to `artifacts/guests/manifest.json` and `DEPLOYMENTS.md` (ADR-047).
+- Reproducible guests (Task 5): `verify.rs` pins `deployments/localnet.json` to `artifacts/guests/manifest.json` (ADR-047); `DEPLOYMENTS.md` is kept equal by hand.
 - Fuzz targets (Task 9): see Fuzzing above.
 - Oracle publisher and keeper (Task 10): `oracle.rs`, `plan_host.rs`, `auction-cli dev oracle-publish` and `dev keeper`, `host status` (ADR-050).
 - Demo scenario (Task 11): `demo.rs` and `cli/params/demo-*.json` (ADR-051).

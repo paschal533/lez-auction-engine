@@ -1058,6 +1058,9 @@ Accepted (Plan 3b, Task 1); finalised in Task 7 (CI tiers as built: PUSH B, NIGH
 **Amended (Plan 3b, Task 7)**
 What happened to the items the text above defers to Task 7. The privacy circuit (`prove_ppe_observe_feed`) was not scheduled and not re-run (`PPE_NIGHTLY=no`; the R5 deferral stands). The full ADR-036 suite was proved locally at po2 19 (42 executions, all verified, peak RSS about 4.6 GiB; `docs/evidence/real-proofs-2026-10.md`), which confirms Tier B for `settle_debt` (304 s, 2 segments). The suite has no `bid_with_settlement` label; that instruction was proved by the standalone `prove_bid_with_settlement` run at po2 19 (4 executions, 19:11.95, peak RSS 4,826,600 kB, engine execution 1,835,008 total cycles in 4 segments). Hosted timings are not recorded: `real-proofs.yml` is not on `main`, and the first `real-proof-push` timing is recorded in `docs/architecture/real-proofs.md` after the merge. No tier moved.
 
+**Amended (Plan 3b, final review)**
+The local smoke run at `RISC0_DEV_MODE=0` deferred above happened: the full demo ran locally with `--sequencer-dev-mode 0` (973 s, 37 transactions, every check ok; see `DEMO.md`), which closes the deferred R1 check. `scripts/demo.sh` was added in Task 13 (not Task 14); the `localnet-e2e` job was added in Task 14 and has not yet run on a hosted runner (its first hosted run is recorded after the merge to `main`).
+
 ---
 
 ## ADR-046: Chain Identity for State-Changing Dev Commands

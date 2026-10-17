@@ -8,7 +8,7 @@ private path call the prover. The PoC submits public transactions only (spec §8
 
 1. **RFP S2 / spec §9 end to end:** the localnet flow driven by `auction-cli` against a standalone
    sequencer started with `RISC0_DEV_MODE=0` (`scripts/demo.sh --sequencer-dev-mode 0`, CI job
-   `localnet-e2e`; both added in Task 14). Nothing in that path accepts a dev-mode receipt.
+   `localnet-e2e`; the job added in Task 14, `demo.sh` in Task 13). Nothing in that path accepts a dev-mode receipt.
    CI: `.github/workflows/e2e.yml`, job `localnet-e2e` (`RISC0_DEV_MODE=0` on every push to `main`; both modes nightly).
 2. **Receipts:** every execution of an instruction's chained calls proved with the risc0 prover
    (`AUCTION_PROVE=1 RISC0_DEV_MODE=0`, external `r0vm` 3.0.5) and verified against its ImageID
@@ -43,8 +43,8 @@ covers the Plan 3a smoke's path and more; see [DEMO.md](../../DEMO.md). CI: the 
 ## Tiers
 
 (B), tiered by the Plan 3b Task 1 measurement:
-- RFP S2: the `localnet-e2e` job (added in Task 14) runs `scripts/demo.sh` (added in Task 14) against a sequencer with `RISC0_DEV_MODE=0` on
-  every push to `main` (R1; its first green run is recorded in Task 14).
+- RFP S2: the `localnet-e2e` job (added in Task 14) runs `scripts/demo.sh` (added in Task 13) against a sequencer with `RISC0_DEV_MODE=0` on
+  every push to `main` (R1; its first hosted run is recorded here after the merge; none has happened yet).
 - Segment size `AUCTION_PROVE_PO2 = 19` (R2): the largest po2 whose `prove_liquidate` run passed
   (4719 MiB ≤ 5632 MiB).
 - Per push to `main`: Tier B: `real-proof-push` proves `settle_debt` on a hosted runner; the

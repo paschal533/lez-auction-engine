@@ -21,7 +21,7 @@ Tested on Ubuntu 24.04 under WSL. Ubuntu 22.04 is expected to work and is what t
 - risc0 components, pinned: `curl -L https://risczero.com/install | bash`, then
   `rzup install rust 1.94.1 && rzup install cpp 2024.1.5 && rzup install r0vm 3.0.5 && rzup install cargo-risczero 3.0.5`.
 - `scripts/bootstrap-lez.sh` builds the LEZ v0.2.4 sequencer and wallet into `$HOME/lez-deps`, once
-  (about 20 min cold).
+  (about 20 min cold; an unmeasured plan estimate, the first hosted e2e run records the real figure).
 - Port 3040 free; at least 20 GB free disk.
 
 The spec asks for "a clean machine with Nix"; this PoC documents the prerequisites above instead of a Nix

@@ -1,6 +1,8 @@
 # Draft issue (for logos-co/spel; cross-link from logos-blockchain/lez-programs)
 
-**Status:** DRAFT. Not filed. The author files it, edited as they see fit.
+**Status:** SUPERSEDED, do not file. Upstream fixed it independently: spel #288 (closed) and commits `d58984a4`,
+`adb46c66` on spel `main` order instructions by the enum. The fix is after v0.7.0 (the last release for LEZ v0.2.4),
+so this PoC keeps its own enum-index encoders (ADR-040). Kept as the record of the finding.
 
 ---
 

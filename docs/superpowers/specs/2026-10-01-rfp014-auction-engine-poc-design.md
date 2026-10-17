@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | v5, ready for planning. It includes the internal spec review and four external reviews of 2026-10-01 (see §19). |
 | **Date** | 2026-10-01 |
-| **Author** | paschal533, with Claude |
+| **Author** | paschal533 |
 | **Scope of this spec** | Sub-project **A**: a 3-week, engine-first PoC. Sub-project **B** (follow-ups) is listed in §2.3 and gets its own spec. |
 | **Target RFP** | [logos-co/rfp RFP-014](https://github.com/logos-co/rfp/blob/master/RFPs/RFP-014-liquidation-auction-engine.md). Status `closed`, "Reopening soon", no date given. |
 | **Evidence base** | `docs/research/research-0..6-*.md`, `docs/design/ui/*`; code at lez-programs `64c0120`, LEZ v0.2.4, SPEL `1ef0500f` |

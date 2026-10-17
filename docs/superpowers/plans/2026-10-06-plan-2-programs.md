@@ -28,7 +28,7 @@
 - Handler order: checks → effects → chained calls. No admin path moves auction collateral, buffer funds or system-auction funds.
 - `Accounting` is written only at chain end (ADR-023): every chain-end path calls `Accounting::record_settled` (Task 2) exactly once.
 - Build and test inside WSL against the repo at `/mnt/c/Users/user/Documents/basecamp/lez-auction-engine` with `CARGO_TARGET_DIR=$HOME/lez-target/plan2` (controller ruling), always through `scripts/wsl-cargo.sh` (Task 1). From Git Bash, prefix `MSYS_NO_PATHCONV=1` so `/mnt/...` arguments are not mangled (S4), and call `wsl -d Ubuntu-20.04 -e bash -lc '…'` (`-e` passes the command unchanged, so `$HOME`/`$VAR` expand inside WSL).
-- Commits: conventional format `<type>: <description>`, ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` (repo convention since Plan 1). Every task's commit step is labelled "Commit (controller — GPG signing on Windows)": the implementer stages the listed files and reports; the controller runs the commit from Git Bash on Windows; never from WSL. Nothing is pushed.
+- Commits: conventional format `<type>: <description>`, with no co-author trailer. Every task's commit step is labelled "Commit (controller — GPG signing on Windows)": the implementer stages the listed files and reports; the controller runs the commit from Git Bash on Windows; never from WSL. Nothing is pushed.
 - Docs are updated in the same task as the code they describe (`docs/architecture/*.md`, `docs/design-log.md`, `THREAT_MODEL.md`).
 - Every instruction argument type is spel-encodable: `bool`, `u8`, `u32`, `u64`, `u128`, `Vec<u32>`, `AccountId`, `ProgramId` (ADR-030). bps travel as `u32` and are range-checked; schedules travel as `Vec<u32>` of interleaved `(elapsed_ms, bps)` pairs.
 - The **Shared Reference** section below (seeds, account layouts, instruction account lists, error names) is part of every task.
@@ -291,9 +291,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add .gitattributes scripts/wsl-cargo.sh README.md
-git commit -m "chore: LF line endings and WSL cargo wrapper for program builds
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "chore: LF line endings and WSL cargo wrapper for program builds"
 ```
 (Files renormalised in Step 3 are already staged and go into this commit; name them in the body as "renormalised to LF".)
 
@@ -457,9 +455,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add crates/auction_core/src/accounting.rs crates/auction_core/tests/invariants.rs docs/architecture/core.md
-git commit -m "feat(core): Accounting::record_settled chain-end fold; restate invariants for chain-end accounting
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(core): Accounting::record_settled chain-end fold; restate invariants for chain-end accounting"
 ```
 
 ---
@@ -511,9 +507,7 @@ git commit -m "vendor: lez-programs 64c01210 (stablecoin, token, twap_oracle cor
 
 Pristine git archive of logos-blockchain/lez-programs 64c01210adecd6b557dbd021a3cc94553f243fd8.
 programs/integration_tests is vendored as programs/upstream_integration_tests (Cargo.toml,
-src/lib.rs, tests/stablecoin.rs only). No local edits in this commit.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+src/lib.rs, tests/stablecoin.rs only). No local edits in this commit."
 ```
 (`programs/Cargo.lock.upstream` stays untracked; Step 5 consumes and deletes it.)
 
@@ -751,9 +745,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add Cargo.toml Cargo.lock programs/upstream_integration_tests/Cargo.toml programs/UPSTREAM.md programs/stablecoin/clippy.toml programs/stablecoin/rustfmt.toml programs/token/clippy.toml programs/token/rustfmt.toml programs/twap_oracle/clippy.toml programs/twap_oracle/rustfmt.toml scripts/export-hook-patches.sh scripts/check-hook-patches.sh idl/stablecoin-idl.json .github/workflows/core.yml docs/design-log.md
-git commit -m "build: wire vendored lez-programs into the workspace; upstream suite green; ADR-025
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "build: wire vendored lez-programs into the workspace; upstream suite green; ADR-025"
 ```
 
 ---
@@ -1509,13 +1501,9 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add programs/stablecoin/core/src/liquidation_engine_state.rs programs/stablecoin/core/src/lib.rs programs/stablecoin/core/Cargo.toml programs/stablecoin/src/liquidation_hooks.rs programs/stablecoin/src/lib.rs programs/stablecoin/methods/guest/src/bin/stablecoin.rs idl/stablecoin-idl.json docs/architecture/hooks.md docs/design-log.md
-git commit -m "feat(stablecoin): engine binding and Variant C freeze hook, appended at enum/IDL 19-21; ADR-026
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(stablecoin): engine binding and Variant C freeze hook, appended at enum/IDL 19-21; ADR-026"
 bash scripts/export-hook-patches.sh && MSYS_NO_PATHCONV=1 wsl -d Ubuntu-20.04 -e bash -lc 'cd /mnt/c/Users/user/Documents/basecamp/lez-auction-engine && scripts/check-hook-patches.sh'
-git add patches/stablecoin && git commit -m "chore: export stablecoin hook patch series
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add patches/stablecoin && git commit -m "chore: export stablecoin hook patch series"
 ```
 
 ---
@@ -2127,13 +2115,9 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add programs/stablecoin/src/checks.rs programs/stablecoin/src/liquidation_hooks.rs programs/stablecoin/methods/guest/src/bin/stablecoin.rs idl/stablecoin-idl.json docs/architecture/hooks.md
-git commit -m "feat(stablecoin): liquidate_position hook with proportionality bound and vault sweep
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(stablecoin): liquidate_position hook with proportionality bound and vault sweep"
 bash scripts/export-hook-patches.sh && MSYS_NO_PATHCONV=1 wsl -d Ubuntu-20.04 -e bash -lc 'cd /mnt/c/Users/user/Documents/basecamp/lez-auction-engine && scripts/check-hook-patches.sh'
-git add patches/stablecoin && git commit -m "chore: export stablecoin hook patch series
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git add patches/stablecoin && git commit -m "chore: export stablecoin hook patch series"
 ```
 
 ---
@@ -3437,9 +3421,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add Cargo.toml Cargo.lock programs/auction_engine/core docs/architecture/programs.md docs/design-log.md .github/workflows/core.yml
-git commit -m "feat(engine): auction_engine_core (instruction enum, account states, PDAs, errors, args); ADR-027, ADR-030
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(engine): auction_engine_core (instruction enum, account states, PDAs, errors, args); ADR-027, ADR-030"
 ```
 
 ---
@@ -3985,9 +3967,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add Cargo.toml Cargo.lock programs/integration_tests docs/architecture/programs.md .github/workflows/core.yml
-git commit -m "test: integration-test crate and host-side World harness
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "test: integration-test crate and host-side World harness"
 ```
 
 ---
@@ -5086,9 +5066,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add Cargo.toml Cargo.lock programs/auction_engine programs/integration_tests idl/auction_engine-idl.json docs/architecture/programs.md .github/workflows/core.yml
-git commit -m "feat(engine): program skeleton, guest, init_config/set_engine_params
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(engine): program skeleton, guest, init_config/set_engine_params"
 ```
 
 ---
@@ -5675,9 +5653,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add programs/auction_engine programs/integration_tests idl/auction_engine-idl.json docs/architecture/programs.md docs/design-log.md
-git commit -m "feat(engine): set_collateral_config, feed validity, pause observation, observe_feed; ADR-028, ADR-032
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(engine): set_collateral_config, feed validity, pause observation, observe_feed; ADR-028, ADR-032"
 ```
 
 ---
@@ -6272,9 +6248,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add programs/auction_engine programs/integration_tests idl/auction_engine-idl.json docs/architecture/programs.md
-git commit -m "feat(engine): liquidate with caps, keeper reward, nonce record and host hook chain
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(engine): liquidate with caps, keeper reward, nonce record and host hook chain"
 ```
 
 ---
@@ -6822,9 +6796,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add programs/auction_engine programs/integration_tests idl/auction_engine-idl.json docs/architecture/programs.md docs/design-log.md
-git commit -m "feat(engine): bid and bid_with_settlement with chain-end accounting and lot sweep; ADR-029, ADR-033
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(engine): bid and bid_with_settlement with chain-end accounting and lot sweep; ADR-029, ADR-033"
 ```
 
 ---
@@ -7196,9 +7168,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add programs/auction_engine programs/integration_tests idl/auction_engine-idl.json docs/architecture/programs.md
-git commit -m "feat(engine): settle_empty, claim_leftover and settle_debt (buffer burn under PDA seed)
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(engine): settle_empty, claim_leftover and settle_debt (buffer burn under PDA seed)"
 ```
 
 ---
@@ -7899,9 +7869,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add programs/auction_engine programs/integration_tests idl/auction_engine-idl.json docs/architecture/programs.md docs/design-log.md
-git commit -m "feat(engine): F5 surplus auction with mock protocol token burn and reference price; ADR-031
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(engine): F5 surplus auction with mock protocol token burn and reference price; ADR-031"
 ```
 
 ---
@@ -8389,9 +8357,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add programs/auction_engine programs/integration_tests idl/auction_engine-idl.json docs/architecture/programs.md
-git commit -m "feat(engine): F4 debt auction with PDA mint, debt reservation pairing and absolute mint cap
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(engine): F4 debt auction with PDA mint, debt reservation pairing and absolute mint cap"
 ```
 
 ---
@@ -8745,9 +8711,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add programs/auction_engine programs/integration_tests idl/auction_engine-idl.json docs/architecture/programs.md
-git commit -m "feat(engine): check_solvency with implicit settle and host freeze chain
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(engine): check_solvency with implicit settle and host freeze chain"
 ```
 
 ---
@@ -9129,9 +9093,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add Cargo.toml Cargo.lock programs/test_programs programs/integration_tests docs/design-log.md docs/architecture/programs.md
-git commit -m "test(security): impostor, rogue config, laundering surface and private-path Variant C tests; ADR-034
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "test(security): impostor, rogue config, laundering surface and private-path Variant C tests; ADR-034"
 ```
 
 ---
@@ -9545,9 +9507,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add programs/integration_tests docs/design-log.md docs/architecture/programs.md
-git commit -m "test(engine): account-level invariants, R3 isolation and per-instruction chain budget; ADR-036
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "test(engine): account-level invariants, R3 isolation and per-instruction chain budget; ADR-036"
 ```
 
 ---
@@ -9852,9 +9812,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add Cargo.toml Cargo.lock programs/stablecoin/methods/guest/Cargo.toml programs/stablecoin/methods/guest/src/bin/stablecoin.rs programs/stablecoin/methods_b programs/integration_tests docs/design-log.md docs/architecture/programs.md
-git commit -m "test(engine): two host instances for R4/R5 [local]; ADR-035
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "test(engine): two host instances for R4/R5 [local]; ADR-035"
 bash scripts/export-hook-patches.sh
 ```
 Expected export: the same patch count as after Task 5 (the `[local]` commit is skipped) and `git status --short patches/stablecoin` prints nothing; then `scripts/check-hook-patches.sh` (inside WSL) still reports a clean apply. If `patches/stablecoin` changed, investigate before committing anything.
@@ -9981,9 +9939,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add THREAT_MODEL.md docs/architecture/security-checklist.md README.md docs/architecture/programs.md
-git commit -m "docs: threat model, per-instruction security checklist and Plan 2 security review
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "docs: threat model, per-instruction security checklist and Plan 2 security review"
 ```
 
 ---
@@ -10311,9 +10267,7 @@ The implementer stages the files and reports; the controller commits from Git Ba
 
 ```bash
 git add programs/integration_tests/examples/localnet_tool.rs scripts/localnet-smoke.sh docs/architecture/localnet.md DEPLOYMENTS.md
-git commit -m "chore: localnet smoke runbook and result (deploy, liquidate, bid, settle, claim on a v0.2.4 sequencer)
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "chore: localnet smoke runbook and result (deploy, liquidate, bid, settle, claim on a v0.2.4 sequencer)"
 ```
 
 ---

@@ -1,7 +1,7 @@
 =================== a38649167dacd931c.output
 # Report: Logos RFP-012 and RFP-014, plus RFP program process (as of 2026-10-01)
 
-Sources: everything was fetched from logos-co/rfp `master`: both RFPs, README, NEW_RFP.md, TERMS_AND_CONDITIONS.md (last updated 21 Jul 2026), `.github/ISSUE_TEMPLATE/proposal.yml` and `milestone.yml`, all other RFPs, git history and the issue list. Local copies are in `C:\Users\user\AppData\Local\Temp\claude\C--Users-user-Documents-basecamp-logos-basecamp\54f4bc00-cc9a-4338-a3f5-6dd50e23a06c\scratchpad\rfp\`.
+Sources: everything was fetched from logos-co/rfp `master`: both RFPs, README, NEW_RFP.md, TERMS_AND_CONDITIONS.md (last updated 21 Jul 2026), `.github/ISSUE_TEMPLATE/proposal.yml` and `milestone.yml`, all other RFPs, git history and the issue list. Local copies were kept in a scratch directory (not committed).
 
 ## Headline facts
 
@@ -319,7 +319,7 @@ Both RFPs show "status: closed / Reopening soon" in the README of https://github
 =================== a5dc0296719ab68ad.output
 # Logos RFP program: past submissions, winners, and what wins (research for RFP-012 / RFP-014)
 
-The data was pulled on 2026-10-01 from `gh` (all 117 issues and their comments in logos-co/rfp, plus PRs), from logos-co/ecosystem, logos-blockchain/lez-programs, the Logos forum API and the grantee repos. Raw dumps are in `C:/Users/user/AppData/Local/Temp/claude/C--Users-user-Documents-basecamp-logos-basecamp/54f4bc00-cc9a-4338-a3f5-6dd50e23a06c/scratchpad/rfp/` (`issues/*.json`, `comments.txt`, `body_141.md`, `body_117.md`, `body_112.md`, `body_118.md`, `body_46.md`, plus the RFP-012, RFP-014, RFP-008 and template specs).
+The data was pulled on 2026-10-01 from `gh` (all 117 issues and their comments in logos-co/rfp, plus PRs), from logos-co/ecosystem, logos-blockchain/lez-programs, the Logos forum API and the grantee repos. Raw dumps were kept in a scratch directory, not committed (`issues/*.json`, `comments.txt`, `body_141.md`, `body_117.md`, `body_112.md`, `body_118.md`, `body_46.md`, plus the RFP-012, RFP-014, RFP-008 and template specs).
 
 ## 0. Facts that should shape the strategy
 

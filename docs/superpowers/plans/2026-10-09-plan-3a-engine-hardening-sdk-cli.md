@@ -40,7 +40,7 @@
   Format gate (our crates only; add `-p auction_sdk` from Task 4 and `-p auction_cli` from Task 13):
   `MSYS_NO_PATHCONV=1 wsl -d Ubuntu-20.04 -e bash -lc 'cd /mnt/c/Users/user/Documents/basecamp/lez-auction-engine && scripts/wsl-cargo.sh fmt -p auction_core -p auction_engine_core -p auction_engine_program -p engine_integration_tests -- --check'`
 - Files: every source file < 800 lines; `#![forbid(unsafe_code)]` in every crate this plan creates; UTF-8 + LF (`.gitattributes` enforces `eol=lf`).
-- Commits: conventional format `<type>: <description>` (types feat, fix, refactor, docs, test, chore, perf, ci). **No `Co-Authored-By` line and no Claude/AI attribution of any kind** (user requirement; this overrides the Plan 1/2 convention). Every commit step is "Commit (controller — GPG signing on Windows)": the implementer stages the listed files and reports; the controller commits from Git Bash on Windows (GPG-signed), never from WSL. Nothing is pushed.
+- Commits: conventional format `<type>: <description>` (types feat, fix, refactor, docs, test, chore, perf, ci). **No `Co-Authored-By` line and no AI attribution of any kind** (user requirement; this overrides the Plan 1/2 convention). Every commit step is "Commit (controller — GPG signing on Windows)": the implementer stages the listed files and reports; the controller commits from Git Bash on Windows (GPG-signed), never from WSL. Nothing is pushed.
 - Docs are updated in the same task as the code they describe; `cli/README.md` is created in Task 13 and extended by Tasks 14 and 15.
 
 ## Review Focus

@@ -41,7 +41,7 @@
   - risc0-zkvm `=3.0.5`;
   - lez-programs `64c01210adecd6b557dbd021a3cc94553f243fd8`;
   - lez_core `acf0cd501b262c4c15969e3735e85318297b85bf`.
-- Commits use conventional-commit format and end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Nothing is pushed without the user's approval.
+- Commits use conventional-commit format, with no co-author trailer. Nothing is pushed without the user's approval.
 - Docs are updated in the same task as the code they describe (`docs/design-log.md`, `docs/architecture/math.md`, `docs/spikes/`).
 
 ## Review Focus

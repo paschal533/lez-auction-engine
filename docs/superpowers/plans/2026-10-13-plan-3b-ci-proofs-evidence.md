@@ -96,7 +96,7 @@
 - **Docs are updated in the same task as the code they describe.** Each task's last code step lists the doc edits.
 - **Commits:**
   - Conventional format `<type>: <description>` (feat, fix, refactor, docs, test, chore, perf, ci).
-  - **No `Co-Authored-By` line and no Claude or AI attribution of any kind.**
+  - **No `Co-Authored-By` line and no AI attribution of any kind.**
   - Every commit step is "Commit (controller, GPG signing on Windows)": the implementer stages the listed files and reports; the controller commits from Git Bash on Windows (GPG-signed), never from WSL.
 - **Ruling points.** Task 1 Step 9 and Task 16 Step 3 end with an explicit ruling by the controller, recorded in the ledger as `Ruling: ...`. A task that depends on a ruling (Task 7 on Task 1; Task 16's fix steps on its findings) does not start before that ruling exists.
 

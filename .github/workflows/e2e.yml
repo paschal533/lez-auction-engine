@@ -24,8 +24,7 @@ jobs:
       LEZ_DEPS: /home/runner/lez-deps
       DEMO_RUN_DIR: /home/runner/demo
       # The preflight default (20 GiB) protects a WSL disk that grows into C:. After free-disk.sh a hosted
-      # runner is expected to have well over 5 GiB free before the LEZ build (not yet measured: free-disk.sh
-      # prints df before and after, so the first hosted run shows the real figure); 5 GiB still stops a run
+      # runner had 32 GB free before the LEZ build (first hosted run, 39017229879); 5 GiB still stops a run
       # that is about to fill the disk.
       DEMO_MIN_HOME_GIB: "5"
     steps:

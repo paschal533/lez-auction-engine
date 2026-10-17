@@ -14,14 +14,14 @@ committed reproducible builds in `artifacts/guests/` (ADR-047).
 ## Prerequisites (Linux or WSL Ubuntu)
 
 Tested on Ubuntu 24.04 under WSL. Ubuntu 22.04 is expected to work and is what the `e2e` workflow
-(`.github/workflows/e2e.yml`) runs on; its first hosted run happens after the merge to `main`.
+(`.github/workflows/e2e.yml`) runs on; its first hosted run passed (run 39017229879 at 5c77daa).
 
 - `sudo apt-get install -y build-essential clang libclang-dev pkg-config libssl-dev libpcsclite-dev python3 git curl`
 - Rust through rustup; `rust-toolchain.toml` selects 1.94.0.
 - risc0 components, pinned: `curl -L https://risczero.com/install | bash`, then
   `rzup install rust 1.94.1 && rzup install cpp 2024.1.5 && rzup install r0vm 3.0.5 && rzup install cargo-risczero 3.0.5`.
 - `scripts/bootstrap-lez.sh` builds the LEZ v0.2.4 sequencer and wallet into `$HOME/lez-deps`, once
-  (about 20 min cold; an unmeasured plan estimate, the first hosted e2e run records the real figure).
+  (21m44s cold on a hosted `ubuntu-22.04` runner, run 39017229879 at 5c77daa).
 - Port 3040 free; at least 20 GB free disk.
 
 The spec asks for "a clean machine with Nix"; this PoC documents the prerequisites above instead of a Nix
@@ -79,9 +79,10 @@ committed guest does not match `artifacts/guests/manifest.json`.
 | 2026-10-16 | 28e31b0 | RISC0_DEV_MODE=1 | demo complete (971 s, 37 CLI transactions submitted; unbacked debt 42_289) |
 | 2026-10-16 | 28e31b0 + review fixes | RISC0_DEV_MODE=1 | demo complete (987 s, 37 CLI transactions submitted; unbacked debt 42_275, every check including the R4 range 42_154 to 63_200) |
 | 2026-10-16 | 28e31b0 + review fixes | RISC0_DEV_MODE=0 | demo complete (973 s, 37 CLI transactions submitted; unbacked debt 42_276, every check) |
+| 2026-10-17 | 5c77daa (hosted, run 39017229879) | RISC0_DEV_MODE=0 | demo complete (demo step 21m00s on `ubuntu-22.04`; unbacked debt 42_274, every check including the R4 range and `frozen yes`) |
 
 On CI the `e2e` workflow (job `localnet-e2e`) runs the demo with `RISC0_DEV_MODE=0` on every push to `main` and in
-both modes weekly (Sunday); its first hosted run happens after the merge. The `RISC0_DEV_MODE=0` run takes about as long as
+both modes weekly (Sunday). The `RISC0_DEV_MODE=0` run takes about as long as
 the dev-mode one: LEZ v0.2.4's sequencer executes public transactions with the risc0 executor and never proves them
 (see [real-proofs.md](docs/architecture/real-proofs.md)), so with either setting the sequencer only executes. Sampled
 with `ps` early in that run, the sequencer's resident memory was about 84 MB and no `r0vm` process was running.

@@ -7,11 +7,11 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 **Plan 3b complete: CI, real proofs, reproducible builds, evidence.** See `docs/superpowers/plans/2026-10-13-plan-3b-ci-proofs-evidence.md`.
 
 - CI: program tests, IDL drift, hook patches, cycle gate, coverage gate, requirements check, fuzz and guest-repro workflows ([ci.md](docs/architecture/ci.md)).
-- Real proofs (ADR-045): the local full suite passed at po2 19 (42 proofs, all verified). The hosted proof tiers and the `RISC0_DEV_MODE=0` e2e run after the merge to `main`; `prove_ppe_observe_feed` never completed a run.
+- Real proofs (ADR-045): the local full suite passed at po2 19 (42 proofs, all verified). On `main`, the hosted `real-proof-push` job proved `settle_debt` (543 s, receipt verified) and the `RISC0_DEV_MODE=0` e2e demo passed; the self-hosted tier is off; `prove_ppe_observe_feed` never completed a run.
 - Reproducible guests (ADR-047): Docker builds, committed binaries and a manifest of ImageIDs, rebuilt and compared in CI.
 - [CYCLES.md](CYCLES.md): cycle baseline, transaction sizes and the 10 % regression gate (ADR-048).
 - [REQUIREMENTS.md](REQUIREMENTS.md): every hard requirement mapped to evidence, with a checker; rows without hosted evidence yet are marked PoC (partial).
-- [DEMO.md](DEMO.md): one-command demo, run locally in both sequencer modes (dev mode 1 and 0); the e2e workflow runs hosted after the merge.
+- [DEMO.md](DEMO.md): one-command demo, run locally in both sequencer modes (dev mode 1 and 0); the e2e workflow passed on a hosted runner (`RISC0_DEV_MODE=0`).
 - Red-team pass: [docs/security/redteam-2026-10.md](docs/security/redteam-2026-10.md), 0 Critical, 0 High, 0 Medium (6 Low and 6 Info, all off-chain).
 - [SUBMISSION.md](SUBMISSION.md): the submission index with linked hashes; the demo recording, upstream filings and hosted runs are pending.
 - Next: Plan 4 (FFI, module, thin GUI).

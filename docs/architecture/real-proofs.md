@@ -44,7 +44,7 @@ covers the Plan 3a smoke's path and more; see [DEMO.md](../../DEMO.md). CI: the 
 
 (B), tiered by the Plan 3b Task 1 measurement:
 - RFP S2: the `localnet-e2e` job (added in Task 14) runs `scripts/demo.sh` (added in Task 13) against a sequencer with `RISC0_DEV_MODE=0` on
-  every push to `main` (R1; its first hosted run is recorded here after the merge; none has happened yet).
+  every push to `main` (R1; first hosted run green: run 39017229879 at 5c77daa, demo step 21m00s).
 - Segment size `AUCTION_PROVE_PO2 = 19` (R2): the largest po2 whose `prove_liquidate` run passed
   (4719 MiB ≤ 5632 MiB).
 - Per push to `main`: Tier B: `real-proof-push` proves `settle_debt` on a hosted runner; the
@@ -72,9 +72,10 @@ is in `CYCLES.md` ("Real proofs").
 
 ## Hosted timings
 
-Pending. `real-proofs.yml` is not on `main`, and a schedule or dispatch trigger only works from the default
-branch, so no hosted run of `real-proof-push` or `real-proof-nightly` exists yet. The first timing of
-`real-proof-push` (`settle_debt`, po2 19) is recorded here after the merge to `main`. If that job is killed
+`real-proof-push`, first hosted run (run 39017229866 at 5c77daa, `ubuntu-22.04`, po2 19): job 23m56s; proving step 9m10s;
+the checker read `settle_debt: 1 executions, 2 segments, 543 s, all receipts verified`. That is 1.8 times the local
+304 s, below the assumed factor of 4, so tier B has room inside its 80 minute step limit. `real-proof-nightly`
+has not run (no self-hosted runner). If a later `real-proof-push` run is killed
 (exit 137 or "did not finish" from the checker), the rule is: lower `AUCTION_PROVE_PO2` by one and dispatch
 once more; if it still fails, move the tier down and update ADR-045 and the workflow in the same change.
 

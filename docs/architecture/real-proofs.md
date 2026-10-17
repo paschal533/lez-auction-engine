@@ -9,7 +9,7 @@ private path call the prover. The PoC submits public transactions only (spec §8
 1. **RFP S2 / spec §9 end to end:** the localnet flow driven by `auction-cli` against a standalone
    sequencer started with `RISC0_DEV_MODE=0` (`scripts/demo.sh --sequencer-dev-mode 0`, CI job
    `localnet-e2e`; the job added in Task 14, `demo.sh` in Task 13). Nothing in that path accepts a dev-mode receipt.
-   CI: `.github/workflows/e2e.yml`, job `localnet-e2e` (`RISC0_DEV_MODE=0` on every push to `main`; both modes nightly).
+   CI: `.github/workflows/e2e.yml`, job `localnet-e2e` (`RISC0_DEV_MODE=0` on every push to `main`; both modes weekly).
 2. **Receipts:** every execution of an instruction's chained calls proved with the risc0 prover
    (`AUCTION_PROVE=1 RISC0_DEV_MODE=0`, external `r0vm` 3.0.5) and verified against its ImageID
    (`programs/integration_tests/tests/common/prove.rs`). These are the receipts the v0.3 port or the
@@ -53,7 +53,7 @@ covers the Plan 3a smoke's path and more; see [DEMO.md](../../DEMO.md). CI: the 
   2700 s budget. Tier B holds at po2 18 (4 × 367.6 s = 1470 s ≤ 2700 s); the po2 19 time of
   `settle_debt` is confirmed in Task 7: 304 s at po2 19 in the local full run (2 segments), so the
   assumed hosted factor of 4 gives about 1216 s, inside the 2700 s budget.
-- Nightly and on tags: Tier C: a self-hosted job (disabled unless `vars.REAL_PROOF_SELF_HOSTED == 'true'`)
+- Weekly (Sunday) and on tags: Tier C: a self-hosted job (disabled unless `vars.REAL_PROOF_SELF_HOSTED == 'true'`)
   plus a committed local full run in `docs/evidence/` (R4). The hosted estimate
   4 × 2729 s × 10.12 = 110,478 s exceeds even three jobs (3 × 19,800 s = 59,400 s).
 - Privacy circuit (`observe_feed`): not scheduled (`PPE_NIGHTLY=no`); `prove_ppe_observe_feed` has never

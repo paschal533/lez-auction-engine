@@ -81,7 +81,7 @@ committed guest does not match `artifacts/guests/manifest.json`.
 | 2026-10-16 | 28e31b0 + review fixes | RISC0_DEV_MODE=0 | demo complete (973 s, 37 CLI transactions submitted; unbacked debt 42_276, every check) |
 
 On CI the `e2e` workflow (job `localnet-e2e`) runs the demo with `RISC0_DEV_MODE=0` on every push to `main` and in
-both modes nightly; its first hosted run happens after the merge. The `RISC0_DEV_MODE=0` run takes about as long as
+both modes weekly (Sunday); its first hosted run happens after the merge. The `RISC0_DEV_MODE=0` run takes about as long as
 the dev-mode one: LEZ v0.2.4's sequencer executes public transactions with the risc0 executor and never proves them
 (see [real-proofs.md](docs/architecture/real-proofs.md)), so with either setting the sequencer only executes. Sampled
 with `ps` early in that run, the sequencer's resident memory was about 84 MB and no `r0vm` process was running.

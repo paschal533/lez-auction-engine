@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "41 3 * * *"
+    - cron: "41 3 * * 0"
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Every push to main: RISC0_DEV_MODE=0 (RFP S2). Nightly and on dispatch: both modes.
+        # Every push to main: RISC0_DEV_MODE=0 (RFP S2). Weekly (Sunday) and on dispatch: both modes.
         sequencer_dev_mode: ${{ fromJSON(github.event_name == 'push' && '["0"]' || '["0","1"]') }}
     env:
       LEZ_DEPS: /home/runner/lez-deps

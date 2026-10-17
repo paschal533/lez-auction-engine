@@ -11,7 +11,7 @@
 
 All five ImageIDs come from reproducible Docker builds (ADR-047): the binaries are committed in
 `artifacts/guests/` with their sha256 and ImageIDs in `artifacts/guests/manifest.json`, and CI job
-`guest-repro` rebuilds our two guests from source on every push and pull request touching their inputs and requires identical bytes (the three upstream guests are rebuilt from the pinned 64c01210 source only on the nightly and manual runs; on push and pull request they are only hash-checked against the manifest), and checks every committed binary against the manifest. Anyone can rebuild with
+`guest-repro` rebuilds our two guests from source on every push and pull request touching their inputs and requires identical bytes (the three upstream guests are rebuilt from the pinned 64c01210 source only on the scheduled (weekly) and manual runs; on push and pull request they are only hash-checked against the manifest), and checks every committed binary against the manifest. Anyone can rebuild with
 `scripts/build-guests.sh` (our two guests) and lez-programs `make build-programs` at 64c01210 (token,
 twap_oracle, token_mint_authority) and compare with `scripts/check-guests.sh`. The in-process test suites
 run natively built ELFs of the same source, whose ImageIDs differ; they are never deployed.

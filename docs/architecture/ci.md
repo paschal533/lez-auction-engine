@@ -1,6 +1,8 @@
 # Continuous integration
 
-Workflows: `.github/workflows/core.yml` (every push and pull request), `fuzz.yml` (nightly), `guests.yml` (every push and pull request that touches a build input of the guests, nightly at 04:05 UTC and on dispatch), `real-proofs.yml` and `e2e.yml` (pushes to `main`, tags where noted, schedule and dispatch). Everything the hosted jobs run can be run locally in WSL; the commands are listed per job below.
+Workflows: `.github/workflows/core.yml` (every push and pull request), `fuzz.yml` (weekly), `guests.yml` (every push and pull request that touches a build input of the guests, weekly on Sunday at 04:05 UTC and on dispatch), `real-proofs.yml` and `e2e.yml` (pushes to `main`, tags where noted, schedule and dispatch). Everything the hosted jobs run can be run locally in WSL; the commands are listed per job below.
+
+Schedules are weekly, on Sunday (UTC), not nightly: the repository is private, and its 2,000 free Actions minutes a month would not cover the estimated 100 to 190 minutes a night of the scheduled jobs. The job, artifact and variable names (`fuzz-nightly`, `real-proof-nightly`, `real-proofs-nightly`, `NIGHTLY_TIER`, `PPE_NIGHTLY`) keep the word "nightly" so that `REQUIREMENTS.md` and the evidence keep pointing at the same jobs; read it as "scheduled". Every scheduled job can also be dispatched by hand.
 
 ## Jobs
 
@@ -12,11 +14,11 @@ Workflows: `.github/workflows/core.yml` (every push and pull request), `fuzz.yml
 | `idl-drift` | `core.yml` | `tools/idl-gen` against both guest sources, diffed against the committed IDLs. |
 | `hook-patches` | `core.yml` | The exported hook patch series applied to pristine lez-programs, compared with `programs/stablecoin`. |
 | `coverage` | `core.yml` | `cargo llvm-cov` over the five Rust crates, then `scripts/check-coverage.py`: at least 80 % of lines per crate (ADR-049). |
-| `fuzz-nightly` | `fuzz.yml` | Nightly (01:33 UTC) and on dispatch: `scripts/fuzz-smoke.sh 300` runs the five `cargo-fuzz` targets of `fuzz/` for 300 s each on the nightly toolchain. |
-| `guest-repro` | `guests.yml` | Reproducible guests (ADR-047): our two guests rebuilt in Docker and compared byte for byte with `artifacts/guests`; every committed binary checked against `manifest.json`; the three upstream guests rebuilt only on the nightly and manual runs. |
+| `fuzz-nightly` | `fuzz.yml` | Weekly (Sunday 01:33 UTC) and on dispatch: `scripts/fuzz-smoke.sh 300` runs the five `cargo-fuzz` targets of `fuzz/` for 300 s each on the nightly toolchain. |
+| `guest-repro` | `guests.yml` | Reproducible guests (ADR-047): our two guests rebuilt in Docker and compared byte for byte with `artifacts/guests`; every committed binary checked against `manifest.json`; the three upstream guests rebuilt only on the scheduled (weekly) and manual runs. |
 | `real-proof-push` | `real-proofs.yml` | Every push to `main`: `prove_settle_debt` proved with the risc0 prover (`RISC0_DEV_MODE=0`, po2 19) and its receipt verified; `scripts/check-proof-report.py` fails the job if the proof report is missing, empty, unverified or lacks `settle_debt` (ADR-045, tier B). |
-| `real-proof-nightly` | `real-proofs.yml` | Nightly (02:17 UTC), on dispatch and on `v*` / `rfp014-*` tags, on a self-hosted runner only: the whole ADR-036 suite proved, every receipt verified. Off unless the repository variable `REAL_PROOF_SELF_HOSTED` is `true` (ADR-045, tier C). |
-| `localnet-e2e` | `e2e.yml` | `scripts/bootstrap-lez.sh` then `scripts/demo.sh --sequencer-dev-mode N` against a standalone LEZ v0.2.4 sequencer: every push to `main` with `RISC0_DEV_MODE=0` (RFP S2), nightly (03:41 UTC) and on dispatch with both modes (matrix `sequencer_dev_mode`). Artifact `demo-<mode>`: `demo-summary.txt` and the sequencer log. |
+| `real-proof-nightly` | `real-proofs.yml` | Weekly (Sunday 02:17 UTC), on dispatch and on `v*` / `rfp014-*` tags, on a self-hosted runner only: the whole ADR-036 suite proved, every receipt verified. Off unless the repository variable `REAL_PROOF_SELF_HOSTED` is `true` (ADR-045, tier C). |
+| `localnet-e2e` | `e2e.yml` | `scripts/bootstrap-lez.sh` then `scripts/demo.sh --sequencer-dev-mode N` against a standalone LEZ v0.2.4 sequencer: every push to `main` with `RISC0_DEV_MODE=0` (RFP S2), weekly (Sunday 03:41 UTC) and on dispatch with both modes (matrix `sequencer_dev_mode`). Artifact `demo-<mode>`: `demo-summary.txt` and the sequencer log. |
 | `install-risc0` | `.github/actions/install-risc0` | Composite action used by `programs`, `coverage`, `guest-repro`, both real-proof jobs and `localnet-e2e`: rzup and the pinned components, cached in `~/.risc0`. |
 
 ## What each job runs
@@ -49,14 +51,14 @@ The vendored upstream `integration_tests` crate is excluded from clippy (it keep
 
 ```bash
 scripts/build-guests.sh "$RUNNER_TEMP/guests"
-# nightly and dispatch only: rebuild token, twap_oracle and token_mint_authority from lez-programs 64c01210
+# scheduled (weekly) and dispatch only: rebuild token, twap_oracle and token_mint_authority from lez-programs 64c01210
 make -C "$RUNNER_TEMP/lez-programs" build-programs
 # push and pull request: copy those three binaries from artifacts/guests (hash-checked only)
 cp artifacts/guests/manifest.json "$RUNNER_TEMP/guests/" && scripts/check-guests.sh "$RUNNER_TEMP/guests"
 scripts/check-guests.sh
 ```
 
-The first check requires the Docker rebuild of our two guests (and, on the nightly run, of the three upstream guests) to equal `artifacts/guests` in sha256 and ImageID; the second checks every committed `*.bin` against `manifest.json`. Hosted runs: 38558398627 at 0dec410 (cold 13m59s) and 38982905129 at 863f0fb, both green; this is the cross-machine evidence that the Docker build is reproducible (it was bit-identical locally too). The nightly upstream rebuild (`make build-programs`, six guests, about 70 min cold on 8 cores in S1) has not run in CI yet; watch the first scheduled run against the 180 minute limit. Local: `scripts/build-guests.sh` then `scripts/check-guests.sh`. The job restores the `programs` rust-cache but never saves it (`save-if: false`): see "Runner facts".
+The first check requires the Docker rebuild of our two guests (and, on the scheduled run, of the three upstream guests) to equal `artifacts/guests` in sha256 and ImageID; the second checks every committed `*.bin` against `manifest.json`. Hosted runs: 38558398627 at 0dec410 (cold 13m59s) and 38982905129 at 863f0fb, both green; this is the cross-machine evidence that the Docker build is reproducible (it was bit-identical locally too). The scheduled upstream rebuild (`make build-programs`, six guests, about 70 min cold on 8 cores in S1) has not run in CI yet; watch the first scheduled run against the 180 minute limit. Local: `scripts/build-guests.sh` then `scripts/check-guests.sh`. The job restores the `programs` rust-cache but never saves it (`save-if: false`): see "Runner facts".
 
 `idl-drift` (`ubuntu-22.04`): `scripts/ci/idl-drift.sh` regenerates `idl/auction_engine-idl.json` and `idl/stablecoin-idl.json` with `idl-gen` and exits 1 with the diff if either differs from the committed file. It also catches an enum variant whose guest function was never added.
 
@@ -72,7 +74,7 @@ python3 scripts/check-coverage.py "$RUNNER_TEMP/cov.json" --root "$GITHUB_WORKSP
 
 The gate is per crate (ADR-049): the checker prints each crate's line coverage and exits 1 naming every crate under 80 % or without data. Test code, fixtures, the guest wrappers and examples are matched by `IGNORE` and not counted. Run it locally inside WSL with the same two commands (prefix the first with `scripts/wsl-env.sh`), then `scripts/wsl-env.sh cargo llvm-cov clean --workspace` to delete the instrumented build.
 
-`fuzz-nightly` (`ubuntu-22.04`, 90 minute limit, schedule `33 1 * * *` and `workflow_dispatch`; it never runs on push or pull request). The job sets `RISC0_SKIP_BUILD=1`: the fuzzers never prove, so the guest ELFs and the risc0 toolchain (`install-risc0`) are not needed, and the SDK's guest-building dependencies compile without them (checked locally with the variable set on a fresh build). It runs `scripts/ci/free-disk.sh`, installs clang, libclang, pkg-config and libssl, the nightly Rust toolchain and `cargo-fuzz`, then:
+`fuzz-nightly` (`ubuntu-22.04`, 90 minute limit, schedule `33 1 * * 0` and `workflow_dispatch`; it never runs on push or pull request). The job sets `RISC0_SKIP_BUILD=1`: the fuzzers never prove, so the guest ELFs and the risc0 toolchain (`install-risc0`) are not needed, and the SDK's guest-building dependencies compile without them (checked locally with the variable set on a fresh build). It runs `scripts/ci/free-disk.sh`, installs clang, libclang, pkg-config and libssl, the nightly Rust toolchain and `cargo-fuzz`, then:
 
 ```bash
 scripts/fuzz-smoke.sh 300

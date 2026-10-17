@@ -135,7 +135,7 @@ Crash procedure (libFuzzer writes `fuzz/artifacts/<target>/crash-<hash>`):
 3. If the panic is in our crates, add a unit test with the minimised input to the owning crate (red), fix it (green), and run the target for 60 s again.
 4. If the panic is inside LEZ, borsh or another dependency, stop and record the input as an upstream finding; the target then needs a ruling.
 
-The `fuzz-nightly` job (`.github/workflows/fuzz.yml`) runs `scripts/fuzz-smoke.sh 300` every night with `RISC0_SKIP_BUILD=1` (the fuzzers never prove, so the risc0 toolchain and guest ELFs are not installed) and uploads `fuzz/artifacts` as `fuzz-crashes` when a target crashes. See [ci.md](ci.md).
+The `fuzz-nightly` job (`.github/workflows/fuzz.yml`) runs `scripts/fuzz-smoke.sh 300` every week (Sunday) with `RISC0_SKIP_BUILD=1` (the fuzzers never prove, so the risc0 toolchain and guest ELFs are not installed) and uploads `fuzz/artifacts` as `fuzz-crashes` when a target crashes. See [ci.md](ci.md).
 
 ## Localnet
 

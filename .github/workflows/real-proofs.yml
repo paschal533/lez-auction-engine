@@ -4,7 +4,7 @@ on:
     branches: [main]
     tags: ["v*", "rfp014-*"]
   schedule:
-    - cron: "17 2 * * *"
+    - cron: "17 2 * * 0"
   workflow_dispatch:
 permissions:
   contents: read

@@ -140,3 +140,12 @@ The `fuzz-nightly` job (`.github/workflows/fuzz.yml`) runs `scripts/fuzz-smoke.s
 ## Localnet
 
 The CLI-driven run on a real standalone sequencer (every program instruction sent by `auction-cli`) is recorded in the Plan 3a section of [localnet.md](localnet.md); the runbook is `scripts/localnet-smoke.sh`.
+
+## Plan 3b changes
+
+- Confirmation and scanner (Task 2): a rebase margin in `confirm.rs`, anchorless cursors reset on rescan in `scan.rs`, lock edge cases pinned in `confirm_tests.rs` (ADR-042, ADR-043 amendments).
+- Dev commands and watch (Task 3): state-changing dev commands require the recorded chain identity (`verify.rs`, `deployment.rs`, ADR-046); `watch` exits with the worst step error (ADR-044 amendment).
+- Reproducible guests (Task 5): `verify.rs` pins `deployments/localnet.json` to `artifacts/guests/manifest.json` and `DEPLOYMENTS.md` (ADR-047).
+- Fuzz targets (Task 9): see Fuzzing above.
+- Oracle publisher and keeper (Task 10): `oracle.rs`, `plan_host.rs`, `auction-cli dev oracle-publish` and `dev keeper`, `host status` (ADR-050).
+- Demo scenario (Task 11): `demo.rs` and `cli/params/demo-*.json` (ADR-051).

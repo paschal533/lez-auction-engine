@@ -1,6 +1,6 @@
 # Plan 4 dossier (research for the implementation plan)
 
-Repo: `C:\Users\user\Documents\basecamp\lez-auction-engine` (= `/mnt/c/Users/user/Documents/basecamp/lez-auction-engine` in WSL), HEAD `dc47f75` (docs: Plan 4 design). No `CLAUDE.md` in the repo. Paths below are relative to the repo root unless absolute. Design doc: `docs/superpowers/specs/2026-10-17-plan-4-basecamp-app-design.md` (164 lines). PoC spec: `docs/superpowers/specs/2026-10-01-rfp014-auction-engine-poc-design.md` (§4.1 layers :125, §6.2 FFI :407, §6.3 module :413, §9 testing :463).
+Repo: `C:\Users\user\Documents\basecamp\lez-auction-engine` (= `/mnt/c/Users/user/Documents/basecamp/lez-auction-engine` in WSL), HEAD `dc47f75` (docs: Plan 4 design). Paths below are relative to the repo root unless absolute. Design doc: `docs/superpowers/specs/2026-10-17-plan-4-basecamp-app-design.md` (164 lines). PoC spec: `docs/superpowers/specs/2026-10-01-rfp014-auction-engine-poc-design.md` (§4.1 layers :125, §6.2 FFI :407, §6.3 module :413, §9 testing :463).
 
 ## 0. Contradictions / surprises (read first)
 

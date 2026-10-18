@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 1.94.0, LEZ v0.2.4, SPEL 1ef0500f, risc0 3.0.5, cbindgen 0.28; C++17, Qt 6.8, logos-module-builder (`mkLogosModule`, `mkLogosQmlModule`), lez_core acf0cd50; Logos design system 88330d04; logos-qt-mcp test framework (Node); Nix 2.34.8 in WSL; Windows ffmpeg (gdigrab) for the recording.
 
-**Spec:** `docs/superpowers/specs/2026-10-17-plan-4-basecamp-app-design.md` (approved 2026-10-18). UI boards: `docs/design/ui/auctions-main-v3.html`, `auctions-positions-and-confirm-v4.html`, `auctions-settled-system-dev-v5.html`, rules in `docs/design/ui/ui-review.md`. Research dossier with file:line references for every SDK/CLI/lez_core/amm name used here: copy it into `docs/superpowers/plans/2026-10-18-plan-4-dossier.md` in Task 1.
+**Spec:** `docs/superpowers/specs/2026-10-17-plan-4-basecamp-app-design.md` (approved 2026-10-18). UI boards: `docs/design/ui/auctions-main-v3.html`, `auctions-positions-and-confirm-v4.html`, `auctions-settled-system-dev-v5.html`, rules in `docs/design/ui/ui-review.md`. Research dossier with file:line references for every SDK/CLI/lez_core/amm name used here: `docs/superpowers/plans/2026-10-18-plan-4-dossier.md`.
 
 ## Global Constraints
 

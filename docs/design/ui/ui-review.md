@@ -198,3 +198,24 @@ Note: `v4-template.html` cited the scrim at DarkTheme.qml:79. It is at :77.
 4. **Caps.** They count the auction target (Maker `tab`) against 60,000 (wTKA) and 250,000 (global). The values are illustrative.
 5. **Dropped reshield.** The private lane only says "The reshield starts as soon as the bid is included." It is undecided what happens if the reshield itself is dropped: an automatic re-send, or a manual "Reshield now". The funds sit in A until it lands.
 6. **"Nothing was spent."** This follows the brief (lez_core 0.4.1 silently drops failed txs). On v0.3 with fees, research-1 notes that public txs are charged even on failure, so the copy will need a variant there.
+
+---
+
+# v5: Settled, System, Dev tools, account picker
+
+- Output: `auctions-settled-system-dev-v5.html`. Render: `ui-v5.png` (headless Chrome, 1260×4640).
+- Build inputs: `v5-screens-template.html` + `gen_v5.py`. The generator takes v3's CSS and sidebar from `v3-template.html` and v4's additions from `v4-screens-template.html`, so no component drifts from the approved boards. No new colour, radius or type tokens.
+- Header: five tabs (Live auctions, At-risk positions, Settled, System, Dev tools) in the right slot. The subtitle is shortened to "Liquidation auctions" to make room, and the active account is a picker button after the network. Dev tools appears only on a dev network whose block 1 matches the deployment's genesis hash (ADR-046).
+
+## Data consistency
+
+- **Settled #41** carries on from v3: target 9,350 = debt 8,500 + 850 penalty, lot 12.50 wTKA, 10.71 sold, so 1.79 is left over for owner `7c…19`.
+- **Settled #43** carries on from v4's "will end short" quote: target 17,490, raised 15,941, 1,549 short (inside v4's 1,221–2,549). The lot sold out, so there is no leftover.
+- **System** shows the state after #43: 1,549 unbacked, 4,860 buffer. Settle debt covers min(4,860, 1,549), leaving 0 unbacked and a 3,311 buffer. The debt-auction and frozen cards use the demo's own figures (13,124 bad debt, 5,000 lot, 13,050 LPT minted, 8,124 left, freeze threshold 5,000).
+- **Dev tools**: the price is wTKA per LSC, so a higher price makes collateral worth less and CR falls by the ratio. Going 0.000520 → 0.000752 scales every CR by 0.6915, which lands d4…07 and a2…4e on v4's 104.5% and 126.6%.
+
+## Placeholders to confirm before the build
+
+- "LPT" stands in for the protocol token's symbol. The real symbol comes from the deployment.
+- The surplus lot (500 LSC, as in the demo), the surplus floor and the "≥ 12 LPT" surplus price are illustrative. The app shows the engine's quote.
+- Account ids in the picker are illustrative. Real ones come from the wallet's `storage.json`.

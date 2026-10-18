@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Auctions v5 screens</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+{{CSS_V3}}
+
+{{CSS_V4}}
+
+/* =====================================================================
+   v5 additions. Same tokens as v3/v4; nothing new in the palette.
+   ===================================================================== */
+.head p .acct { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 var(--small); margin-left: 2px;
+  border-radius: var(--r-small); background: var(--background-secondary); border: 1px solid var(--border); color: var(--text); font-weight: 500; vertical-align: 1px; }
+.head p .acct .mono { font-size: var(--secondary); color: var(--text-tertiary); }
+.head p .acct .chev { color: var(--text-tertiary); font-size: 10px; }
+.head p .acct.open { border-color: rgba(255,136,0,.3); }
+.badge.frozen { color: var(--error); border-color: var(--error); background: var(--error-wash); }
+
+/* Settled */
+.it2 .out { font-size: var(--secondary); font-weight: 500; white-space: nowrap; }
+.outcome { padding: var(--medium) var(--large) var(--large); display: flex; flex-direction: column; gap: var(--medium); }
+.ostack { height: 10px; border-radius: 5px; background: var(--surface); display: flex; overflow: hidden; }
+.ostack .debt { background: var(--text-tertiary); }
+.ostack .pen { background: var(--accent); }
+.ostack .gap { background: rgba(251,55,72,.45); }
+.olegend { display: flex; gap: var(--xlarge); font-size: var(--secondary); color: var(--text-tertiary); }
+.olegend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
+.olegend b { color: var(--text); font-weight: 500; }
+.claim { width: 300px; flex: none; padding: var(--medium) var(--large) var(--large); display: flex; flex-direction: column; gap: var(--small); }
+.claim .big { font-size: var(--panel-title); font-weight: 700; line-height: 1.25; }
+.claim .big small { font-size: var(--primary); font-weight: 500; color: var(--text-secondary); }
+
+/* System */
+.side-group { font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .22px; margin: var(--small) 0 2px var(--medium); }
+.it1 .st { font-size: var(--secondary); }
+.solv { padding: var(--medium) var(--large) var(--large); }
+.sbar { position: relative; margin-top: var(--large); height: 64px; }
+.sbar .row2 { position: absolute; left: 0; right: 0; height: 12px; border-radius: 6px; background: var(--surface); overflow: hidden; }
+.sbar .row2 b { display: block; height: 100%; border-radius: 6px; }
+.sbar .r1 { top: 0; } .sbar .r2 { top: 26px; }
+.sbar .lab { position: absolute; left: 0; font-size: 11px; color: var(--text-tertiary); }
+.sbar .thr { position: absolute; top: -6px; height: 44px; width: 2px; margin-left: -1px; background: var(--text); border-radius: 1px; }
+.sbar .thrl { position: absolute; top: 44px; font-size: 11px; color: var(--text); font-weight: 500; transform: translateX(-50%); white-space: nowrap; }
+.upkeep { padding: var(--medium) var(--large); display: flex; flex-direction: column; gap: var(--small); }
+.upkeep h3 { font-size: var(--primary); font-weight: 500; }
+.uk { display: flex; align-items: center; gap: var(--medium); padding: var(--small) 0; border-top: 1px solid var(--border-subtle); }
+.uk:first-of-type { border-top: 0; }
+.uk .d { flex: 1; font-size: var(--secondary); color: var(--text-secondary); line-height: 1.45; }
+.uk .d b { color: var(--text); font-weight: 500; }
+.uk .btn { margin-top: 0; flex: none; height: 32px; padding: 0 var(--large); font-size: var(--secondary); }
+
+/* Dev tools */
+.devbar { margin-bottom: 0; }
+.mini .rows { gap: 2px; }
+.btn.danger { background: var(--background-secondary); border-color: var(--error); color: var(--error); font-weight: 700; }
+.btn.danger:hover { background: var(--error-wash); }
+.affected { display: flex; flex-direction: column; gap: 6px; margin-top: var(--small); }
+.affected .a { display: flex; justify-content: space-between; font-size: var(--secondary); color: var(--text-secondary); padding: 6px var(--medium); border-radius: var(--r-large); background: var(--surface-raised); }
+.affected .a b { color: var(--error); font-weight: 500; }
+
+/* Account picker */
+.pickwrap { position: relative; width: 1100px; height: 560px; background: var(--background); border-radius: var(--r-xlarge); padding: var(--xxlarge); }
+.pop { position: absolute; left: 312px; top: 118px; width: 380px; background: var(--background-secondary); border: 1px solid var(--border); border-radius: var(--r-large); padding: var(--tiny); }
+.pop .ph { padding: var(--small) var(--medium) var(--tiny); font-size: var(--secondary); color: var(--text-tertiary); display: flex; justify-content: space-between; }
+.opt { position: relative; display: grid; grid-template-columns: 1fr auto; gap: 2px var(--medium); padding: var(--small) var(--medium); border-radius: var(--r-large); color: var(--text-secondary); }
+.opt.on { background: var(--background-button); color: var(--text); }
+.opt.on::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 0 2px 2px 0; background: var(--accent); }
+.opt .n { font-size: var(--primary); font-weight: 500; color: var(--text); }
+.opt .n .mono { font-size: 11px; color: var(--text-tertiary); font-weight: 400; margin-left: 6px; }
+.opt .r { font-size: var(--secondary); color: var(--text-tertiary); }
+.opt .b { font-size: var(--secondary); text-align: right; white-space: nowrap; }
+.opt .h { font-size: 11px; color: var(--text-tertiary); text-align: right; font-family: var(--mono); }
+.pop .pf { border-top: 1px solid var(--border-subtle); margin-top: var(--tiny); padding: var(--small) var(--medium); font-size: var(--secondary); color: var(--text-tertiary); line-height: 1.45; }
+.pickwrap .ghost { margin-top: var(--xlarge); display: flex; gap: var(--xlarge); opacity: .35; }
+.pickwrap .ghost .side { height: 300px; }
+.pickwrap .ghost .panel { height: 300px; }
+.map3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--xxlarge); width: 1192px; }
+</style>
+</head>
+<body>
+
+<!-- =================================================================== -->
+<!-- SCREEN 1 · Settled                                                    -->
+<!-- =================================================================== -->
+<header class="shead first">
+  <h2>Settled</h2>
+  <p>Finished auctions: what was raised, what is left over, what ended short. The position owner claims leftover collateral here. Same shell and grid as v3/v4; the header now carries the account picker and two more tabs.</p>
+</header>
+
+<div class="window">
+  {{SIDEBAR}}
+  <div class="content">
+    <div class="wtabs"><div class="wtab on"><i>✕</i>Auctions</div><div class="wtab"><i>✕</i>Wallet</div></div>
+    <div class="dockcard">
+      <main class="view">
+        <header class="head">
+          <div>
+            <h1>Auctions</h1>
+            <p>Liquidation auctions · <span class="dot"></span>Localnet · <span class="acct">owner <span class="mono">0x8f…c2</span><span class="chev">▼</span></span></p>
+          </div>
+          <nav class="tabbar" role="tablist">
+            <div class="tab" role="tab">Live auctions <b>3</b></div>
+            <div class="tab" role="tab">At-risk positions <b>2</b></div>
+            <div class="tab on" role="tab" aria-selected="true">Settled <b>3</b></div>
+            <div class="tab" role="tab">System</div>
+            <div class="tab" role="tab">Dev tools</div>
+          </nav>
+        </header>
+
+        <div class="body">
+          <section class="side" aria-label="Settled auctions">
+            <div class="side-h"><h2>Most recent</h2><span>3 settled</span></div>
+
+            <article class="item on" aria-current="true">
+              <div class="it1"><span class="mono">#41</span><span>15:12</span></div>
+              <div class="it2"><span class="amt">12.50<small>wTKA</small></span><span class="out" style="color:var(--accent)">1.79 to claim</span></div>
+              <div class="it3"><div class="bar"><b style="width:100%"></b></div><span>Target raised</span></div>
+            </article>
+
+            <article class="item">
+              <div class="it1"><span class="mono">#43</span><span>15:04</span></div>
+              <div class="it2"><span class="amt">12.48<small>wTKA</small></span><span class="out t-err">1,549 short</span></div>
+              <div class="it3"><div class="bar"><b style="width:91%"></b></div><span>Sold out</span></div>
+            </article>
+
+            <article class="item">
+              <div class="it1"><span class="mono">#40</span><span>14:28</span></div>
+              <div class="it2"><span class="amt">8.10<small>wTKA</small></span><span class="out">Claimed</span></div>
+              <div class="it3"><div class="bar"><b style="width:100%"></b></div><span>Target raised</span></div>
+            </article>
+
+            <p class="side-note">An auction settles when the target is raised, the lot sells out, or 2 h pass. A shortfall becomes <b>unbacked debt</b> (see System).</p>
+          </section>
+
+          <section class="panel" aria-label="Auction 41, settled">
+            <div class="p-head">
+              <h2>12.50 wTKA <span>collateral</span></h2>
+              <span class="badge id">#41</span>
+              <span class="badge neutral">Settled · target raised</span>
+              <span class="spacer"></span>
+              <span class="meta">Position <span class="mono">7c…19</span> · ended <b>15:12</b>, block <b>918</b></span>
+            </div>
+            <div class="divider"></div>
+
+            <div class="card kpis">
+              <div class="kpi"><div class="l">Raised</div><div class="v">9,350 <small>/ 9,350 LSC</small></div><div class="bar"><b style="width:100%"></b></div></div>
+              <div class="kpi"><div class="l">Collateral sold</div><div class="v">10.71 <small>wTKA</small></div><div class="c">of 12.50</div></div>
+              <div class="kpi"><div class="l">Last discount</div><div class="v">10.0%</div><div class="c">held from 14:47</div></div>
+              <div class="kpi"><div class="l">Ran for</div><div class="v">1h 10m</div><div class="c">14:02 → 15:12</div></div>
+            </div>
+
+            <div class="lower">
+              <div class="leftcol">
+                <div class="card outcome">
+                  <div class="sec-h"><h3>Where the 9,350 LSC went</h3><span>read at block 931</span></div>
+                  <div class="ostack" role="img" aria-label="8,500 LSC repaid the debt, 850 LSC penalty to the buffer"><div class="debt" style="width:90.91%"></div><div class="pen" style="width:9.09%"></div></div>
+                  <div class="olegend"><span><i style="background:var(--text-tertiary)"></i>Debt repaid <b>8,500 LSC</b></span><span><i style="background:var(--accent)"></i>Penalty to the buffer <b>850 LSC</b></span><span><i style="background:rgba(251,55,72,.45)"></i>Shortfall <b>0</b></span></div>
+                </div>
+                <div class="facts">
+                  <div class="fact"><div class="k">Bids</div><div class="v">6</div><div class="c">last one finished it</div></div>
+                  <div class="fact"><div class="k">Keeper reward</div><div class="v">0.11 <small>wTKA</small></div><div class="c">paid at liquidation</div></div>
+                  <div class="fact"><div class="k">Leftover collateral</div><div class="v">1.79 <small>wTKA</small></div><div class="c">12.50 − 10.71</div></div>
+                  <div class="fact"><div class="k">Debt seized</div><div class="v">8,500 <small>LSC</small></div></div>
+                  <div class="fact"><div class="k">Target (debt + 10%)</div><div class="v">9,350 <small>LSC</small></div></div>
+                  <div class="fact"><div class="k">Status</div><div class="v">Settled</div></div>
+                </div>
+              </div>
+
+              <aside class="card claim" aria-label="Claim leftover">
+                <div class="q-h"><h3>Leftover collateral</h3><span>owner only</span></div>
+                <div class="big">1.79 <small>wTKA</small></div>
+                <p class="q-sub">The lot was not all needed to raise the target. What is left goes back to the owner of position <b>7c…19</b>. You are signed in as <b>owner</b>.</p>
+                <div class="rows">
+                  <div class="row"><span>Lot</span><span class="v">12.50 <small>wTKA</small></span></div>
+                  <div class="row"><span>Sold to bidders</span><span class="v">− 10.71 <small>wTKA</small></span></div>
+                  <div class="row strong"><span>You receive</span><span class="v">1.79 <small>wTKA</small></span></div>
+                  <div class="row"><span>To</span><span class="v"><span class="mono">owner-coll</span></span></div>
+                  <div class="row"><span>Network fee</span><span class="v">≈ 0.02 <small>LGO</small></span></div>
+                </div>
+                <button class="btn">Claim leftover</button>
+              </aside>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+</div>
+
+<header class="shead" style="margin-top:32px">
+  <h2>Settled states</h2>
+  <p>Claim goes through the same confirmation and lane as a bid (v4). These are the cases where the card says something else.</p>
+</header>
+<div class="sgrid4">
+  <div class="scol">
+    <div class="scap"><b>Not the owner</b> · signed in as keeper</div>
+    <div class="card mini">
+      <div class="big" style="font-size:var(--panel-title);font-weight:700">1.79 <small style="font-size:var(--primary);color:var(--text-secondary);font-weight:500">wTKA</small></div>
+      <div><button class="btn" disabled>Claim leftover</button><p class="reason">Only the owner of <span class="mono">7c…19</span> can claim. Switch account to <b>owner</b>.</p></div>
+    </div>
+  </div>
+  <div class="scol">
+    <div class="scap"><b>Claimed</b> · #40</div>
+    <div class="card mini">
+      <div class="notice flat"><span class="ic" style="color:var(--success)">✓</span><div><div class="t">Claimed at block 884</div><div class="d">0.62 wTKA went to <span class="mono">owner-coll</span>. Nothing is left on this auction.</div></div></div>
+    </div>
+  </div>
+  <div class="scol">
+    <div class="scap"><b>Ended short</b> · #43, lot sold out</div>
+    <div class="card mini">
+      <div class="ostack" style="height:8px"><div class="debt" style="width:82.4%"></div><div class="pen" style="width:8.7%"></div><div class="gap" style="width:8.9%"></div></div>
+      <div class="notice err"><span class="ic">!</span><div><div class="t">1,549 LSC short</div><div class="d">Raised 15,941 of 17,490. The shortfall is now unbacked debt. The buffer covers it with <b>Settle debt</b> on System.</div></div></div>
+      <a class="link" href="#" style="font-size:var(--secondary)">Open System → Accounting</a>
+    </div>
+  </div>
+  <div class="scol">
+    <div class="scap"><b>Nothing left over</b> · #43</div>
+    <div class="card mini">
+      <div><button class="btn" disabled>Claim leftover</button><p class="reason">The whole lot was sold. There is nothing to claim.</p></div>
+    </div>
+  </div>
+</div>
+
+<div class="spacer-xl"></div>
+
+<!-- =================================================================== -->
+<!-- SCREEN 2 · System                                                     -->
+<!-- =================================================================== -->
+<header class="shead">
+  <h2>System</h2>
+  <p>The engine's books and upkeep: buffer, unbacked debt, the surplus and debt auctions, host status. Anyone can call these; they are the steps a keeper bot would run. Each action shows its quote and goes through the v4 confirmation and lane.</p>
+</header>
+
+<div class="window">
+  {{SIDEBAR}}
+  <div class="content">
+    <div class="wtabs"><div class="wtab on"><i>✕</i>Auctions</div><div class="wtab"><i>✕</i>Wallet</div></div>
+    <div class="dockcard">
+      <main class="view">
+        <header class="head">
+          <div>
+            <h1>Auctions</h1>
+            <p>Liquidation auctions · <span class="dot"></span>Localnet · <span class="acct">caller <span class="mono">0x41…9d</span><span class="chev">▼</span></span></p>
+          </div>
+          <nav class="tabbar" role="tablist">
+            <div class="tab" role="tab">Live auctions <b>3</b></div>
+            <div class="tab" role="tab">At-risk positions <b>2</b></div>
+            <div class="tab" role="tab">Settled <b>3</b></div>
+            <div class="tab on" role="tab" aria-selected="true">System</div>
+            <div class="tab" role="tab">Dev tools</div>
+          </nav>
+        </header>
+
+        <div class="body">
+          <section class="side" aria-label="System">
+            <div class="side-h"><h2>Engine</h2><span>block 931</span></div>
+
+            <article class="item on" aria-current="true">
+              <div class="it1"><span>Accounting</span><span class="st t-warn">Unbacked</span></div>
+              <div class="it3"><span>1,549 LSC unbacked</span></div>
+            </article>
+            <article class="item">
+              <div class="it1"><span>Surplus auction</span><span class="st">Idle</span></div>
+              <div class="it3"><span>Buffer 4,860 LSC</span></div>
+            </article>
+            <article class="item">
+              <div class="it1"><span>Debt auction</span><span class="st">Idle</span></div>
+              <div class="it3"><span>Opens above 5,000 bad debt</span></div>
+            </article>
+            <article class="item">
+              <div class="it1"><span>Host</span><span class="st" style="color:var(--success)">Live</span></div>
+              <div class="it3"><span>Freezes above 5,000</span></div>
+            </article>
+
+            <p class="side-note">Figures are read from the chain after every included transaction, never predicted.</p>
+          </section>
+
+          <section class="panel" aria-label="Accounting">
+            <div class="p-head">
+              <h2>Accounting</h2>
+              <span class="badge warn">Unbacked debt</span>
+              <span class="spacer"></span>
+              <span class="meta">read at block <b>931</b> · <a class="link" href="#">Refresh</a></span>
+            </div>
+            <div class="divider"></div>
+
+            <div class="card kpis">
+              <div class="kpi"><div class="l">Buffer</div><div class="v">4,860 <small>LSC</small></div><div class="c">penalties collected</div></div>
+              <div class="kpi"><div class="l">Unbacked debt</div><div class="v t-warn">1,549 <small>LSC</small></div><div class="c">from #43</div></div>
+              <div class="kpi"><div class="l">Debt on auction</div><div class="v">0 <small>LSC</small></div><div class="c">no debt auction live</div></div>
+              <div class="kpi"><div class="l">Freeze threshold</div><div class="v">5,000 <small>LSC</small></div><div class="c">bad debt above this</div></div>
+            </div>
+
+            <div class="lower">
+              <div class="leftcol">
+                <div class="card solv">
+                  <div class="sec-h"><h3>Can the buffer cover it?</h3><span>0 – 6,000 LSC</span></div>
+                  <div class="sbar" role="img" aria-label="Buffer 4,860 LSC, unbacked debt 1,549 LSC, freeze threshold 5,000 LSC">
+                    <div class="row2 r1"><b style="width:81%;background:var(--accent)"></b></div>
+                    <div class="row2 r2"><b style="width:25.8%;background:var(--warning)"></b></div>
+                    <div class="thr" style="left:83.33%"></div>
+                    <div class="thrl" style="left:83.33%">5,000 freeze threshold</div>
+                  </div>
+                  <div class="olegend" style="margin-top:2px"><span><i style="background:var(--accent)"></i>Buffer <b>4,860</b></span><span><i style="background:var(--warning)"></i>Unbacked debt <b>1,549</b></span></div>
+                </div>
+                <div class="card upkeep">
+                  <h3>Upkeep</h3>
+                  <div class="uk"><div class="d"><b>Observe feed</b> records the oracle price for the time-weighted average. Last observed 4m ago.</div><button class="btn secondary">Observe feed</button></div>
+                  <div class="uk"><div class="d"><b>Check solvency</b> freezes the host if bad debt is above 5,000 LSC. Now 1,549: <b>stays live</b>.</div><button class="btn secondary">Check solvency</button></div>
+                </div>
+              </div>
+
+              <aside class="card quote" aria-label="Settle debt">
+                <div class="q-h"><h3>Settle debt</h3><span>at block 931</span></div>
+                <div class="rows">
+                  <div class="row"><span>Unbacked debt</span><span class="v">1,549 <small>LSC</small></span></div>
+                  <div class="row"><span>Buffer</span><span class="v">4,860 <small>LSC</small></span></div>
+                  <div class="row strong"><span>Settles</span><span class="v">1,549 <small>LSC</small></span></div>
+                  <p class="q-sub">The smaller of the two. The buffer's coin is burned against the debt.</p>
+                  <div class="q-div"></div>
+                  <div class="row"><span>Unbacked after</span><span class="v">0 <small>LSC</small></span></div>
+                  <div class="row"><span>Buffer after</span><span class="v">3,311 <small>LSC</small></span></div>
+                  <div class="row"><span>Network fee</span><span class="v">≈ 0.02 <small>LGO</small></span></div>
+                </div>
+                <button class="btn">Settle debt</button>
+              </aside>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+</div>
+
+<header class="shead" style="margin-top:32px">
+  <h2>System states</h2>
+  <p>The other three list items, and the frozen host. Surplus sells buffer coin for protocol tokens, which are burned. Debt mints protocol tokens to whoever pays down a lot of bad debt.</p>
+</header>
+<div class="sgrid4">
+  <div class="scol">
+    <div class="scap"><b>Surplus auction</b> · buffer above the floor</div>
+    <div class="card mini">
+      <div class="rows">
+        <div class="row"><span>Buffer</span><span class="v">3,311 <small>LSC</small></span></div>
+        <div class="row strong"><span>Lot</span><span class="v">500 <small>LSC</small></span></div>
+        <div class="row"><span>Paid in</span><span class="v">LPT <small>protocol token, burned</small></span></div>
+      </div>
+      <button class="btn">Start surplus auction</button>
+    </div>
+  </div>
+  <div class="scol">
+    <div class="scap"><b>Surplus live</b> · take the lot</div>
+    <div class="card mini">
+      <div class="swap" style="grid-template-columns:1fr auto 1fr;padding-bottom:var(--small)">
+        <div><div class="k">You pay</div><div class="amt" style="font-size:var(--subtitle)">≥ 12 <small>LPT</small></div></div>
+        <div class="arrow" aria-hidden="true" style="padding-bottom:4px">→</div>
+        <div><div class="k">You get</div><div class="amt" style="font-size:var(--subtitle)">500 <small>LSC</small></div></div>
+      </div>
+      <p class="fine">The LPT you pay is burned. Buffer after: <b>2,811 LSC</b>.</p>
+      <button class="btn">Take surplus lot</button>
+    </div>
+  </div>
+  <div class="scol">
+    <div class="scap"><b>Debt auction live</b> · bad debt 13,124, buffer 0</div>
+    <div class="card mini">
+      <div class="swap" style="grid-template-columns:1fr auto 1fr;padding-bottom:var(--small)">
+        <div><div class="k">You pay</div><div class="amt" style="font-size:var(--subtitle)">5,000 <small>LSC</small></div></div>
+        <div class="arrow" aria-hidden="true" style="padding-bottom:4px">→</div>
+        <div><div class="k">You get</div><div class="amt" style="font-size:var(--subtitle)">≈ 13,050 <small>LPT</small></div></div>
+      </div>
+      <p class="fine">The LSC burns one lot of bad debt: <b>13,124 → 8,124</b>. LPT is newly minted.</p>
+      <button class="btn">Take debt lot</button>
+    </div>
+  </div>
+  <div class="scol">
+    <div class="scap"><b>Host frozen</b> · after Check solvency</div>
+    <div class="card mini">
+      <div style="display:flex;gap:var(--small);align-items:center"><span class="badge frozen">Frozen</span><span class="cap">header badge on every tab</span></div>
+      <div class="notice err"><span class="ic">!</span><div><div class="t">New debt is disabled</div><div class="d">Bad debt 8,124 LSC is above the 5,000 threshold. Auctions and claims keep working; opening debt on the host does not.</div></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="spacer-xl"></div>
+
+<!-- =================================================================== -->
+<!-- SCREEN 3 · Dev tools                                                  -->
+<!-- =================================================================== -->
+<header class="shead">
+  <h2>Dev tools</h2>
+  <p>Only when the deployment names a dev network (localnet or testnet-legacy) and block 1 matches its genesis hash (ADR-046). These replace the terminal steps of the demo: the price move, the token transfer before a debt take, and the freeze trigger.</p>
+</header>
+
+<div class="window">
+  {{SIDEBAR}}
+  <div class="content">
+    <div class="wtabs"><div class="wtab on"><i>✕</i>Auctions</div><div class="wtab"><i>✕</i>Wallet</div></div>
+    <div class="dockcard">
+      <main class="view">
+        <header class="head">
+          <div>
+            <h1>Auctions</h1>
+            <p>Liquidation auctions · <span class="dot"></span>Localnet · <span class="acct">admin <span class="mono">0x7J…4L</span><span class="chev">▼</span></span></p>
+          </div>
+          <nav class="tabbar" role="tablist">
+            <div class="tab" role="tab">Live auctions <b>3</b></div>
+            <div class="tab" role="tab">At-risk positions <b>0</b></div>
+            <div class="tab" role="tab">Settled <b>3</b></div>
+            <div class="tab" role="tab">System</div>
+            <div class="tab on" role="tab" aria-selected="true">Dev tools</div>
+          </nav>
+        </header>
+
+        <div class="body">
+          <section class="side" aria-label="Dev tools">
+            <div class="side-h"><h2>Dev network</h2><span>localnet</span></div>
+
+            <article class="item on" aria-current="true">
+              <div class="it1"><span>Oracle price</span><span class="st">2m ago</span></div>
+              <div class="it3"><span>Move the market price</span></div>
+            </article>
+            <article class="item">
+              <div class="it1"><span>Token transfer</span></div>
+              <div class="it3"><span>Fund a taker account</span></div>
+            </article>
+            <article class="item">
+              <div class="it1"><span>Protocol token</span><span class="st t-err">Admin</span></div>
+              <div class="it3"><span>Freeze trigger</span></div>
+            </article>
+
+            <p class="side-note">Not shown on any other network. Signing uses the dev keys in this deployment's wallet.</p>
+          </section>
+
+          <section class="panel" aria-label="Publish oracle price">
+            <div class="p-head">
+              <h2>Publish oracle price</h2>
+              <span class="badge neutral">Dev · oracle-src</span>
+              <span class="spacer"></span>
+              <span class="meta">twap_oracle · <span class="mono">57…pE</span></span>
+            </div>
+            <div class="divider"></div>
+
+            <div class="card kpis">
+              <div class="kpi"><div class="l">Current price</div><div class="v">0.000520 <small>wTKA</small></div><div class="c">per 1 LSC</div></div>
+              <div class="kpi"><div class="l">Age</div><div class="v">2m</div><div class="c">max 60m</div></div>
+              <div class="kpi"><div class="l">Allowed range</div><div class="v">0.000376–0.001504</div><div class="c">½ to 2 × redemption</div></div>
+              <div class="kpi"><div class="l">Positions</div><div class="v">3</div><div class="c">all healthy now</div></div>
+            </div>
+
+            <div class="lower">
+              <div class="leftcol">
+                <div class="card next">
+                  <h3>What a new price does</h3>
+                  <ol>
+                    <li><i></i><span>Every position's CR is recomputed against it. Below <b>150%</b> it shows under At-risk positions.</span></li>
+                    <li><i></i><span>Live auctions quote bids at the new price straight away.</span></li>
+                    <li><i></i><span>Outside the allowed range, that collateral type pauses (v4). There is no fallback price.</span></li>
+                  </ol>
+                </div>
+                <div class="card next">
+                  <h3>At 0.000752 wTKA per LSC</h3>
+                  <div class="affected">
+                    <div class="a"><span class="mono">d4…07</span><span>CR 151.1% → <b>104.5%</b></span></div>
+                    <div class="a"><span class="mono">a2…4e</span><span>CR 183.2% → <b>126.6%</b></span></div>
+                    <div class="a"><span class="mono">3f…b0</span><span>CR 219.8% → 152.0%</span></div>
+                  </div>
+                </div>
+              </div>
+
+              <aside class="card bid" aria-label="New price">
+                <div>
+                  <div class="fl"><span>New price</span><span>wTKA per 1 LSC</span></div>
+                  <div class="input"><span class="val">0.000752</span><span class="unit">wTKA</span></div>
+                  <div class="hints"><span>In range</span><a class="link" href="#">Re-publish current</a></div>
+                </div>
+                <div class="preview">
+                  <div class="k">Becomes liquidatable</div>
+                  <div class="get">2 <small>positions</small></div>
+                  <div class="s">d4…07 and a2…4e drop below 150%.</div>
+                </div>
+                <div class="rows">
+                  <div class="row"><span>Signed by</span><span class="v"><span class="mono">oracle-src</span></span></div>
+                  <div class="row"><span>Network fee</span><span class="v">≈ 0.02 <small>LGO</small></span></div>
+                </div>
+                <button class="btn">Publish price</button>
+              </aside>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+</div>
+
+<header class="shead" style="margin-top:32px">
+  <h2>Dev tools states</h2>
+  <p>The other two items, a keeper refresh and an out-of-range price. The freeze trigger is the only destructive action in the app, so it is styled as one.</p>
+</header>
+<div class="sgrid4">
+  <div class="scol">
+    <div class="scap"><b>Token transfer</b> · before Take debt lot</div>
+    <div class="card mini">
+      <div>
+        <div class="fl"><span>From</span><span>Balance 9,200</span></div>
+        <div class="input" style="border-color:var(--border)"><span style="font-size:var(--primary)">owner-stable</span><span class="unit">LSC</span></div>
+      </div>
+      <div>
+        <div class="fl"><span>To</span></div>
+        <div class="input" style="border-color:var(--border)"><span style="font-size:var(--primary)">taker-stable</span><span class="unit">LSC</span></div>
+      </div>
+      <div>
+        <div class="fl"><span>Amount</span></div>
+        <div class="input"><span class="val">5,000</span><span class="unit">LSC</span></div>
+      </div>
+      <button class="btn">Transfer</button>
+    </div>
+  </div>
+  <div class="scol">
+    <div class="scap"><b>Protocol token</b> · admin, freeze trigger</div>
+    <div class="card mini">
+      <div class="notice err"><span class="ic">!</span><div><div class="t">Disable the protocol token</div><div class="d">The engine can no longer mint LPT, so no debt auction can cover the 8,124 LSC of bad debt. The next <b>Check solvency</b> freezes the host.</div></div></div>
+      <div class="rows">
+        <div class="row"><span>Signed by</span><span class="v"><span class="mono">engine-admin</span></span></div>
+      </div>
+      <button class="btn danger">Disable protocol token</button>
+    </div>
+  </div>
+  <div class="scol">
+    <div class="scap"><b>Keeper refresh</b> · feed near its max age</div>
+    <div class="card mini">
+      <div class="notice"><span class="ic">!</span><div><div class="t">Price is 54m old</div><div class="d">It pauses at 60m. Re-publish the same price to keep the demo running.</div></div></div>
+      <button class="btn">Re-publish 0.000520</button>
+    </div>
+  </div>
+  <div class="scol">
+    <div class="scap"><b>Out of range</b> · would pause wTKA</div>
+    <div class="card mini">
+      <div>
+        <div class="fl"><span>New price</span><span>wTKA per 1 LSC</span></div>
+        <div class="input err"><span class="val">0.001610</span><span class="unit">wTKA</span></div>
+        <div class="errt">Outside 0.000376–0.001504. wTKA pauses until a price in range is published.</div>
+      </div>
+      <button class="btn secondary">Publish anyway</button>
+    </div>
+  </div>
+</div>
+
+<div class="spacer-xl"></div>
+
+<!-- =================================================================== -->
+<!-- SCREEN 4 · Account picker                                             -->
+<!-- =================================================================== -->
+<header class="shead">
+  <h2>Account picker</h2>
+  <p>One person plays every role in the demo, so the active account is one click away in the header. It lists the wallet's labels (the same storage.json the CLI reads); holding accounts follow <span class="mono">&lt;role&gt;-stable</span> / <span class="mono">&lt;role&gt;-coll</span>.</p>
+</header>
+
+<div class="pickwrap">
+  <header class="head">
+    <div>
+      <h1>Auctions</h1>
+      <p>Liquidation auctions · <span class="dot"></span>Localnet · <span class="acct open">owner <span class="mono">0x8f…c2</span><span class="chev">▲</span></span></p>
+    </div>
+    <nav class="tabbar" role="tablist">
+      <div class="tab" role="tab">Live auctions <b>3</b></div>
+      <div class="tab" role="tab">At-risk positions <b>2</b></div>
+      <div class="tab on" role="tab" aria-selected="true">Settled <b>3</b></div>
+      <div class="tab" role="tab">System</div>
+      <div class="tab" role="tab">Dev tools</div>
+    </nav>
+  </header>
+  <div class="ghost" aria-hidden="true"><div class="side card"></div><div class="panel"></div></div>
+
+  <div class="pop" role="listbox" aria-label="Active account">
+    <div class="ph"><span>Sign as</span><span>LSC balance</span></div>
+    <div class="opt on" role="option" aria-selected="true"><div class="n">owner<span class="mono">0x8f…c2</span></div><div class="b">9,200</div><div class="r">Opens positions, bids, claims leftover</div><div class="h">owner-stable</div></div>
+    <div class="opt" role="option"><div class="n">keeper<span class="mono">0x2b…e1</span></div><div class="b">0</div><div class="r">Liquidates, earns the reward</div><div class="h">keeper-coll</div></div>
+    <div class="opt" role="option"><div class="n">caller<span class="mono">0x41…9d</span></div><div class="b">0</div><div class="r">Upkeep: settle, check, start auctions</div><div class="h">—</div></div>
+    <div class="opt" role="option"><div class="n">taker<span class="mono">0xc7…30</span></div><div class="b">5,000</div><div class="r">Takes surplus and debt lots</div><div class="h">taker-stable</div></div>
+    <div class="opt" role="option"><div class="n">admin<span class="mono">0x7J…4L</span></div><div class="b">0</div><div class="r">Host and engine admin · Dev tools</div><div class="h">—</div></div>
+    <div class="pf">Signing goes through Basecamp's wallet module. Changing account re-reads balances; it never moves funds. The dev keys <span class="mono">engine-admin</span> and <span class="mono">oracle-src</span> are not listed: Dev tools signs with them directly.</div>
+  </div>
+</div>
+
+<div class="spacer-xl" style="height:40px"></div>
+
+<div class="map3">
+  <div class="map">
+    <div class="scap"><b>Build map · Settled</b></div>
+    <ul>
+      <li>Page, list, panel, KPI strip: unchanged from v3.</li>
+      <li>"Where it went": one Rectangle row of three widths (debt, penalty, shortfall) + legend.</li>
+      <li>Claim card: the v4 quote card; disabled reason as in v4 Healthy.</li>
+      <li>Claim goes through <b>LogosDialog</b> + <b>LogosStageLane</b> exactly like a bid.</li>
+    </ul>
+  </div>
+  <div class="map">
+    <div class="scap"><b>Build map · System</b></div>
+    <ul>
+      <li>List: four fixed <b>LogosItemDelegate</b> rows, status text in the palette's verdict colours.</li>
+      <li>Coverage chart: two Rectangle bars on one scale + a threshold tick, as the v4 CR gauge.</li>
+      <li>Upkeep rows: <b>LogosButton</b> Secondary, 32px.</li>
+      <li>Frozen: <b>LogosBadge</b> Error in the header, <b>LogosNotice</b> Error on System.</li>
+    </ul>
+  </div>
+  <div class="map">
+    <div class="scap"><b>Build map · Dev tools · picker</b></div>
+    <ul>
+      <li>Tab exists only when the backend reports a dev network and the genesis check passed.</li>
+      <li>Price input: <b>LogosTextField</b> with the v3 error style; affected list recomputed by the SDK, not QML.</li>
+      <li>Freeze trigger: Secondary button with error border and label; confirmation dialog repeats the warning.</li>
+      <li>Picker: <b>LogosComboBox</b>-style popup (backgroundSecondary, border, radiusLarge) with v3 selection bar.</li>
+    </ul>
+  </div>
+</div>
+
+</body>
+</html>

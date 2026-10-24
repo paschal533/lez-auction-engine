@@ -1,0 +1,28 @@
+{
+  "name": "auction_engine",
+  "version": "0.1.0",
+  "type": "core",
+  "interface": "universal",
+  "category": "auctions",
+  "description": "Core module of the Auctions app: plans transactions with auction_ffi and sends them through lez_core",
+  "author": "paschal533",
+  "main": "auction_engine_plugin",
+  "dependencies": ["lez_core"],
+  "nix": {
+    "packages": {
+      "build": [],
+      "runtime": []
+    },
+    "external_libraries": [
+      {
+        "name": "auction_ffi"
+      }
+    ],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

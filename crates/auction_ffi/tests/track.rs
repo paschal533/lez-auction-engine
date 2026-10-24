@@ -270,6 +270,42 @@ fn tx_poll_stops_starting_reads_once_the_call_budget_is_spent() {
 }
 
 #[test]
+fn budget_ms_shortens_the_call_deadline() {
+    let w = world("localnet");
+    let t = begin(&w).expect("begin");
+    // The default budget is 12 s; ctx.budget_ms = 300 makes the second read refuse like a spent budget.
+    let json = auction_ffi::ctx::CtxJson {
+        budget_ms: Some(300),
+        ..w.json.clone()
+    };
+    let ctx =
+        Ctx::with_chain(Box::new(Stall(w.chain)), w.ctx.deployment.clone(), &json).expect("ctx");
+    let start = Instant::now();
+    let v = envelope::to_value(track::poll(&ctx, &json!({ "tracking": t })));
+    assert!(start.elapsed() < STALL * 2, "{:?}", start.elapsed());
+    assert_eq!(v["error"]["kind"], "chain", "{v}");
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("time budget"));
+}
+
+#[test]
+fn budget_ms_is_clamped_to_at_least_one_millisecond() {
+    let w = world("localnet");
+    let json = auction_ffi::ctx::CtxJson {
+        budget_ms: Some(0),
+        ..w.json.clone()
+    };
+    let ctx =
+        Ctx::with_chain(Box::new(Stall(w.chain)), w.ctx.deployment.clone(), &json).expect("ctx");
+    // 0 becomes 1 ms, not "no deadline" and not 12 s: once it has passed, reads are refused.
+    std::thread::sleep(Duration::from_millis(5));
+    let err = ctx.chain.last_block_id().expect_err("refused");
+    assert!(err.to_string().contains("time budget"), "{err}");
+}
+
+#[test]
 fn tx_begin_stops_starting_reads_once_the_call_budget_is_spent() {
     let w = world("localnet");
     let ctx = stalled_ctx(&w);

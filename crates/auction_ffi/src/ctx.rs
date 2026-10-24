@@ -25,6 +25,9 @@ use crate::envelope::{parse, FfiError};
 /// case per call: the budget plus one read, 17 s for transaction ops.
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 pub const CALL_BUDGET: Duration = Duration::from_secs(12);
+/// Bounds of the optional `ctx.budget_ms`: the module passes what is left of its own 15 s budget.
+const MIN_BUDGET_MS: u64 = 1;
+const MAX_BUDGET_MS: u64 = 12_000;
 /// Views and `prepare`: one retry after 1 s.
 const VIEW_RETRY: ReadRetry = ReadRetry {
     attempts: 2,
@@ -51,6 +54,9 @@ pub struct CtxJson {
     /// Blocks after which an unapplied transaction counts as dropped (default 5, at least 1).
     #[serde(default)]
     pub drop_after_blocks: Option<u64>,
+    /// Deadline of this call in milliseconds, clamped to [1, 12000]; default `CALL_BUDGET`.
+    #[serde(default)]
+    pub budget_ms: Option<u64>,
 }
 
 impl CtxJson {
@@ -121,6 +127,9 @@ impl Ctx {
         json: &CtxJson,
         budget: Duration,
     ) -> Result<Self, FfiError> {
+        let budget = json.budget_ms.map_or(budget, |ms| {
+            Duration::from_millis(ms.clamp(MIN_BUDGET_MS, MAX_BUDGET_MS))
+        });
         let chain: Box<dyn Chain> = Box::new(Deadline {
             inner: chain,
             deadline: Instant::now() + budget,

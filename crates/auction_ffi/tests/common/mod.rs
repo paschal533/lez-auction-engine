@@ -32,6 +32,7 @@ pub fn world(network: &str) -> World {
         wallet_home: Some(wallet),
         config: None,
         drop_after_blocks: None,
+        budget_ms: None,
     };
     let ctx = Ctx::with_chain(Box::new(chain), deployment, &json).expect("ctx");
     World {

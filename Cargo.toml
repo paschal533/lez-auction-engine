@@ -2,6 +2,7 @@
 members = [
     "crates/auction_core",
     "crates/auction_sdk",
+    "crates/auction_ffi",
     "cli",
     "programs/auction_engine/core",
     "programs/auction_engine",

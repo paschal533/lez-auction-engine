@@ -24,6 +24,9 @@ pub mod testing;
 pub mod tx;
 pub mod verify;
 
+/// Version of this crate, reported by the FFI (`auction_ffi_version`).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub use chain::{BlockSummary, Chain, TxSummary};
 pub use error::{SdkError, SdkResult};
 pub use plan::Plan;

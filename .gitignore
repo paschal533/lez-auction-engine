@@ -4,3 +4,4 @@ result
 result-*
 *.swp
 __pycache__/
+.logos-basecamp-dev/

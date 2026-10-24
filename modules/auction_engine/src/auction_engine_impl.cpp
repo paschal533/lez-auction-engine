@@ -1,5 +1,6 @@
 #include "auction_engine_impl.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
@@ -20,6 +21,7 @@ constexpr const char* KIND_BAD_REQUEST = "bad_request";
 constexpr const char* KIND_BAD_PLAN = "bad_plan";
 constexpr const char* KIND_BAD_REPLY = "bad_reply";
 constexpr const char* KIND_SEND = "send";
+constexpr const char* KIND_FFI = "ffi";
 constexpr const char* KIND_UNKNOWN_TX = "unknown_tx";
 constexpr const char* KIND_WALLET = "wallet";
 constexpr const char* DEFAULT_WALLET_SUBDIR = "/.lee/wallet";
@@ -68,22 +70,31 @@ FfiResult callFfi(FfiOp op, const json& request) {
     }
     if (!envelope.at("ok").get<bool>()) {
         const json error = envelope.value("error", json::object());
-        return failure(textOf(error, "kind"), textOf(error, "message"));
+        const std::string kind = textOf(error, "kind");
+        const std::string message = textOf(error, "message");
+        return failure(kind.empty() ? KIND_FFI : kind,
+                       message.empty() ? "auction_ffi reported an error without a message" : message);
+    }
+    const auto value = envelope.find("value");
+    if (value == envelope.end() || !value->is_object()) {
+        return failure(KIND_BAD_REPLY, "auction_ffi reply has no object \"value\"");
     }
     FfiResult r;
     r.ok = true;
-    r.value = envelope.value("value", json::object());
+    r.value = *value;
     return r;
 }
 
 /// A call under the module budget: refused with less than MIN_FFI_START_MS left, else the context carries
-/// what is left as `budget_ms`.
-FfiResult budgetedCall(FfiOp op, json request, const json& ctx, const Budget& budget) {
+/// what is left, less the call kind's read overrun, as `budget_ms`.
+FfiResult budgetedCall(FfiOp op, json request, const json& ctx, const Budget& budget,
+                       std::int64_t readOverrunMs) {
     if (!budget.hasAtLeast(auction_engine::MIN_FFI_START_MS)) {
         return failure(KIND_BUDGET, "the call's time budget ran out before the next step could start");
     }
     request["ctx"] = ctx;
-    request["ctx"]["budget_ms"] = budget.remainingMs();
+    request["ctx"]["budget_ms"] =
+        std::max(auction_engine::MIN_FFI_BUDGET_MS, budget.remainingMs() - readOverrunMs);
     return callFfi(op, request);
 }
 
@@ -93,6 +104,18 @@ std::string endTracking(const json& ctx, const json& tracking, const char* outco
     const FfiResult r = callFfi(auction_ffi_tx_end,
                                 {{"ctx", ctx}, {"tracking", tracking}, {"outcome", outcome}});
     return r.ok ? std::string() : " (releasing the in-flight lock failed: " + r.message + ")";
+}
+
+/// No exception crosses a module method: a reply of the wrong type becomes a `bad_reply` error.
+template <typename Body>
+LogosMap guarded(Body body) {
+    try {
+        return body();
+    } catch (const json::exception& e) {
+        return errorMap(KIND_BAD_REPLY, std::string("unexpected reply type: ") + e.what());
+    } catch (const std::exception& e) {
+        return errorMap(KIND_BAD_REPLY, e.what());
+    }
 }
 
 bool hasStrings(const json& object, const char* key) {
@@ -107,16 +130,22 @@ bool hasStrings(const json& object, const char* key) {
 }  // namespace
 
 LogosMap AuctionEngineImpl::configure(const LogosMap& ctx) {
-    if (!ctx.is_object() || textOf(ctx, "deployment").empty() || textOf(ctx, "state_dir").empty()) {
-        return errorMap(KIND_BAD_REQUEST, "ctx needs \"deployment\" and \"state_dir\"");
-    }
-    const Budget budget;
-    const FfiResult view = budgetedCall(auction_ffi_view, {{"view", "deployment"}}, ctx, budget);
-    if (!view.ok) return errorOf(view);
-    m_ctx = ctx;
-    return {{"network", view.value.value("network", json())},
-            {"dev", view.value.value("dev", false)},
-            {"config", view.value.value("config", json())}};
+    return guarded([&]() -> LogosMap {
+        if (!ctx.is_object() || textOf(ctx, "deployment").empty() || textOf(ctx, "state_dir").empty()) {
+            return errorMap(KIND_BAD_REQUEST, "ctx needs \"deployment\" and \"state_dir\"");
+        }
+        // The module owns budget_ms: a caller-supplied one never reaches auction_ffi.
+        json stored = ctx;
+        stored.erase("budget_ms");
+        const Budget budget;
+        const FfiResult view = budgetedCall(auction_ffi_view, {{"view", "deployment"}}, stored, budget,
+                                            auction_engine::VIEW_READ_OVERRUN_MS);
+        if (!view.ok) return errorOf(view);
+        m_ctx = stored;
+        return {{"network", view.value.value("network", json())},
+                {"dev", view.value.value("dev", false)},
+                {"config", view.value.value("config", json())}};
+    });
 }
 
 std::string AuctionEngineImpl::walletHome() const {
@@ -135,41 +164,45 @@ bool AuctionEngineImpl::walletIsOpen() {
 }
 
 LogosMap AuctionEngineImpl::openWallet() {
-    if (m_ctx.is_null()) return errorMap(KIND_NOT_CONFIGURED, "configure the module first");
-    const std::string home = walletHome();
-    const std::int64_t code = modules().lez_core.open(
-        home + "/wallet_config.json", home + "/storage.json", home + "/statistics.json");
-    if (code == 0) return {{"opened", true}};
-    if (walletIsOpen()) return {{"opened", false}, {"alreadyOpen", true}};
-    return errorMap(KIND_WALLET, "lez_core could not open the wallet under " + home + " (code "
-                                     + std::to_string(code) + ")");
+    return guarded([&]() -> LogosMap {
+        if (m_ctx.is_null()) return errorMap(KIND_NOT_CONFIGURED, "configure the module first");
+        const std::string home = walletHome();
+        const std::int64_t code = modules().lez_core.open(
+            home + "/wallet_config.json", home + "/storage.json", home + "/statistics.json");
+        if (code == 0) return {{"opened", true}};
+        if (walletIsOpen()) return {{"opened", false}, {"alreadyOpen", true}};
+        return errorMap(KIND_WALLET, "lez_core could not open the wallet under " + home + " (code "
+                                         + std::to_string(code) + ")");
+    });
 }
 
 LogosMap AuctionEngineImpl::blockHeight() {
-    const std::int64_t height = modules().lez_core.get_current_block_height();
-    if (height <= 0) return errorMap(KIND_WALLET, "the wallet is closed or the node is unreachable");
-    return {{"height", height}};
+    return guarded([&]() -> LogosMap {
+        const std::int64_t height = modules().lez_core.get_current_block_height();
+        if (height <= 0) return errorMap(KIND_WALLET, "the wallet is closed or the node is unreachable");
+        return {{"height", height}};
+    });
 }
 
-/// Takes the step's primary-signer lock (tx_begin), then sends the step through lez_core. On return without an
-/// error `tracking` and `hash` are set and the lock is held. A failure releases the lock it took: `dropped`
+/// Checks the step, takes its primary-signer lock (tx_begin), then sends it through lez_core. On return without
+/// an error `tracking` and `hash` are set and the lock is held. A failure releases the lock it took: `dropped`
 /// when nothing reached the node, `unknown` (lock kept) when the send's outcome is not known.
 LogosMap AuctionEngineImpl::beginAndSend(const Budget& budget,
                                          const json& step,
                                          json& tracking,
                                          std::string& hash) {
     if (!hasStrings(step, "signers")) return errorMap(KIND_BAD_PLAN, "plan step has no signer");
-    const FfiResult begun = budgetedCall(
-        auction_ffi_tx_begin, {{"signer", step.at("signers").at(0)}}, m_ctx, budget);
+    LezArgs args;
+    try {
+        args = toLezArgs(step);  // before the lock: a bad plan costs no lock
+    } catch (const std::invalid_argument& e) {
+        return errorMap(KIND_BAD_PLAN, e.what());
+    }
+    const FfiResult begun = budgetedCall(auction_ffi_tx_begin, {{"signer", step.at("signers").at(0)}}, m_ctx,
+                                         budget, auction_engine::TX_READ_OVERRUN_MS);
     if (!begun.ok) return errorOf(begun);
     tracking = begun.value;
 
-    LezArgs args;
-    try {
-        args = toLezArgs(step);
-    } catch (const std::invalid_argument& e) {
-        return errorMap(KIND_BAD_PLAN, std::string(e.what()) + endTracking(m_ctx, tracking, "dropped"));
-    }
     if (!budget.hasAtLeast(auction_engine::MIN_SEND_START_MS)) {
         return errorMap(KIND_BUDGET, "not enough of the call's time budget is left to send the transaction"
                                          + endTracking(m_ctx, tracking, "dropped"));
@@ -193,88 +226,106 @@ LogosMap AuctionEngineImpl::beginAndSend(const Budget& budget,
                                        + endTracking(m_ctx, tracking, "dropped"));
     }
     hash = textOf(sent, "tx_hash");
+    if (hash.empty()) {
+        return errorMap(KIND_SEND, "lez_core reported success without a transaction hash: the send may have reached the node"
+                                       + endTracking(m_ctx, tracking, "unknown"));
+    }
     return json::object();
 }
 
 LogosMap AuctionEngineImpl::submit(const LogosMap& req) {
-    if (m_ctx.is_null()) return errorMap(KIND_NOT_CONFIGURED, "configure the module first");
-    const Budget budget;
-    const FfiResult plan = budgetedCall(auction_ffi_prepare, req, m_ctx, budget);
-    if (!plan.ok) return errorOf(plan);
-    const json steps = plan.value.value("steps", json::array());
-    if (!steps.is_array() || steps.empty()) return errorMap(KIND_BAD_PLAN, "the plan has no steps");
+    return guarded([&]() -> LogosMap {
+        if (m_ctx.is_null()) return errorMap(KIND_NOT_CONFIGURED, "configure the module first");
+        const Budget budget;
+        const FfiResult plan = budgetedCall(auction_ffi_prepare, req, m_ctx, budget,
+                                            auction_engine::VIEW_READ_OVERRUN_MS);
+        if (!plan.ok) return errorOf(plan);
+        const json steps = plan.value.value("steps", json::array());
+        if (!steps.is_array() || steps.empty()) return errorMap(KIND_BAD_PLAN, "the plan has no steps");
 
-    json tracking;
-    std::string hash;
-    const LogosMap sent = beginAndSend(budget, steps.at(0), tracking, hash);
-    if (sent.contains("error")) return sent;
+        json tracking;
+        std::string hash;
+        const LogosMap sent = beginAndSend(budget, steps.at(0), tracking, hash);
+        if (sent.contains("error")) return sent;
 
-    const std::string txId = "tx" + std::to_string(++m_lastTxNumber);
-    m_pending[txId] = {{"steps", steps}, {"step", 0}, {"tracking", tracking}, {"hash", hash}};
-    return {{"txId", txId},
-            {"hash", hash},
-            {"what", textOf(steps.at(0), "what")},
-            {"step", 0},
-            {"steps", steps.size()},
-            {"tracking", tracking}};
+        const std::string txId = "tx" + std::to_string(++m_lastTxNumber);
+        m_pending[txId] = {{"steps", steps}, {"step", 0}, {"tracking", tracking}, {"hash", hash}};
+        return {{"txId", txId},
+                {"hash", hash},
+                {"what", textOf(steps.at(0), "what")},
+                {"step", 0},
+                {"steps", steps.size()},
+                {"tracking", tracking}};
+    });
 }
 
 LogosMap AuctionEngineImpl::txStatus(const LogosMap& req) {
-    const std::string txId = textOf(req, "txId");
-    const auto found = m_pending.find(txId);
-    if (found == m_pending.end()) return errorMap(KIND_UNKNOWN_TX, "no transaction in flight with id \"" + txId + "\"");
-    json& entry = found->second;
-    const Budget budget;
+    return guarded([&]() -> LogosMap {
+        const std::string txId = textOf(req, "txId");
+        const auto found = m_pending.find(txId);
+        if (found == m_pending.end()) {
+            return errorMap(KIND_UNKNOWN_TX, "no transaction in flight with id \"" + txId + "\"");
+        }
+        json& entry = found->second;
+        const Budget budget;
 
-    const FfiResult polled = budgetedCall(auction_ffi_tx_poll, {{"tracking", entry.at("tracking")}}, m_ctx, budget);
-    if (!polled.ok) return errorOf(polled);
+        const FfiResult polled = budgetedCall(auction_ffi_tx_poll, {{"tracking", entry.at("tracking")}}, m_ctx,
+                                              budget, auction_engine::TX_READ_OVERRUN_MS);
+        if (!polled.ok) return errorOf(polled);
 
-    const int step = entry.at("step").get<int>();
-    const std::size_t stepCount = entry.at("steps").size();
-    LogosMap status = {{"txId", txId}, {"hash", entry.at("hash")}, {"step", step}, {"steps", stepCount}};
-    const std::string state = textOf(polled.value, "state");
+        const int step = entry.at("step").get<int>();
+        const std::size_t stepCount = entry.at("steps").size();
+        LogosMap status = {{"txId", txId}, {"hash", entry.at("hash")}, {"step", step}, {"steps", stepCount}};
+        const std::string state = textOf(polled.value, "state");
 
-    if (state == "pending") {
-        status["state"] = "pending";
-        status["blocks_waited"] = polled.value.value("blocks_waited", 0);
-        return status;
-    }
-    if (state == "dropped") {
-        const std::string note = endTracking(m_ctx, entry.at("tracking"), "dropped");
-        m_pending.erase(found);
-        status["state"] = "dropped";
-        status["height"] = polled.value.value("height", 0);
+        if (state == "pending") {
+            status["state"] = "pending";
+            status["blocks_waited"] = polled.value.value("blocks_waited", 0);
+            return status;
+        }
+        if (state == "dropped") {
+            status["state"] = "dropped";
+            status["height"] = polled.value.value("height", 0);
+            const std::string note = endTracking(m_ctx, entry.at("tracking"), "dropped");
+            m_pending.erase(found);
+            if (!note.empty()) status["note"] = note;
+            return status;
+        }
+        if (state != "included") {
+            return errorMap(KIND_BAD_REPLY, "tx_poll returned the state \"" + state + "\"");
+        }
+
+        const std::string nonceAfter = textOf(polled.value, "nonce_after");
+        const std::string note = endTracking(m_ctx, entry.at("tracking"), "included");
+        if (static_cast<std::size_t>(step) + 1 >= stepCount) {
+            m_pending.erase(found);
+            status["state"] = "included";
+            status["nonce_after"] = nonceAfter;
+            if (!note.empty()) status["note"] = note;
+            return status;
+        }
+
+        json tracking;
+        std::string hash;
+        const LogosMap sent =
+            beginAndSend(budget, entry.at("steps").at(static_cast<std::size_t>(step) + 1), tracking, hash);
+        if (sent.contains("error")) {
+            // Step `step` is on chain, the next one is not sent and nothing is waited on: the sequence ends here.
+            LogosMap failed = sent;
+            failed["step"] = step + 1;
+            failed["includedSteps"] = step + 1;
+            if (!note.empty()) failed["note"] = note;
+            m_pending.erase(found);
+            return failed;
+        }
+        entry["step"] = step + 1;
+        entry["tracking"] = tracking;
+        entry["hash"] = hash;
+        status["state"] = "next";
+        status["step"] = step + 1;
+        status["hash"] = hash;
+        status["tracking"] = tracking;
         if (!note.empty()) status["note"] = note;
         return status;
-    }
-    if (state != "included") return errorMap(KIND_BAD_REPLY, "tx_poll returned the state \"" + state + "\"");
-
-    const std::string note = endTracking(m_ctx, entry.at("tracking"), "included");
-    if (static_cast<std::size_t>(step) + 1 >= stepCount) {
-        m_pending.erase(found);
-        status["state"] = "included";
-        status["nonce_after"] = polled.value.value("nonce_after", "");
-        if (!note.empty()) status["note"] = note;
-        return status;
-    }
-
-    json tracking;
-    std::string hash;
-    const LogosMap sent = beginAndSend(budget, entry.at("steps").at(static_cast<std::size_t>(step) + 1), tracking, hash);
-    if (sent.contains("error")) {
-        // Step `step` is on chain, the next one is not sent and nothing is waited on: the sequence ends here.
-        LogosMap failed = sent;
-        failed["step"] = step + 1;
-        failed["includedSteps"] = step + 1;
-        m_pending.erase(found);
-        return failed;
-    }
-    entry["step"] = step + 1;
-    entry["tracking"] = tracking;
-    entry["hash"] = hash;
-    status["state"] = "next";
-    status["step"] = step + 1;
-    status["hash"] = hash;
-    status["tracking"] = tracking;
-    return status;
+    });
 }

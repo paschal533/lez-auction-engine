@@ -20,6 +20,8 @@ const std::string SIGNER_A = "SignerAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const std::string SIGNER_B = "SignerBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 const std::string SEND = "send_generic_public_transaction";
 const std::int64_t MODULE_BUDGET_MS = 15000;
+const std::int64_t VIEW_OVERRUN_MS = 11000;  // view / prepare: a 5 s read, a 1 s pause, another 5 s read
+const std::int64_t TX_OVERRUN_MS = 5000;     // tx_begin / tx_poll: one 5 s read
 
 std::string ok(const json& value) {
     return json{{"ok", true}, {"value", value}}.dump();
@@ -277,10 +279,11 @@ LOGOS_TEST(each_ffi_call_gets_what_is_left_of_the_module_budget) {
     const LogosMap r = h.submit();
 
     LOGOS_ASSERT_TRUE(r.contains("hash"));
+    // The FFI deadline stops reads from starting only (R13): the module leaves room for one read to run on.
     LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_prepare")["ctx"]["budget_ms"].get<std::int64_t>(),
-                    MODULE_BUDGET_MS);
+                    MODULE_BUDGET_MS - VIEW_OVERRUN_MS);
     LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_begin")["ctx"]["budget_ms"].get<std::int64_t>(),
-                    MODULE_BUDGET_MS - 4000);
+                    MODULE_BUDGET_MS - 4000 - TX_OVERRUN_MS);
 }
 
 LOGOS_TEST(no_ffi_call_starts_with_less_than_a_second_left) {
@@ -346,5 +349,146 @@ LOGOS_TEST(a_new_module_call_starts_with_a_full_budget) {
 
     LOGOS_ASSERT_TRUE(h.submit().contains("hash"));
     LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_prepare")["ctx"]["budget_ms"].get<std::int64_t>(),
-                    MODULE_BUDGET_MS);
+                    MODULE_BUDGET_MS - VIEW_OVERRUN_MS);
+}
+
+LOGOS_TEST(a_budget_ms_in_the_configured_context_never_reaches_the_ffi) {
+    Harness h;
+    h.prepared(1);
+    h.ffi("auction_ffi_view", ok({{"network", "localnet"}, {"dev", true}, {"config", "cfg"}}));
+    h.module.configure({{"deployment", "/d/deployment.json"}, {"state_dir", "/state"}, {"budget_ms", 1}});
+
+    LOGOS_ASSERT_TRUE(h.submit().contains("hash"));
+    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_prepare")["ctx"]["budget_ms"].get<std::int64_t>(),
+                    MODULE_BUDGET_MS - VIEW_OVERRUN_MS);
+}
+
+// ---- review round 1 ----
+
+LOGOS_TEST(a_failed_release_note_survives_the_next_step) {
+    Harness h;
+    h.prepared(2);
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "included"}, {"nonce_after", "1"}}));
+    const LogosMap first = h.submit();
+    h.ffi("auction_ffi_tx_end",
+          json{{"ok", false}, {"error", {{"kind", "bad_request"}, {"message", "lock file busy"}}}}.dump());
+
+    const LogosMap r = h.module.txStatus({{"txId", first["txId"]}});
+
+    LOGOS_ASSERT_EQ(r["state"].get<std::string>(), std::string("next"));
+    LOGOS_ASSERT_CONTAINS(r["note"].get<std::string>(), "lock file busy");
+}
+
+LOGOS_TEST(a_failed_release_note_survives_a_failed_next_step) {
+    Harness h;
+    h.prepared(2);
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "included"}, {"nonce_after", "1"}}));
+    const LogosMap first = h.submit();
+    h.ffi("auction_ffi_tx_end",
+          json{{"ok", false}, {"error", {{"kind", "bad_request"}, {"message", "lock file busy"}}}}.dump());
+    h.context.mockModule("lez_core", SEND)
+        .returns(json{{"success", false}, {"tx_hash", ""}, {"error", "refused"}}.dump());
+
+    const LogosMap r = h.module.txStatus({{"txId", first["txId"]}});
+
+    LOGOS_ASSERT_TRUE(r.contains("error"));
+    LOGOS_ASSERT_CONTAINS(r["note"].get<std::string>(), "lock file busy");
+}
+
+LOGOS_TEST(a_mistyped_poll_reply_is_an_error_not_an_exception_and_keeps_the_transaction) {
+    Harness h;
+    h.prepared(1);
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "pending"}, {"blocks_waited", "two"}}));
+    const LogosMap first = h.submit();
+
+    const LogosMap r = h.module.txStatus({{"txId", first["txId"]}});
+
+    LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("bad_reply"));
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "pending"}, {"blocks_waited", 3}}));
+    LOGOS_ASSERT_EQ(h.module.txStatus({{"txId", first["txId"]}})["state"].get<std::string>(),
+                    std::string("pending"));
+}
+
+LOGOS_TEST(a_reply_whose_value_is_not_an_object_is_a_bad_reply) {
+    Harness h;
+    h.prepared(1);
+    h.ffi("auction_ffi_prepare", json{{"ok", true}, {"value", json::array()}}.dump());
+
+    LOGOS_ASSERT_EQ(h.submit()["kind"].get<std::string>(), std::string("bad_reply"));
+    LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_begin"), 0);
+}
+
+LOGOS_TEST(a_mistyped_view_reply_is_a_bad_reply) {
+    Harness h;
+    h.ffi("auction_ffi_view", ok({{"network", "localnet"}, {"dev", "yes"}}));
+
+    const LogosMap r = h.module.configure({{"deployment", "/d.json"}, {"state_dir", "/s"}});
+
+    LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("bad_reply"));
+}
+
+LOGOS_TEST(an_ffi_error_without_kind_or_message_still_has_both) {
+    Harness h;
+    h.prepared(1);
+    h.ffi("auction_ffi_prepare", json{{"ok", false}, {"error", json::object()}}.dump());
+
+    const LogosMap r = h.submit();
+
+    LOGOS_ASSERT_FALSE(r["error"].get<std::string>().empty());
+    LOGOS_ASSERT_FALSE(r["kind"].get<std::string>().empty());
+}
+
+LOGOS_TEST(a_bad_plan_step_is_refused_before_the_lock_is_taken) {
+    Harness h;
+    h.prepared(1);
+    json bad = step(SIGNER_A);
+    bad["instruction_words"] = json::array({4294967296LL});
+    h.ffi("auction_ffi_prepare", ok({{"steps", json::array({bad})}, {"facts", json::array()}}));
+
+    const LogosMap r = h.submit();
+
+    LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("bad_plan"));
+    LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_begin"), 0);
+    LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_end"), 0);
+}
+
+LOGOS_TEST(a_send_without_a_hash_is_an_unknown_outcome_not_a_hash) {
+    Harness h;
+    h.prepared(1);
+    h.context.mockModule("lez_core", SEND)
+        .returns(json{{"success", true}, {"tx_hash", ""}, {"error", ""}}.dump());
+
+    const LogosMap r = h.submit();
+
+    LOGOS_ASSERT_TRUE(r.contains("error"));
+    LOGOS_ASSERT_FALSE(r.contains("hash"));
+    LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_end"), 1);
+    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_end")["outcome"].get<std::string>(),
+                    std::string("unknown"));
+}
+
+LOGOS_TEST(a_transport_failure_of_the_send_keeps_the_lock_as_unknown) {
+    Harness h;
+    h.prepared(1);
+    lez_test_hooks::failNextSend = true;
+
+    const LogosMap r = h.submit();
+
+    LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("send"));
+    LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_end"), 1);
+    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_end")["outcome"].get<std::string>(),
+                    std::string("unknown"));
+}
+
+LOGOS_TEST(open_wallet_sees_an_open_wallet_by_its_accounts) {
+    Harness h;
+    h.context.mockModule("lez_core", "open").returns(1);
+    h.context.mockModule("lez_core", "get_current_block_height").returns(0);
+    h.context.mockModule("lez_core", "list_accounts")
+        .returnsVariant(QVariant(QVariantList{
+            QVariant(QVariantMap{{"account_id", "aa"}, {"is_public", true}})}));
+
+    const LogosMap r = h.module.openWallet();
+
+    LOGOS_ASSERT_EQ(r["alreadyOpen"].get<bool>(), true);
 }

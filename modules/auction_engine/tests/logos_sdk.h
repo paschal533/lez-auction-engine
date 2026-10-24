@@ -15,6 +15,11 @@
 
 #include "lez_core_api.h"
 
+namespace lez_test_hooks {
+// Makes the next send report a transport failure (a CallError), which the CMock store cannot express.
+inline bool failNextSend = false;
+}  // namespace lez_test_hooks
+
 // Test adapter between the universal module's std-based generated API and the
 // Qt test framework's generated dependency client.
 class UniversalLezCore {
@@ -59,6 +64,15 @@ public:
         qt_signing_requirements.reserve(static_cast<qsizetype>(signing_requirements.size()));
         for (const bool required : signing_requirements) {
             qt_signing_requirements.push_back(required);
+        }
+
+        if (lez_test_hooks::failNextSend) {
+            lez_test_hooks::failNextSend = false;
+            if (error != nullptr) {
+                error->code = "object_unavailable";
+                error->message = "test: lez_core did not answer";
+            }
+            return {};
         }
 
         const QByteArray qt_instruction(reinterpret_cast<const char*>(instruction.data()),

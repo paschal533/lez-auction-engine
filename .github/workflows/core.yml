@@ -20,8 +20,6 @@ jobs:
       - run: cargo run --locked -q -p auction_core --example vectors > /tmp/vectors.json && python3 tools/differential/check.py /tmp/vectors.json
       - run: scripts/tests/demo-preflight.sh
       - run: scripts/tests/testnet-legacy-preflight.sh
-      - name: FFI header drift (cbindgen output equals the committed header)
-        run: scripts/ci/ffi-header-drift.sh
 
   programs:
     runs-on: ubuntu-22.04
@@ -44,6 +42,8 @@ jobs:
         run: cargo test --locked -p auction_engine_core -p auction_engine_program -p engine_integration_tests -p auction_sdk -p auction_cli -p auction_ffi --features auction_sdk/testing,auction_sdk/rpc
       - name: vendored stablecoin and token suites with our hooks appended (spec §1.5)
         run: cargo test --locked -p stablecoin_core -p stablecoin_program -p token_program -p integration_tests
+      - name: FFI header drift (cbindgen output equals the committed header)
+        run: RISC0_SKIP_BUILD=1 scripts/ci/ffi-header-drift.sh
       - name: cycle regression check (ADR-048)
         run: scripts/cycles.sh "$RUNNER_TEMP/cycles.jsonl" && python3 scripts/check-cycles.py cycles/baseline.json "$RUNNER_TEMP/cycles.jsonl"
       - name: checker unit tests

@@ -7,6 +7,8 @@ use auction_sdk::{BlockSummary, Chain, SdkError, SdkResult};
 use lee_core::account::{Account, AccountId, Nonce};
 use serde_json::{json, Value};
 
+use std::time::{Duration, Instant};
+
 use common::{lock_dir, world, World};
 
 fn signer() -> String {
@@ -210,4 +212,73 @@ fn tx_ops_refuse_malformed_requests() {
     for r in results {
         assert_eq!(kind_of(r), "bad_request");
     }
+}
+
+/// Reads sleep, like a node that accepts connections and answers slowly.
+struct Stall<'a>(&'a dyn Chain);
+
+const STALL: Duration = Duration::from_millis(400);
+const TEST_BUDGET: Duration = Duration::from_millis(300);
+
+impl Chain for Stall<'_> {
+    fn account(&self, id: &AccountId) -> SdkResult<Account> {
+        std::thread::sleep(STALL);
+        self.0.account(id)
+    }
+    fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<Nonce>> {
+        std::thread::sleep(STALL);
+        self.0.nonces(ids)
+    }
+    fn last_block_id(&self) -> SdkResult<u64> {
+        std::thread::sleep(STALL);
+        self.0.last_block_id()
+    }
+    fn blocks(&self, from: u64, to: u64) -> SdkResult<Vec<BlockSummary>> {
+        std::thread::sleep(STALL);
+        self.0.blocks(from, to)
+    }
+    fn send(&self, tx: &lee::PublicTransaction) -> SdkResult<[u8; 32]> {
+        self.0.send(tx)
+    }
+}
+
+fn stalled_ctx(w: &World) -> Ctx {
+    Ctx::with_chain_budget(
+        Box::new(Stall(w.chain)),
+        w.ctx.deployment.clone(),
+        &w.json,
+        TEST_BUDGET,
+    )
+    .expect("ctx")
+}
+
+#[test]
+fn tx_poll_stops_starting_reads_once_the_call_budget_is_spent() {
+    let w = world("localnet");
+    let t = begin(&w).expect("begin");
+    let ctx = stalled_ctx(&w);
+    let start = Instant::now();
+    let v = envelope::to_value(track::poll(&ctx, &json!({ "tracking": t })));
+    // First read starts inside the budget, the second (nonce) would start after it.
+    assert!(start.elapsed() < STALL * 2, "{:?}", start.elapsed());
+    assert_eq!(v["error"]["kind"], "chain", "{v}");
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("time budget"));
+}
+
+#[test]
+fn a_failed_tx_begin_leaves_no_lock_file() {
+    let w = world("localnet");
+    let ctx = stalled_ctx(&w);
+    let start = Instant::now();
+    // The lock is taken after the first baseline; the re-read is refused by the deadline.
+    let r = track::begin(&ctx, &json!({ "signer": signer() }));
+    assert!(start.elapsed() < STALL * 4, "{:?}", start.elapsed());
+    assert_eq!(kind_of(r), "chain");
+    let left: Vec<_> = std::fs::read_dir(lock_dir(&w.json.state_dir))
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "left behind: {left:?}");
 }

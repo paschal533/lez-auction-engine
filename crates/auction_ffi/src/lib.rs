@@ -94,7 +94,7 @@ pub unsafe extern "C" fn auction_ffi_prepare(req: *const c_char) -> *mut c_char 
 #[no_mangle]
 pub unsafe extern "C" fn auction_ffi_tx_begin(req: *const c_char) -> *mut c_char {
     // SAFETY: forwarded from the caller's guarantee.
-    unsafe { call(req, |v| track::begin(&Ctx::from_request(&v)?, &v)) }
+    unsafe { call(req, |v| track::begin(&Ctx::for_tx(&v)?, &v)) }
 }
 
 /// `{"ctx":{...},"tracking":{...}}` -> pending, included or dropped.
@@ -104,7 +104,7 @@ pub unsafe extern "C" fn auction_ffi_tx_begin(req: *const c_char) -> *mut c_char
 #[no_mangle]
 pub unsafe extern "C" fn auction_ffi_tx_poll(req: *const c_char) -> *mut c_char {
     // SAFETY: forwarded from the caller's guarantee.
-    unsafe { call(req, |v| track::poll(&Ctx::from_request(&v)?, &v)) }
+    unsafe { call(req, |v| track::poll(&Ctx::for_tx(&v)?, &v)) }
 }
 
 /// `{"ctx":{...},"tracking":{...},"outcome":"included|dropped|unknown"}` -> `{}`.

@@ -2,29 +2,36 @@
 //! `RpcChain` is built.
 
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use auction_sdk::{
-    chain::Chain,
+    chain::{BlockSummary, Chain},
     confirm::ConfirmSettings,
     deployment::Deployment,
     rpc::{ReadRetry, RpcChain},
     verify::{verify_chain_identity, verify_config, VerifiedConfig},
     SdkError, SdkResult,
 };
-use lee_core::account::AccountId;
+use lee::PublicTransaction;
+use lee_core::account::{Account, AccountId, Nonce};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::envelope::{parse, FfiError};
 
-/// IPC calls between modules time out after 20 s, so no FFI read may run long: 5 s per request and one
-/// retry after 1 s (at most about 11 s with a dead node).
+/// IPC calls between modules time out after 20 s. Each FFI call has a budget of `CALL_BUDGET`: a read
+/// that would START after it ran out is refused (`chain` error), and one read takes at most
+/// `READ_TIMEOUT` for transaction ops (no retry) or about 11 s for views (5 s, 1 s pause, 5 s). Worst
+/// case per call: the budget plus one read, 17 s for transaction ops.
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
-const READ_RETRY: ReadRetry = ReadRetry {
+pub const CALL_BUDGET: Duration = Duration::from_secs(12);
+/// Views and `prepare`: one retry after 1 s.
+const VIEW_RETRY: ReadRetry = ReadRetry {
     attempts: 2,
     first_delay: Duration::from_secs(1),
 };
+/// `tx_begin` and `tx_poll`: a single try, the module polls again.
+const TX_RETRY: ReadRetry = ReadRetry::NONE;
 /// The named dev networks that sending dev operations (mock tokens) may act on; the same list as the
 /// CLI's `DEV_NETWORKS`. A name on this list is never enough: block 1 must also match the deployment.
 pub const DEV_NETWORKS: &[&str] = &["localnet", "testnet-legacy"];
@@ -77,10 +84,14 @@ pub struct Ctx {
 impl Ctx {
     /// Loads the deployment file and connects to its sequencer (lazily: no request is sent yet).
     pub fn open(json: &CtxJson) -> Result<Self, FfiError> {
+        Self::open_with(json, VIEW_RETRY)
+    }
+
+    fn open_with(json: &CtxJson, retry: ReadRetry) -> Result<Self, FfiError> {
         let deployment = Deployment::load(&json.deployment)?;
         let chain = RpcChain::connect_with_timeout(&deployment.sequencer_url, READ_TIMEOUT)?
-            .with_read_retry(READ_RETRY);
-        Self::assemble(Box::new(chain), deployment, json)
+            .with_read_retry(retry);
+        Self::assemble(Box::new(chain), deployment, json, CALL_BUDGET)
     }
 
     /// `open` over any chain, for tests.
@@ -90,14 +101,30 @@ impl Ctx {
         deployment: Deployment,
         json: &CtxJson,
     ) -> Result<Self, FfiError> {
-        Self::assemble(chain, deployment, json)
+        Self::assemble(chain, deployment, json, CALL_BUDGET)
+    }
+
+    /// `with_chain` with another per-call budget, so tests need not wait 12 s.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn with_chain_budget(
+        chain: Box<dyn Chain>,
+        deployment: Deployment,
+        json: &CtxJson,
+        budget: Duration,
+    ) -> Result<Self, FfiError> {
+        Self::assemble(chain, deployment, json, budget)
     }
 
     fn assemble(
         chain: Box<dyn Chain>,
         deployment: Deployment,
         json: &CtxJson,
+        budget: Duration,
     ) -> Result<Self, FfiError> {
+        let chain: Box<dyn Chain> = Box::new(Deadline {
+            inner: chain,
+            deadline: Instant::now() + budget,
+        });
         let config = json
             .config
             .as_deref()
@@ -116,9 +143,14 @@ impl Ctx {
         })
     }
 
-    /// The request's context, opened.
+    /// The request's context, opened (reads retry once).
     pub fn from_request(req: &Value) -> Result<Self, FfiError> {
         Self::open(&CtxJson::of(req)?)
+    }
+
+    /// The context for `tx_begin` / `tx_poll`: reads are tried once.
+    pub fn for_tx(req: &Value) -> Result<Self, FfiError> {
+        Self::open_with(&CtxJson::of(req)?, TX_RETRY)
     }
 
     /// `ctx.config`, else the deployment file's.
@@ -158,5 +190,45 @@ impl Ctx {
             });
         }
         verify_chain_identity(self.chain.as_ref(), &self.deployment)
+    }
+}
+
+/// Refuses to start a read once the call's deadline has passed.
+struct Deadline {
+    inner: Box<dyn Chain>,
+    deadline: Instant,
+}
+
+impl Deadline {
+    fn check(&self) -> SdkResult<()> {
+        if Instant::now() >= self.deadline {
+            return Err(SdkError::Chain(
+                "the call's time budget ran out before the node answered".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Chain for Deadline {
+    fn account(&self, id: &AccountId) -> SdkResult<Account> {
+        self.check()?;
+        self.inner.account(id)
+    }
+    fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<Nonce>> {
+        self.check()?;
+        self.inner.nonces(ids)
+    }
+    fn last_block_id(&self) -> SdkResult<u64> {
+        self.check()?;
+        self.inner.last_block_id()
+    }
+    fn blocks(&self, from: u64, to: u64) -> SdkResult<Vec<BlockSummary>> {
+        self.check()?;
+        self.inner.blocks(from, to)
+    }
+    fn send(&self, tx: &PublicTransaction) -> SdkResult<[u8; 32]> {
+        self.check()?;
+        self.inner.send(tx)
     }
 }

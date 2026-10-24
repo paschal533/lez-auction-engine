@@ -17,6 +17,7 @@ testing = ["auction_sdk/testing"]
 [dependencies]
 auction_sdk = { workspace = true, features = ["rpc"] }
 lee_core = { workspace = true }
+lee = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = "0.4"
@@ -28,4 +29,3 @@ cbindgen = { version = "0.28", default-features = false }
 # Self dependency: turns `testing` on for this crate's own integration tests under a plain `cargo test -p auction_ffi`.
 auction_ffi = { path = ".", features = ["testing"] }
 tempfile = "3"
-lee = { workspace = true }

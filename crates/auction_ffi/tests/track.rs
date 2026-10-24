@@ -7,6 +7,7 @@ use auction_sdk::{BlockSummary, Chain, SdkError, SdkResult};
 use lee_core::account::{Account, AccountId, Nonce};
 use serde_json::{json, Value};
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use common::{lock_dir, world, World};
@@ -269,16 +270,69 @@ fn tx_poll_stops_starting_reads_once_the_call_budget_is_spent() {
 }
 
 #[test]
-fn a_failed_tx_begin_leaves_no_lock_file() {
+fn tx_begin_stops_starting_reads_once_the_call_budget_is_spent() {
     let w = world("localnet");
     let ctx = stalled_ctx(&w);
     let start = Instant::now();
-    // The lock is taken after the first baseline; the re-read is refused by the deadline.
+    // The nonce read starts inside the budget; the height read would start after it.
     let r = track::begin(&ctx, &json!({ "signer": signer() }));
-    assert!(start.elapsed() < STALL * 4, "{:?}", start.elapsed());
+    assert!(start.elapsed() < STALL + STALL / 2, "{:?}", start.elapsed());
     assert_eq!(kind_of(r), "chain");
-    let left: Vec<_> = std::fs::read_dir(lock_dir(&w.json.state_dir))
-        .map(|d| d.flatten().map(|e| e.path()).collect())
-        .unwrap_or_default();
-    assert!(left.is_empty(), "left behind: {left:?}");
+}
+
+/// Fails the third `nonces` call. `baseline` reads `nonces` then `last_block_id`; the third read is
+/// the first of the re-read under the lock, so the failure comes after the lock file exists.
+struct FailUnderLock<'a> {
+    inner: &'a dyn Chain,
+    lock: std::path::PathBuf,
+    nonce_reads: AtomicUsize,
+    lock_existed: AtomicBool,
+}
+
+impl Chain for FailUnderLock<'_> {
+    fn account(&self, id: &AccountId) -> SdkResult<Account> {
+        self.inner.account(id)
+    }
+    fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<Nonce>> {
+        if self.nonce_reads.fetch_add(1, Ordering::SeqCst) == 1 {
+            self.lock_existed
+                .store(self.lock.exists(), Ordering::SeqCst);
+            return Err(SdkError::Chain("node went away under the lock".into()));
+        }
+        self.inner.nonces(ids)
+    }
+    fn last_block_id(&self) -> SdkResult<u64> {
+        self.inner.last_block_id()
+    }
+    fn blocks(&self, from: u64, to: u64) -> SdkResult<Vec<BlockSummary>> {
+        self.inner.blocks(from, to)
+    }
+    fn send(&self, tx: &lee::PublicTransaction) -> SdkResult<[u8; 32]> {
+        self.inner.send(tx)
+    }
+}
+
+#[test]
+fn a_failed_tx_begin_leaves_no_lock_file() {
+    let w = world("localnet");
+    let lock = lock_dir(&w.json.state_dir).join(format!("{}.lock", signer()));
+    let chain = Box::leak(Box::new(FailUnderLock {
+        inner: w.chain,
+        lock: lock.clone(),
+        nonce_reads: AtomicUsize::new(0),
+        lock_existed: AtomicBool::new(false),
+    }));
+    let ctx = Ctx::with_chain(Box::new(&*chain), w.ctx.deployment.clone(), &w.json).expect("ctx");
+    let r = track::begin(&ctx, &json!({ "signer": signer() }));
+    assert_eq!(kind_of(r), "chain");
+    assert_eq!(
+        chain.nonce_reads.load(Ordering::SeqCst),
+        2,
+        "failed at the re-read"
+    );
+    assert!(
+        chain.lock_existed.load(Ordering::SeqCst),
+        "the lock existed mid-call"
+    );
+    assert!(!lock.exists(), "the failed tx_begin left its lock behind");
 }

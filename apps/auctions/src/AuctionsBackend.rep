@@ -26,6 +26,9 @@ class AuctionsBackend
     SLOT(QVariantMap txStatus(QString txId))
     // Reads a screen's data: any auction_engine view ({view, ...}); returns its JSON or {error, kind}.
     SLOT(QVariantMap view(QVariantMap request))
+    // One page of the auction scan ({max_blocks?}); returns {scanned_to, head, done, restarted, note} or
+    // {error, kind}. The caller asks for the next page after this one answers, until done.
+    SLOT(QVariantMap rescan(QVariantMap request))
     // The account picker rows {label, id, role, stable_balance, coll_balance, holding}; a failure is the
     // only row, [{error, kind}].
     SLOT(QVariantList accounts())

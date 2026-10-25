@@ -27,6 +27,7 @@ public:
     QVariantMap submit(QVariantMap request) override;
     QVariantMap txStatus(QString txId) override;
     QVariantMap view(QVariantMap request) override;
+    QVariantMap rescan(QVariantMap request) override;
     QVariantList accounts() override;
 
 private:

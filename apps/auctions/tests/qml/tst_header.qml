@@ -37,6 +37,7 @@ TestCase {
             function submit(req) { return { call: "submit" } }
             function txStatus(id) { return { call: "txStatus" } }
             function view(req) { return { call: "view" } }
+            function rescan(req) { return { call: "rescan" } }
         }
 
         function module(name) { return backendStub }

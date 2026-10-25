@@ -32,6 +32,8 @@ TestCase {
             function submit(req) { testCase.calls.push(req); return req }
             function txStatus(id) { return id }
             function accounts() { return { call: "accounts" } }
+            function view(req) { return { call: "view" } }
+            function rescan(req) { return { call: "rescan" } }
         }
 
         function module(name) { return backendStub }

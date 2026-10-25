@@ -8,6 +8,7 @@ import Logos.Controls
 import "common"
 import "shell"
 import "dev"
+import "live"
 
 Rectangle {
     id: root
@@ -113,7 +114,11 @@ Rectangle {
             Layout.fillHeight: true
             currentIndex: header.currentIndex
 
-            EmptyPanel { heading: qsTr("Live auctions") }
+            LivePage {
+                backend: root.backend
+                accounts: d.accounts
+                activeAccount: root.backend ? root.backend.activeAccount : ""
+            }
             EmptyPanel { heading: qsTr("At-risk positions") }
             EmptyPanel { heading: qsTr("Settled") }
             EmptyPanel { heading: qsTr("System") }

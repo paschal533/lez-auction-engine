@@ -137,6 +137,14 @@ QVariantMap AuctionsBackend::view(QVariantMap request)
     return reply;
 }
 
+QVariantMap AuctionsBackend::rescan(QVariantMap request)
+{
+    // One page; the Live screen pages until done and shows a failure itself.
+    const QVariantMap reply = m_logos->auction_engine.rescan(request);
+    noteChainFailure(reply);
+    return reply;
+}
+
 QVariantList AuctionsBackend::accounts()
 {
     // A failure arrives in-band as the only row, [{error, kind}]; the picker shows it.

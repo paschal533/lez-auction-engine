@@ -8,8 +8,9 @@ import "Format.js" as Format
 
 // A row of KPIs in an inset card (board v3 `.kpis`): each cell a 12px tertiary label, a 24px bold value
 // (accentOrange when it is the "now" figure) with a unit, and a 12px caption; cells split by borderSubtle
-// hairlines. Each item is {label, value, unit?, decimals?, caption?, accent?}; `decimals` >= 0 formats the
-// value as a u128 decimal string. Cell i's value is `kpiValue_<i>`.
+// hairlines. Each item is {label, value, unit?, decimals?, caption?, accent?, progress?}; `decimals` >= 0 formats
+// the value as a u128 decimal string; `progress` (0–1) adds an accentOrange bar under the value (raised of
+// target). Cell i's label, value and caption are `kpiLabel_<i>`, `kpiValue_<i>`, `kpiCaption_<i>`.
 InsetCard {
     id: root
 
@@ -49,6 +50,7 @@ InsetCard {
                     spacing: 0
 
                     LogosText {
+                        objectName: "kpiLabel_" + cell.index
                         text: cell.modelData.label || ""
                         font.pixelSize: Theme.typography.secondaryText
                         color: Theme.palette.textTertiary
@@ -73,7 +75,19 @@ InsetCard {
                             color: Theme.palette.textSecondary
                         }
                     }
+                    LogosProgressBar {
+                        objectName: "kpiProgress_" + cell.index
+                        visible: cell.modelData.progress !== undefined
+                        Layout.fillWidth: true
+                        Layout.topMargin: Theme.spacing.tiny
+                        Layout.preferredHeight: 4
+                        from: 0
+                        to: 1
+                        value: cell.modelData.progress || 0
+                        fillColor: Theme.palette.accentOrange
+                    }
                     LogosText {
+                        objectName: "kpiCaption_" + cell.index
                         visible: text.length > 0
                         text: cell.modelData.caption || ""
                         font.pixelSize: Theme.typography.secondaryText

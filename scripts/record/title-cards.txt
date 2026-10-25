@@ -1,0 +1,10 @@
+# Title cards for the recorded Basecamp story (scripts/record/record-story.ps1, Plan 4 Task 18).
+# step id (apps/auctions/tests/lib/story-steps.mjs) | title | subtitle
+# cut-idle.py draws each card for a few seconds from that step's logged start.
+liquidate-open-risk | F1 · Permissionless liquidation | A keeper liquidates a position below the minimum CR and earns a reward.
+bid-partial-open-live | F3 · Partial lots | A first bid buys part of the lot; the auction stays open for the rest.
+bid-final-open-live | F2 · Rising discount, early end at target | The final bid reaches the target and the auction settles at once.
+system-caller-open-picker | F5 · Surplus auction | The buffer's surplus is sold for protocol tokens, which are burned.
+dev-admin-open-picker | Shortfall | A market price move leaves the next auction short of its target.
+debt-caller-open-picker | F4 · Debt auction | The buffer absorbs what it can; protocol tokens are minted for the rest.
+dev-disable-token-open-dev | Freeze path | No protocol token: unbacked debt above the threshold freezes new debt.

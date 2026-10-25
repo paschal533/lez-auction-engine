@@ -90,6 +90,31 @@ A profile with a lez_core newer than 0.4.1, for example one taken from Basecamp'
 (exit 4). Use a fresh profile and do not accept a lez_core upgrade there. Details and the recorded run (1261 s
 in total, 329 s for the story): [docs/architecture/basecamp-app.md](docs/architecture/basecamp-app.md).
 
+### Re-recording the GUI run (Windows host, WSLg)
+
+`scripts/record/record-story.ps1` records the standalone-mode story to an mp4. Run it from Windows PowerShell
+with ffmpeg (with libx264 and drawtext, e.g. the gyan.dev build from winget) and Python 3 on the Windows PATH:
+
+    powershell -File scripts\record\record-story.ps1 -Out C:\Users\user\Videos\rfp014-demo\basecamp.mp4
+
+It runs `scripts/basecamp/run-app.sh --setup --test apps/auctions/tests/story.mjs` in WSL with
+`STORY_PACE_MS=1500`, so each step stays on screen long enough to read. When the Basecamp window appears, the
+script moves it to a second screen if there is one, keeps it on top, and captures its screen region with
+gdigrab at 30 fps. Capturing the WSLg window by title records black frames, so the region is captured instead.
+When the story ends, `scripts/record/cut-idle.py` reads `story-timeline.json`:
+- it cuts every transaction-lane wait longer than 3 s down to its first and last 1.5 s;
+- it trims everything before the first step and more than 4 s after the last;
+- it draws the title cards from `scripts/record/title-cards.txt` (F1–F5, shortfall, freeze) at the logged starts
+  of their steps.
+
+The capture and the story run on different clocks, so the script measures the WSL clock against the Windows clock
+before it starts. Next to the output it writes the run log, the ffmpeg log, the timeline and the cut plan
+(`<name>.plan.json`: the cuts and each card's time). It deletes the raw capture once the cut video is written.
+It refuses to start with less than 12 GB free on `C:` and stops everything if `C:` drops below 10 GB. When the
+Nix caches are unreachable, pass the already-built roots through, for example
+`-WslEnv 'AUCTIONS_ROOT=$HOME/lez-target/basecamp/auctions AUCTION_ENGINE_ROOT=$HOME/lez-target/basecamp/auction_engine LOGOS_QT_MCP=$HOME/lez-target/basecamp/qt-mcp'`.
+The cut logic has unit tests: `python3 -m unittest scripts/tests/test_cut_idle.py`.
+
 ## Public legacy testnet
 
 `scripts/testnet-legacy.sh` runs the same scenario (`scripts/lib/demo-scenario.sh`) on the public LEZ v0.2.4

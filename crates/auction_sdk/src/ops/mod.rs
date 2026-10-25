@@ -15,8 +15,8 @@ mod liquidate;
 mod system;
 
 pub use admin::{
-    check_protocol_token, prepare_set_engine_params, require_engine_admin, require_host_admin,
-    SetEngineParamsRequest,
+    check_protocol_token, prepare_set_engine_params, prepare_set_engine_params_with,
+    require_engine_admin, require_host_admin, EngineParamsSlots, SetEngineParamsRequest,
 };
 pub use bid::{prepare_bid, BidRequest};
 pub use claim::{

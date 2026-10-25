@@ -776,6 +776,8 @@ dependencies = [
 name = "auction_ffi"
 version = "0.1.0"
 dependencies = [
+ "auction_cli",
+ "auction_engine_program",
  "auction_ffi",
  "auction_sdk",
  "cbindgen",

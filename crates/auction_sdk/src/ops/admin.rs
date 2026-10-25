@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use auction_engine_core::args::EngineParamsArgs;
 use lee_core::{account::AccountId, program::ProgramId};
 use stablecoin_core::ProtocolParameters;
 use token_core::TokenDefinition;
@@ -27,6 +28,29 @@ pub struct SetEngineParamsRequest {
     pub disable_protocol_token: bool,
     /// Allow the change to disable the reference oracle the config currently has.
     pub disable_ref_oracle: bool,
+}
+
+/// `set_engine_params` without the parameter file: the signer and the two optional slots, as in
+/// [`SetEngineParamsRequest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineParamsSlots {
+    pub admin: String,
+    pub protocol_token: Option<String>,
+    pub ref_oracle: Option<String>,
+    pub disable_protocol_token: bool,
+    pub disable_ref_oracle: bool,
+}
+
+impl From<&SetEngineParamsRequest> for EngineParamsSlots {
+    fn from(r: &SetEngineParamsRequest) -> Self {
+        Self {
+            admin: r.admin.clone(),
+            protocol_token: r.protocol_token.clone(),
+            ref_oracle: r.ref_oracle.clone(),
+            disable_protocol_token: r.disable_protocol_token,
+            disable_ref_oracle: r.disable_ref_oracle,
+        }
+    }
 }
 
 /// Refused before signing (exit 2 in the CLI) unless `signer` is the config admin.
@@ -101,10 +125,33 @@ fn slot_change(what: &'static str, old: Option<AccountId>, new: Option<AccountId
     Some(fact(what, format!("{} -> {}", show(old), show(new))))
 }
 
+/// `admin set-engine-params`: the parameters come from `req.params` (`params::engine_params`).
 pub fn prepare_set_engine_params<C: Chain + ?Sized>(
     chain: &C,
     v: &VerifiedConfig,
     req: &SetEngineParamsRequest,
+    accounts: &Accounts<'_>,
+    now_ms: u64,
+) -> SdkResult<Prepared> {
+    prepare_set_engine_params_with(
+        chain,
+        v,
+        &EngineParamsSlots::from(req),
+        |token, oracle| params::engine_params(&req.params, token, oracle),
+        accounts,
+        now_ms,
+    )
+}
+
+/// [`prepare_set_engine_params`] with the parameters from `load(protocol_token_enabled,
+/// ref_oracle_enabled)` instead of a file (the app passes `demo::engine_params()`). `load` runs
+/// after the signer and slot checks, with the slot flags of the resolved slots; its result is
+/// validated by the engine's own rules before anything is built.
+pub fn prepare_set_engine_params_with<C: Chain + ?Sized>(
+    chain: &C,
+    v: &VerifiedConfig,
+    req: &EngineParamsSlots,
+    load: impl FnOnce(bool, bool) -> SdkResult<EngineParamsArgs>,
     accounts: &Accounts<'_>,
     _now_ms: u64,
 ) -> SdkResult<Prepared> {
@@ -136,7 +183,11 @@ pub fn prepare_set_engine_params<C: Chain + ?Sized>(
     .into_iter()
     .flatten()
     .collect();
-    let p = params::engine_params(&req.params, token.is_some(), oracle.is_some())?;
+    let p = load(token.is_some(), oracle.is_some())?;
+    // Same rules the engine applies at config time (ADR-024); `params::engine_params` already ran
+    // them on a file, a caller-built value has not.
+    p.validate()
+        .map_err(|e| SdkError::Refused(format!("invalid engine parameters: {e}")))?;
     if p.protocol_token_ref_price != v.state.protocol_token_ref_price {
         facts.push(fact(
             "ref price change",

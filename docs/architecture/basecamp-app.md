@@ -168,6 +168,6 @@ Wall time: 1261 s for the whole command. The story itself took 329 s for 172 ste
 
 ## Recording
 
-A scripted screen recording of the story (`STORY_PACE_MS=1500`, idle lane waits cut, title cards for F1–F5, the shortfall and the freeze) is planned at `C:\Users\user\Videos\rfp014-demo\basecamp.mp4`. It is made with `scripts/record/record-story.ps1` (Plan 4 Task 18), and the video is not committed.
+A scripted screen recording of the story (`STORY_PACE_MS=1500`, idle lane waits cut, title cards for F1–F5, the shortfall and the freeze) is at `C:\Users\user\Videos\rfp014-demo\basecamp.mp4`: 333.0 s, 9,021,687 bytes, SHA-256 `2b686a8621ba691df02aa1e24f0fb67094b0691c4ecf6191c362a649cba2389f`. It was made with `scripts/record/record-story.ps1` at aeb1320 in one unattended run (172/172 steps, every checked figure equal to `auction-cli`). The video is not committed.
 
-TODO recording: pending Task 18
+Two limits of this take: the last seconds were trimmed by hand to drop a frame of the desktop behind the closing window, and the title cards and idle cuts run about 2 s late because that build of `cut-idle.py` treated the capture as starting with the story. Both are fixed in the committed scripts (59e7cfa: `--window-gone` and the real capture offset); a re-record gives exact timings.

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // The whole demo story as UI actions in Basecamp (Plan 4 Task 16): every step of scripts/lib/demo-scenario.sh
 // after the setup phases, in its order (R39), driven through the QML inspector with the matching account picked
-// in the header. After the steps that move the books it reads the figures from the screen (objectName) and
-// checks them against ADR-051's expected values, cross-checked with auction-cli on the same state.
+// in the header. After the steps that move the books it checks the figures against ADR-051's expected values,
+// cross-checked with auction-cli on the same state. Six are read from the screen (objectName); the protocol-token
+// check compares the CLI balance before plus the on-screen quote with the CLI balance after.
 // Run it with scripts/basecamp/run-app.sh --setup --test <this file> (fresh localnet, positions P0–P2 open).
 //
 // Environment (run-app.sh sets the first five):
@@ -283,7 +284,7 @@ async function runStep(app, step) {
   return timing;
 }
 
-// ---- ADR-051 checks, read from the screen and cross-checked with auction-cli ----
+// ---- ADR-051 checks, cross-checked with auction-cli (six read from the screen; see the header) ----
 
 const results = [];
 const memo = {};

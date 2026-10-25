@@ -66,23 +66,26 @@ def out_time(t, cuts):
 def plan(timeline, cards, offset, duration, threshold=3.0, keep=1.5, lead=1.0, hold=4.0, card_s=3.5, end_at=None):
     """end_at: capture time by which the Basecamp window was gone; nothing after it is kept."""
     steps = timeline["steps"]
-    # A capture that started after the story's t0 (negative offset) is treated as starting at t0.
-    offset = max(0.0, offset)
     if not steps:
         sys.exit("cut-idle: the timeline has no steps")
+    # The real offset maps story time to capture time, negative included (the capture started after the story's
+    # t0); only the resulting cut ranges and card times are clamped to the capture.
     first = offset + steps[0]["start_ms"] / 1000.0
     last = offset + max(s.get("end_ms", s["start_ms"]) for s in steps) / 1000.0
-    cuts = idle_cuts(steps, offset, threshold, keep)
     tail = min(duration, last + hold)
     if end_at is not None:
         tail = min(tail, max(0.0, end_at))
-    cuts = merge(cuts + [(0.0, max(0.0, first - lead)), (tail, duration)])
+    tail = max(0.0, tail)
+    ranges = idle_cuts(steps, offset, threshold, keep) + [(0.0, max(0.0, first - lead)), (tail, duration)]
+    cuts = merge([(max(0.0, a), min(duration, b)) for a, b in ranges])
+    end = out_time(tail, cuts)
     by_id = {s["id"]: s for s in steps}
     placed = []
     for sid, title, subtitle in cards:
         if sid not in by_id:
             sys.exit(f"cut-idle: title card for step {sid}, which is not in the timeline")
-        at = out_time(offset + by_id[sid]["start_ms"] / 1000.0, cuts)
+        raw = min(max(0.0, offset + by_id[sid]["start_ms"] / 1000.0), tail)
+        at = min(out_time(raw, cuts), end)
         placed.append({"id": sid, "title": title, "subtitle": subtitle, "at": at, "until": at + card_s})
     kept = duration - sum(b - a for a, b in cuts)
     return {"offset": offset, "cuts": cuts, "cards": placed, "out_duration": kept}

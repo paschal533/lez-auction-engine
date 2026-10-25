@@ -82,13 +82,31 @@ class PlanTest(unittest.TestCase):
         # f1-open raw 11 -> 1; f5-open raw 23 -> 23-10-7 = 6; freeze-open raw 33 -> 33-10-7-5 = 11
         self.assertEqual(at, [("f1-open", 1.0, 4.0), ("f5-open", 6.0, 9.0), ("freeze-open", 11.0, 14.0)])
 
-    def test_negative_offset_is_clamped_to_zero(self):
-        # The window appeared after the story's t0: treat the capture as starting at t0.
-        p = ci.plan(self.timeline(), [("f1-open", "F1", "x")], offset=-2.5, duration=40.0,
-                    threshold=3.0, keep=1.5, lead=1.0, hold=4.0)
-        self.assertEqual(p["offset"], 0.0)
-        self.assertEqual(p["cuts"][0], (3.5, 10.5))
-        self.assertAlmostEqual(p["cards"][0]["at"], 1.0)
+    def test_negative_offset_maps_cuts_and_cards_earlier(self):
+        # The capture started 1.955 s after the story's t0 (R51): everything lands 1.955 s earlier than it would
+        # at offset 0, and only the results are clamped at 0.
+        cards = [("f1-open", "F1", "x"), ("f5-open", "F5", "y")]
+        at0 = ci.plan(self.timeline(), cards, offset=0.0, duration=40.0,
+                      threshold=3.0, keep=1.5, lead=1.0, hold=4.0)
+        neg = ci.plan(self.timeline(), cards, offset=-1.955, duration=40.0,
+                      threshold=3.0, keep=1.5, lead=1.0, hold=4.0)
+        self.assertEqual(neg["offset"], -1.955)
+        self.assertEqual(len(neg["cuts"]), len(at0["cuts"]))
+        for (a, b), (a0, b0) in zip(neg["cuts"][:2], at0["cuts"][:2]):
+            self.assertAlmostEqual(a, a0 - 1.955)
+            self.assertAlmostEqual(b, b0 - 1.955)
+        # f5-open: raw 13 - 1.955 = 11.045, minus the 7 s f1 cut -> 4.045 (6.0 at offset 0)
+        self.assertAlmostEqual(neg["cards"][1]["at"], at0["cards"][1]["at"] - 1.955)
+        # f1-open would be at -0.955: clamped to the start of the video.
+        self.assertEqual(neg["cards"][0]["at"], 0.0)
+        self.assertTrue(all(a >= 0 for a, _ in neg["cuts"]))
+
+    def test_card_past_the_window_gone_time_is_clamped(self):
+        p = ci.plan(self.timeline(), [("freeze-open", "Freeze", "z")], offset=10.0, duration=60.0,
+                    threshold=3.0, keep=1.5, lead=1.0, hold=4.0, end_at=30.0)
+        # end_at 30 is inside the f5 wait cut (25.5..30.5): the video ends at out_time(25.5) = 25.5-10-7 = 8.5
+        self.assertAlmostEqual(p["out_duration"], 8.5)
+        self.assertLessEqual(p["cards"][0]["at"], p["out_duration"])
 
     def test_tail_cut_starts_where_the_window_was_gone(self):
         # Basecamp closed 36 s into the capture: nothing after that is kept, even inside the hold.

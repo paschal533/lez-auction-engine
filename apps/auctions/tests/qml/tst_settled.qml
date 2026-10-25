@@ -212,6 +212,20 @@ TestCase {
         verify(findChild(p, "outcomeNote").text.indexOf("not repaid") >= 0, findChild(p, "outcomeNote").text)
     }
 
+    // settle_empty (auction_core/src/auction.rs) on an empty lot, e.g. the keeper reward took the whole
+    // seizure: nothing sold or raised, the whole 600,000 debt short. A variant of the real fixture.
+    function test_outcome_bar_nothing_raised() {
+        variant({ debt_repaid: "0", penalty: "0", raised: "0", shortfall: "600000",
+                  lot: "0", sold: "0", leftover: "0", claimed: "0" })
+        const p = ready()
+        checkBar(p)
+        compare(findChild(p, "outcomeHeading").text, "Nothing was raised")
+        fuzzyCompare(findChild(p, "outcomeShortfall").width, findChild(p, "outcomeTrack").width, 1)
+        compare(findChild(p, "legendShortfall").text, "Shortfall 600,000")
+        compare(findChild(p, "settledBadge").text, "Empty lot")
+        compare(findChild(findChild(p, "settledItem_" + auctionReply.id), "settledItemStatus").text, "Empty lot")
+    }
+
     // ---- List ------------------------------------------------------------------------------------
 
     // Outcome text per row: "x to claim" (accent), "n short" (error), "Claimed"; the order is the view's

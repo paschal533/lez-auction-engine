@@ -6,6 +6,7 @@
 pub mod addresses;
 pub mod chain;
 pub mod confirm;
+pub mod dec;
 pub mod decode;
 pub mod demo;
 pub mod deployment;
@@ -25,6 +26,7 @@ pub mod scan;
 pub mod testing;
 pub mod tx;
 pub mod verify;
+pub mod views;
 
 /// Version of this crate, reported by the FFI (`auction_ffi_version`).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

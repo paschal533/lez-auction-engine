@@ -221,6 +221,15 @@ impl Keystore {
         Ok(id)
     }
 
+    /// Every wallet label of a public account, with its account id, in label order (the account
+    /// picker's source). Labels of private accounts are left out: they can never sign here.
+    pub fn labels(&self) -> impl Iterator<Item = (&str, &AccountId)> {
+        self.labels
+            .iter()
+            .filter(|(_, id)| !self.private.contains(id))
+            .map(|(label, id)| (label.as_str(), id))
+    }
+
     pub fn key(&self, id: &AccountId) -> Result<&PrivateKey, KeystoreError> {
         if self.private.contains(id) {
             return Err(KeystoreError::PrivateAccount(id.to_string()));

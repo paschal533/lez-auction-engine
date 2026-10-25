@@ -7,7 +7,12 @@ use std::io::Write;
 use lee_core::{account::AccountId, program::ProgramId};
 
 use auction_sdk::{
-    chain::Chain, decode::Reader, error::SdkResult, ops::Touch, verify::VerifiedConfig,
+    chain::Chain,
+    decode::Reader,
+    error::SdkResult,
+    ops::Touch,
+    verify::VerifiedConfig,
+    views::{self, AccountingView},
 };
 
 use crate::{
@@ -44,7 +49,10 @@ pub fn print_applied<C: Chain>(
                 describe(holding(env, &r, v, id, definition)),
             ),
             Touch::Auction(id) => ("after auction".to_owned(), describe(auction(&r, id))),
-            Touch::Accounting => ("after accounting".to_owned(), describe(accounting(&r, v))),
+            Touch::Accounting => (
+                "after accounting".to_owned(),
+                describe(views::accounting(&env.chain, v).map(|a| accounting_line(&a))),
+            ),
         };
         kv(out, &key, &value)?;
     }
@@ -84,10 +92,9 @@ fn auction<C: Chain>(r: &Reader<'_, C>, id: &AccountId) -> SdkResult<String> {
     ))
 }
 
-/// One line of the engine accounting; shared by `config` and the post-inclusion report.
-pub(crate) fn accounting<C: Chain>(r: &Reader<'_, C>, v: &VerifiedConfig) -> SdkResult<String> {
-    let a = r.accounting(&v.engine.accounting)?;
-    Ok(format!(
+/// One line of the engine accounting view; shared by `config` and the post-inclusion report.
+pub(crate) fn accounting_line(a: &AccountingView) -> String {
+    format!(
         "unbacked debt {}, debt on auction {}, surplus live {} (next nonce {}), debt live {} (next nonce {})",
         a.unbacked_debt,
         a.debt_on_auction,
@@ -95,25 +102,7 @@ pub(crate) fn accounting<C: Chain>(r: &Reader<'_, C>, v: &VerifiedConfig) -> Sdk
         a.surplus_nonce,
         yes_no(a.debt_live),
         a.debt_nonce
-    ))
-}
-
-/// Lot left of the latest surplus and debt auctions that are live, for `config`.
-pub(crate) fn system_lots<C: Chain>(
-    r: &Reader<'_, C>,
-    v: &VerifiedConfig,
-) -> SdkResult<Vec<(&'static str, String)>> {
-    let a = r.accounting(&v.engine.accounting)?;
-    let mut lots = Vec::new();
-    if let (true, Some(n)) = (a.surplus_live, a.surplus_nonce.checked_sub(1)) {
-        let s = r.surplus_auction(&v.engine.surplus_auction(n))?;
-        lots.push(("surplus lot left", s.lot_left.to_string()));
-    }
-    if let (true, Some(n)) = (a.debt_live, a.debt_nonce.checked_sub(1)) {
-        let d = r.debt_auction(&v.engine.debt_auction(n))?;
-        lots.push(("debt lot left", d.lot_left.to_string()));
-    }
-    Ok(lots)
+    )
 }
 
 #[cfg(test)]

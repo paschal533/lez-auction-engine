@@ -12,6 +12,7 @@ use auction_sdk::{
     ops::{self, CHECK_VERIFY},
     plan_host,
     verify::verify_binding,
+    views::HostView,
 };
 use lee_core::account::{Account, AccountId};
 use stablecoin_core::{LiquidationEngineState, ProtocolParameters};
@@ -121,25 +122,13 @@ fn print_params<C: Chain>(
 /// Read-only view of the host's `ProtocolParameters` (the freeze flag is the current state; the
 /// engine's `host_frozen_by_engine` only means "has ever frozen", THREAT_MODEL runbook).
 fn status<C: Chain>(env: &Env<C>, out: &mut dyn Write) -> Result<(), CliError> {
-    let p = protocol_parameters(env, &host_addresses(env))?;
-    kv(out, "frozen", yes_no(p.is_frozen))?;
-    kv(out, "admin", &p.admin_account_id.to_string())?;
-    kv(
-        out,
-        "freeze authority",
-        &p.freeze_authority_account_id.to_string(),
-    )?;
-    kv(out, "market oracle", &p.market_price_oracle_id.to_string())?;
-    kv(
-        out,
-        "min collateral ratio",
-        &p.minimum_collateralization_ratio.to_string(),
-    )?;
-    kv(
-        out,
-        "max oracle age ms",
-        &p.maximum_oracle_price_age_milliseconds.to_string(),
-    )
+    let h = HostView::from(&protocol_parameters(env, &host_addresses(env))?);
+    kv(out, "frozen", yes_no(h.frozen))?;
+    kv(out, "admin", &h.admin.to_string())?;
+    kv(out, "freeze authority", &h.freeze_authority.to_string())?;
+    kv(out, "market oracle", &h.market_oracle.to_string())?;
+    kv(out, "min collateral ratio", &h.min_cr_ray.to_string())?;
+    kv(out, "max oracle age ms", &h.max_oracle_age_ms.to_string())
 }
 
 fn addresses<C: Chain>(env: &Env<C>, out: &mut dyn Write) -> Result<(), CliError> {

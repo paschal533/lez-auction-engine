@@ -3,16 +3,13 @@
 use std::io::Write;
 use std::time::Duration;
 
-use lee_core::account::AccountId;
-
 use auction_sdk::{
     chain::Chain,
-    decode::Reader,
     deployment::program_id_hex,
-    error::SdkError,
-    quote::{self, AuctionView},
+    quote,
     scan::{self, Cursor, Restart, ScanSettings, ScanTargets},
     verify::VerifiedConfig,
+    views::{self, AuctionEntry, Listed},
 };
 
 use crate::{
@@ -49,10 +46,13 @@ fn system_state<C: Chain>(
     v: &VerifiedConfig,
     out: &mut dyn Write,
 ) -> Result<(), CliError> {
-    let r = Reader::new(&env.chain, v.engine.program);
-    kv(out, "accounting", &tx_report::accounting(&r, v)?)?;
-    for (key, value) in tx_report::system_lots(&r, v)? {
-        kv(out, key, &value)?;
+    let a = views::accounting(&env.chain, v)?;
+    kv(out, "accounting", &tx_report::accounting_line(&a))?;
+    if let Some(lot) = a.surplus_lot_left {
+        kv(out, "surplus lot left", &lot.to_string())?;
+    }
+    if let Some(lot) = a.debt_lot_left {
+        kv(out, "debt lot left", &lot.to_string())?;
     }
     Ok(())
 }
@@ -153,54 +153,44 @@ pub(crate) fn scan_now<C: Chain>(
     Ok(next.cursor)
 }
 
-fn auction_line(view: &AuctionView) -> String {
-    let s = &view.state;
-    let raised = s.debt_raised + s.penalty_raised;
-    if s.settled {
-        return format!(
-            "{}  settled  sold {}  raised {}/{}  leftover {} (claimed {})",
-            view.id,
-            s.collateral_sold,
-            raised,
-            s.amount_to_raise,
-            s.leftover_claimable,
-            s.leftover_claimed
-        );
-    }
+fn auction_line(entry: &AuctionEntry) -> String {
+    let l = match entry {
+        AuctionEntry::Settled(s) => {
+            return format!(
+                "{}  settled  sold {}  raised {}/{}  leftover {} (claimed {})",
+                s.id, s.sold, s.raised, s.target, s.leftover, s.claimed
+            );
+        }
+        AuctionEntry::Live(l) => l,
+    };
     let mut line = format!(
         "{}  live  lot {}  raised {}/{}  discount {}  t_eff {} ms",
-        view.id,
-        s.collateral_left,
-        raised,
-        s.amount_to_raise,
-        bps(view.discount_ray),
-        view.t_eff_ms
+        l.id,
+        l.collateral_left,
+        l.raised,
+        l.target,
+        bps(l.discount_ray),
+        l.t_eff_ms
     );
-    if view.held_at_max {
+    if l.held_at_max {
         line.push_str(&format!(
             "  held at max discount (keeps its cap reservation of {})",
-            s.reserved_amount
+            l.reserved
         ));
     }
-    if let Some(p) = &view.paused {
+    if let Some(p) = &l.paused {
         line.push_str(&format!("  bids revert now: {p} (run observe-feed)"));
     }
     line
 }
 
-/// Scanner candidates can be stale (ADR-043). An id whose account is gone or no longer decodes is an
-/// expected leftover and is dropped silently. An id that decodes but is the wrong account
-/// (`Mismatch`) or that the engine rejects (`Engine`) is skipped with a warning on stderr, so one
-/// bad id never hides the others and never hides itself either. Anything else fails the command.
-fn skip_stale(id: &AccountId, e: SdkError, err: &mut dyn Write) -> Result<(), CliError> {
-    match e {
-        SdkError::Missing { .. } | SdkError::Decode { .. } => Ok(()),
-        SdkError::Mismatch { .. } | SdkError::Engine { .. } => {
-            writeln!(err, "warning: skipped {id}: {e}")?;
-            Ok(())
-        }
-        other => Err(other.into()),
+/// Stale scanner candidates were dropped by the view; the ones it skipped get a warning on stderr,
+/// so one bad id never hides the others and never hides itself either (ADR-043).
+fn warn_skipped<T>(listed: &Listed<T>, err: &mut dyn Write) -> Result<(), CliError> {
+    for s in &listed.skipped {
+        writeln!(err, "warning: skipped {}: {}", s.id, s.reason)?;
     }
+    Ok(())
 }
 
 pub fn list_auctions<C: Chain>(
@@ -214,22 +204,17 @@ pub fn list_auctions<C: Chain>(
     let cursor = scan_now(env, &v, args, err)?;
     let now = env.now()?;
     kv(out, "scanned to block", &cursor.last_block.to_string())?;
-    let mut shown = 0usize;
-    for id in cursor.auction_ids()? {
-        let view = match quote::auction_view(&env.chain, &v, &id, now) {
-            Ok(view) => view,
-            Err(e) => {
-                skip_stale(&id, e, err)?;
-                continue;
-            }
-        };
-        if view.state.settled && !all {
-            continue;
-        }
-        shown += 1;
-        writeln!(out, "{}", auction_line(&view))?;
+    let listed = views::auctions(&env.chain, &v, &cursor, now)?;
+    warn_skipped(&listed, err)?;
+    let shown: Vec<&AuctionEntry> = listed
+        .items
+        .iter()
+        .filter(|e| all || matches!(e, AuctionEntry::Live(_)))
+        .collect();
+    for entry in &shown {
+        writeln!(out, "{}", auction_line(entry))?;
     }
-    if shown == 0 {
+    if shown.is_empty() {
         writeln!(out, "no auctions")?;
     }
     Ok(())
@@ -245,23 +230,17 @@ pub fn list_at_risk<C: Chain>(
     let cursor = scan_now(env, &v, args, err)?;
     let now = env.now()?;
     kv(out, "scanned to block", &cursor.last_block.to_string())?;
+    // Cursor order, as before the views existed; the app shows `views::at_risk` (lowest CR first).
+    let listed = views::positions(&env.chain, &v, &cursor, now)?;
+    warn_skipped(&listed, err)?;
     let mut shown = 0usize;
-    for id in cursor.position_ids()? {
-        let h = match quote::position_health(&env.chain, &v, &id, now) {
-            Ok(h) => h,
-            Err(e) => {
-                skip_stale(&id, e, err)?;
-                continue;
-            }
-        };
-        if h.unsafe_at_min_cr && h.normalized_debt > 0 {
-            shown += 1;
-            writeln!(
-                out,
-                "{}  owner {}  collateral {}  debt {}  unsafe at min CR",
-                h.position, h.owner, h.collateral, h.nominal_debt
-            )?;
-        }
+    for p in listed.items.iter().filter(|p| p.liquidatable) {
+        shown += 1;
+        writeln!(
+            out,
+            "{}  owner {}  collateral {}  debt {}  unsafe at min CR",
+            p.position, p.owner, p.collateral, p.nominal_debt
+        )?;
     }
     if shown == 0 {
         writeln!(out, "no position is unsafe")?;

@@ -12,6 +12,8 @@
 //! `RecipientMustSign`; bid: `VaultBelowBook`, `InsufficientBalance`, `RecipientMustSign`, and
 //! `ChainEndAccountsMissing` (avoided by listing `Accounting` per `BidQuote::needs_settlement`).
 
+use std::collections::BTreeSet;
+
 use alloy_primitives::U512;
 use auction_core::{
     auction::{quote_bid as core_quote_bid, BidFill, BidRequest},
@@ -31,7 +33,10 @@ use auction_engine_core::{
 use auction_engine_program::{feed, system};
 use lee_core::account::AccountId;
 use stablecoin_core::{
-    math::{compute_current_accumulated_rate_wide, compute_current_redemption_price_wide},
+    math::{
+        compute_current_accumulated_rate_wide, compute_current_redemption_price_wide,
+        FIXED_POINT_ONE,
+    },
     Position, ProtocolParameters, RedemptionPriceState, StabilityFeeAccumulator,
 };
 use stablecoin_program::checks::is_position_collateralized;
@@ -118,6 +123,43 @@ pub struct PositionHealth {
     pub nominal_debt: u128,
     /// The host's own test (`is_position_collateralized` at `minimum_collateralization_ratio`, R at now).
     pub unsafe_at_min_cr: bool,
+    /// Collateral over the debt's value, in bps, at the price the host's min-CR test uses (R at now);
+    /// `None` without debt. Rounded down, so `cr_bps < min_cr_bps` exactly when `unsafe_at_min_cr`
+    /// for any ratio that is a whole number of bps (see [`cr_bps`]).
+    pub cr_bps: Option<u64>,
+    /// `minimum_collateralization_ratio` in bps, rounded up (never shows an unsafe position as safe).
+    pub min_cr_bps: u64,
+}
+
+/// The host's inequality (`stablecoin_program::checks::is_position_collateralized`)
+/// `collateral * ONE^3 >= normalized_debt * accumulator * redemption * ratio`, solved for the ratio:
+/// `collateral * ONE^2 * BPS / (normalized_debt * accumulator * redemption)`, in `U512` with the
+/// host's saturating products. A zero denominator (the host requires nothing) is `u64::MAX`.
+fn cr_bps(pos: &Position, rate_wide: U512, redemption_wide: U512) -> Option<u64> {
+    if pos.normalized_debt_amount == 0 {
+        return None;
+    }
+    let one = U512::from(FIXED_POINT_ONE);
+    let value = U512::from(pos.collateral_amount) * one * one * U512::from(BPS);
+    let debt_value = U512::from(pos.normalized_debt_amount)
+        .saturating_mul(rate_wide)
+        .saturating_mul(redemption_wide);
+    if debt_value.is_zero() {
+        return Some(u64::MAX);
+    }
+    let q = value / debt_value;
+    Some(if q > U512::from(u64::MAX) {
+        u64::MAX
+    } else {
+        q.to::<u64>()
+    })
+}
+
+fn min_cr_bps(ratio: u128) -> u64 {
+    mul_div_ceil(ratio, BPS, FIXED_POINT_ONE)
+        .ok()
+        .and_then(|b| u64::try_from(b).ok())
+        .unwrap_or(u64::MAX)
 }
 
 fn health_of(
@@ -139,6 +181,8 @@ fn health_of(
             redemption_wide,
             host.params.minimum_collateralization_ratio,
         ),
+        cr_bps: cr_bps(pos, host.rate_wide, redemption_wide),
+        min_cr_bps: min_cr_bps(host.params.minimum_collateralization_ratio),
     })
 }
 
@@ -390,6 +434,35 @@ pub fn auction_view<C: Chain + ?Sized>(
         paused,
         state: st,
     })
+}
+
+/// The span the boards chart a schedule over (their 0–2 h axis). The engine has no expiry (ADR-012):
+/// past its last point an auction is held at the maximum discount. A schedule whose last point lies
+/// later extends the span to it.
+pub const SCHEDULE_CHART_MS: u64 = 7_200_000;
+/// Upper bound on `discount_schedule` samples (a chart needs a few dozen).
+pub const MAX_SCHEDULE_SAMPLES: usize = 1_024;
+
+/// The auction's own discount curve: `samples` evenly spaced times over `0..=span` (see
+/// [`SCHEDULE_CHART_MS`]) plus every schedule point, each with `auction_core`'s
+/// `Schedule::discount_ray` at that effective elapsed time. Times are ms from the start, increasing.
+pub fn discount_schedule(state: &AuctionState, samples: usize) -> SdkResult<Vec<(u64, u128)>> {
+    let schedule = state.to_core()?.schedule;
+    let last = schedule.points().last().map_or(0, |p| p.elapsed_ms);
+    let span = u128::from(SCHEDULE_CHART_MS.max(last));
+    let steps = samples.clamp(2, MAX_SCHEDULE_SAMPLES) - 1;
+    let steps = u128::try_from(steps).map_err(|_| SdkError::Encode("sample count".into()))?;
+    let mut times: BTreeSet<u64> = BTreeSet::new();
+    for i in 0..=steps {
+        // span * i / steps <= span, which came from a u64.
+        let t = u64::try_from(span * i / steps).unwrap_or(u64::MAX);
+        times.insert(t);
+    }
+    times.extend(schedule.points().iter().map(|p| p.elapsed_ms));
+    Ok(times
+        .into_iter()
+        .map(|t| (t, schedule.discount_ray(t)))
+        .collect())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

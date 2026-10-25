@@ -1,5 +1,20 @@
 # Basecamp app
 
+The Auctions app puts the engine in Basecamp. It is built from three parts, all in this repository, and each has its own `flake.nix` on `logos-module-builder` `de169fd` (the pin Basecamp master uses).
+
+| Part | What it is | Talks to |
+|---|---|---|
+| `crates/auction_ffi` | Rust cdylib over `auction_sdk`, with a committed cbindgen header and seven symbols: `version`, `view`, `prepare`, `tx_begin`, `tx_poll`, `tx_end`, `free`. `view` and `prepare` dispatch on a JSON name (ADR-055). Every reply is an `{ok, value \| error{kind, message}}` envelope, and u128 values are decimal strings. | The sequencer RPC, for reads and scans only (ADR-052) |
+| `modules/auction_engine` | Basecamp core module (C++, universal interface) that links `auction_ffi` and depends on `lez_core`. Methods: `configure`, `openWallet`, `blockHeight`, `submit`, `txStatus`, `view`, `accounts`, `rescan`. | `auction_ffi`, and `lez_core.send_generic_public_transaction` to sign and send |
+| `apps/auctions` | `ui_qml` app: a C++ `.rep` backend that forwards to the core module, and QML on Logos.Theme and Logos.Controls (design system `88330d04`, ADR-054). Screens: Live, At-risk, Settled, System, Dev tools. Every interactive item has an `objectName`. | `auction_engine` through QtRO |
+
+Rules that hold across the three parts:
+- **No call blocks.** IPC calls time out at 20 s. Each FFI call has a 12 s deadline, each module call a 15 s budget, and scans are paged (ADR-052).
+- **Confirmation is polled.** `submit` returns a `txId` at once, and the app polls `txStatus` every 2 s. ADR-042's nonce rule and per-signer lock files hold (ADR-053).
+- **Same numbers as the CLI.** Quotes, plans and facts come from `auction_sdk::ops` and `auction_sdk::views`, the functions the CLI prints from. The FFI parity tests and the story's UI = CLI checks pin this.
+
+Decisions: ADR-052 to ADR-055 in [design-log.md](../design-log.md). CI: the `basecamp-module` workflow ([ci.md](ci.md)).
+
 ## Host
 
 The Auctions app is developed and run in Basecamp's standalone mode, inside WSL. `scripts/basecamp/host.sh` builds the two things it needs and guards the C: disk.
@@ -140,3 +155,19 @@ install-lgx: installed into /tmp/auctions-profile (lez_core 0.4.1, auction_engin
 Basecamp's log reads `Base data directory: /tmp/auctions-profile` and `Loading core dependencies for "auctions" : QList("lez_core", "auction_engine")`, with no `Standalone mode` line. Every module came from the profile.
 
 Wall time: 1261 s for the whole command. The story itself took 329 s for 172 steps, of which 284 s were lane waits, the same as standalone. The rest went to evaluating the flakes, installing, and `demo.sh --setup-only`. The full `#app` and lgpm came from the Logos cache (the app was a 14.5 MiB download). The only local derivations were the `.lgx` packaging steps; neither Qt nor Basecamp was compiled.
+
+## Known limits
+
+- **"Publish anyway" never sends (R46).** In Dev tools, a price outside `[R/2, 2R]` turns the button into "Publish anyway". The engine's own check (`prepare_oracle_publish`) refuses that price before anything is signed, so the button always ends in a `refused` notice. The board implies the collateral would pause instead.
+- **Settle debt after F1–F3 (R44).** Nothing is unbacked at that point, so the quote is 0 and the button is disabled. The CLI script sends a no-op `settle-debt` there; the story checks the 0 instead.
+- **"> 9800" (R45).** The story's mint check compares the taker's protocol balance before the debt take (9800) with the balance after (13050). The amount minted is 3250.
+- **The lez_core guard runs at install time only (design call 3).** `install-lgx.sh` refuses a profile without lez_core 0.4.1. A newer lez_core accepted later from Basecamp's Package Manager is not caught; that profile is unsupported.
+- **Array-like lists (R43).** Lists cross the QtRO replica as array-likes, not JS arrays. `Format.list` converts every list the screens read: accounts, `items`, the discount schedule, and the positions in `quote_price`. Any new list field must go through it.
+- **Doubles at the QtRO boundary.** An integer read from a reply arrives as a double. A request field that echoes one must coerce it (`Number(x) | 0`, as for `slippage_bps`).
+- **The chain records no end times (R18, R30, R35, R36).** Live auctions sort by deepest discount and show when the maximum discount is reached. Settled auctions keep scan order.
+
+## Recording
+
+A scripted screen recording of the story (`STORY_PACE_MS=1500`, idle lane waits cut, title cards for F1–F5, the shortfall and the freeze) is planned at `C:\Users\user\Videos\rfp014-demo\basecamp.mp4`. It is made with `scripts/record/record-story.ps1` (Plan 4 Task 18), and the video is not committed.
+
+TODO recording: pending Task 18

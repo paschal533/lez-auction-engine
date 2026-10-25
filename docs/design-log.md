@@ -1191,3 +1191,167 @@ The demo's band is wider than the PoC default; that is a parameter choice within
 Accepted (Plan 3b, Task 11)
 
 ---
+
+## ADR-052: Chain Reads Stay in Rust; Signing and Submission Go Through `lez_core`
+
+**Context**
+The Plan 4 spec ("How it is built") makes the FFI "brain only": no chain I/O and no signing. Basecamp's `lez_core` wallet module (0.4.1, `acf0cd50`, built on LEZ v0.2.4) signs and sends. But `lez_core` 0.4.1 has no block-range call, and discovery is a block scan (ADR-043). Every IPC call between modules times out after 20 s, so no call may block on a confirmation or a full scan.
+
+**Options**
+- (A) Every read through `lez_core`. Not possible: it has no block-range call, so it cannot scan.
+- (B) Reads and scans in Rust, through the SDK's synchronous `Chain` over the sequencer RPC. Only signing and submission go through `lez_core.send_generic_public_transaction`.
+- (C) Everything in Rust, including keystore signing and `confirm::submit`. This is the spec's fallback (designer's call 2) in case `lez_core` does not load.
+
+**Decision**
+(B), the designer's call 1:
+- **Reads.** The FFI opens `RpcChain::connect_with_timeout(deployment.sequencer_url, 5 s)`. Views and plans use `ReadRetry { tries: 2, first_delay: 1 s }`; the transaction ops use `ReadRetry::NONE`.
+- **Time limits.**
+  - A `Deadline` decorator gives every FFI call a 12 s budget (R8). The deadline caps the whole read, not just its start (R13).
+  - A module method that makes several FFI calls shares one 15 s budget (`budget_ms`, R10). The `lez_core` send starts only if at least 3 s remain.
+  - Scans are paged: `scan_page` reads at most `max_blocks` per call (default 100, at most 500).
+- **Plans and signing.** The FFI returns plans as `{program_id hex, accounts [{id hex, signer}], instruction_words}`. The module turns them into `lez_core` arguments (`toLezArgs`, words as little-endian bytes) and sends. Keys never reach the FFI.
+
+The fallback (C) was not needed. In Task 6 a token transfer sent through `lez_core` in Basecamp `e09962f5` was included by the sequencer.
+
+**Trade-offs**
+- Two clients talk to the node: `lez_core`'s and the FFI's. Both use the same wallet home (`LEE_WALLET_HOME_DIR`, the `storage.json` the SDK reads).
+- The RPC endpoint is trusted, as for the CLI (sdk.md, "Program-id verification"). The FFI takes the URL from the deployment file, not from `lez_core.get_sequencer_addr`.
+- The app shares the CLI's lock directory (`AUCTIONS_STATE_DIR`). The CLI and the app therefore see each other's in-flight transactions.
+- A transport failure during the send is an unknown outcome, and the lock is kept (ADR-042).
+
+**Evidence**
+- The skeleton end-to-end through `lez_core`: `apps/auctions/tests/skeleton.mjs`, commit b8623c3, written up in `docs/architecture/basecamp-app.md`.
+- The whole story, standalone and installed as `.lgx`: 17e7911, f4f46e1, f7d7b2a.
+- FFI tests: `view_against_a_closed_port_fails_within_12_s`, `tx_poll_stops_starting_reads_once_the_call_budget_is_spent`, `tx_begin_stops_starting_reads_once_the_call_budget_is_spent`, `budget_ms_shortens_the_call_deadline`, `scan_view_takes_one_page_and_saves_the_cursor`.
+- Module tests (LOGOS_CMOCK): `each_ffi_call_gets_what_is_left_of_the_module_budget`, `the_send_is_not_started_with_less_than_three_seconds_left_and_the_lock_is_released`, `open_wallet_treats_already_open_as_success`, `rescan_is_one_page`.
+- Commits a4c0a7f, 33cbf7b, 168e7cb, 4de8cf5, 7c66352, b8623c3.
+
+**Status**
+Accepted (Plan 4, Tasks 3, 4 and 6)
+
+---
+
+## ADR-053: Confirmation by Polling a Cheap `txStatus`, Not by a Module Event
+
+**Context**
+The Plan 4 spec leaves one choice to the builder: an event or polling for confirmation, after checking the module host's threading (unverified). ADR-042's nonce rule must hold, and so must one in-flight transaction per signer. The CLI's `confirm::submit` blocks until it has a verdict, which would exceed the 20 s IPC timeout.
+
+**Options**
+- (A) A worker thread in the core module polls and emits `txStatus(hash, Included|Dropped)`.
+- (B) `submit` returns a `txId` at once. The app polls `txStatus(txId)` every 2 s, and each poll is one FFI `tx_poll`: one height read, then one nonce read, with no loop.
+
+**Decision**
+(B). It needs no threads in a module host whose threading is unverified, and every call stays bounded (ADR-052).
+- **SDK.** Confirmation is split into three steps:
+  - `track_begin` takes the signer's lock and records the baseline.
+  - `poll_once` runs one step of the same `verdict()`.
+  - `track_end` releases the lock on a definite outcome.
+- **FFI.** It exposes these as `tx_begin`, `tx_poll` and `tx_end`. `tx_end` refuses a lock path outside `<state_dir>/locks` (R7).
+- **CLI.** It keeps `lock_with_current_baseline` and `confirm`. These share `verdict()` and the lock removal with the new functions, so the CLI's output is unchanged byte for byte (R6).
+- **Multi-step actions.** The oracle publish is three transactions. After a step is included, `txStatus` ends it, then begins and sends the next step.
+- **Replies.** Every error and every reply that ends a sequence carries `outcome: not_sent|dropped|unknown` (R27). Pending and dropped replies echo `drop_after_blocks` (R29).
+- **Lane.** When the module cannot know the outcome, the lane shows "outcome unknown, lock kept", never "Dropped". It sends one `txStatus` at a time.
+- **Heartbeat.** The header uses the cheap `blockHeight()` every 5 s, not a full overview (R28).
+
+**Trade-offs**
+- Pending transactions live in the module's memory. A Basecamp restart forgets them, and their lock files clear by the staleness rule within 5 blocks (ADR-042).
+- A verdict reaches the screen up to 2 s late, and each active lane costs one IPC call every 2 s.
+- "Included" still means "some transaction of this signer at nonce n0 applied" (ADR-042). The screens re-read their views after Done.
+
+**Evidence**
+- SDK tests: `poll_once_is_pending_until_the_nonce_moves`, `poll_once_reports_dropped_after_the_window`, `track_begin_twice_for_one_signer_is_in_flight`, `track_end_with_unknown_outcome_keeps_the_lock`.
+- FFI tests: `tx_poll_reports_included`, `tx_poll_reports_dropped_after_the_window`, `tx_end_included_releases_the_lock_and_unknown_keeps_it`, `tracking_outside_the_lock_dir_is_refused`, `a_failed_tx_begin_leaves_no_lock_file`.
+- Module tests: `tx_status_submits_the_next_step_after_inclusion`, `a_dropped_middle_step_stops_the_sequence`, `oracle_publish_runs_three_steps_in_order`, `a_transport_failure_of_the_send_keeps_the_lock_as_unknown`.
+- QML tests (`tst_txflow.qml`): `test_lane_shows_unknown_not_dropped`, `test_lane_sends_one_txstatus_at_a_time`, `test_lane_polls_every_two_seconds`.
+- Live: the story's 172 steps spent 283 s (standalone) and 284 s (installed) in lane waits, and no lane dropped.
+- Commits 3127f06, a4c0a7f, 4de8cf5, e7c2aea, d3581f1, 1ba11e1, 8b21389.
+
+**Status**
+Accepted (Plan 4, Tasks 2, 3, 4, 10 and 11)
+
+---
+
+## ADR-054: The App Is Tested Against the Design System Basecamp Master Ships (88330d04)
+
+**Context**
+The app must look native in Basecamp. It uses Logos.Theme tokens only (no legacy hex) and the board components `LogosNotice`, `LogosStageLane`, `LogosLink` and `LogosIcon`.
+
+A `ui_qml` view runs on the design system of the Basecamp that loads it. If the view uses a component that this design system lacks, it does not compile, and the app's icon just spins.
+
+Two pins are involved:
+- The pinned `logos-module-builder` is `de169fd`, the one Basecamp master `e09962f5` pins. Its build graph carries design system `e43a4817` (R12).
+- Basecamp `e09962f5` itself ships `88330d04`.
+
+Our QML tests need one fixed design system and the Qt the app runs on.
+
+**Options**
+- (A) Test against whatever design system the builder graph resolves.
+- (B) Build with the builder Basecamp master pins, and run the QML tests against the design system Basecamp master ships (`88330d04`) on the runtime Qt.
+- (C) Vendor a copy of the design system into the repository.
+
+**Decision**
+(B). `scripts/basecamp/qml-tests.sh`:
+- pins `DESIGN_SYSTEM_REV=88330d04968954be956311b0be429048a41da2ea` on the QML import path;
+- takes Qt from the nixpkgs that the builder in `apps/auctions/flake.lock` uses. That is Qt 6.9.2, the runtime Qt, not the root flake's 6.12 (fixed in Task 5);
+- runs `qmltestrunner` offscreen with the Basic style, as Basecamp does (R2).
+
+Of the design system, the app's QML imports only Logos.Theme and Logos.Controls, and it contains no hex colour literals.
+
+**Trade-offs**
+- The QML tests prove the app against `88330d04` only. A Basecamp that ships another design system can change the look or refuse a component. A bump is one constant plus a test run.
+- `88330d04` has no eye icon, so the reveal columns use text headings.
+- `LogosIcon` renders blank in the offscreen runner (MultiEffect). Icons are therefore checked in the app, not in the tests.
+
+**Evidence**
+- `scripts/basecamp/qml-tests.sh` (4d0585c; Qt fix 0149948). 171 QML tests passed at Task 16 (17e7911, f4f46e1).
+- The live story ran in Basecamp `e09962f5`, both in standalone mode and installed as `.lgx` in the full Basecamp, with no QML load errors (`docs/architecture/basecamp-app.md`).
+- Rulings R2, R11 and R12 (Plan 4 ledger).
+
+**Status**
+Accepted (Plan 4, Tasks 4 and 5)
+
+---
+
+## ADR-055: A Fixed FFI ABI with Generic `view` and `prepare`, Dispatched on a JSON Name
+
+**Context**
+Spec §6.2 and the Plan 4 spec set the shape of the FFI:
+- one `char* op(const char* json)` per operation, with panics caught;
+- an `{ok, value | error{kind, message}}` envelope;
+- u128 values as decimal strings;
+- a committed cbindgen header, which CI checks for drift.
+
+The screens need about 17 views and quotes and 16 actions. With one C symbol per operation, every new view would change four things: the header, the module's C++ glue, the app's `.rep` and the module's Nix build.
+
+**Options**
+- (A) One extern function and one module method per operation (`auction_ffi_quote_bid`, …).
+- (B) A fixed set of seven symbols: `auction_ffi_version`, `auction_ffi_view`, `auction_ffi_prepare`, `auction_ffi_tx_begin`, `auction_ffi_tx_poll`, `auction_ffi_tx_end` and `auction_ffi_free`. `view` dispatches on `{"view": name, …}` and `prepare` on `{"action": name, …}`.
+
+**Decision**
+(B).
+- **`view`** serves `deployment`, `overview`, `scan`, `live`, `settled`, `at_risk`, `auction`, `position`, `accounts` and the `quote_*` views. An unknown name is refused before the context opens.
+- **`prepare`** is a serde-tagged `Action`. It maps each action to its `auction_sdk::ops::prepare_*` (ADR-040, Task 7). The reply `{steps, facts, touched}` therefore carries exactly the plans and facts the CLI prints.
+- **The core module** passes `view(req)` through with its configured context. `submit(request)` runs `prepare`, then `tx_begin`, then the `lez_core` send. `accounts()` is a separate method, because a `LogosMap` reply cannot carry a list.
+
+**Trade-offs**
+- The header has not changed since a4c0a7f, although every later view and action was added behind it (header drift 0).
+- Type checking moves from the C ABI into JSON. A misspelt name or field fails at run time as `bad_request`, not at compile time. Three kinds of test cover it:
+  - Rust tests per view and per action;
+  - parity tests against the CLI goldens;
+  - QML tests on fixtures generated from the real FFI (`scripts/basecamp/gen-qml-fixtures.sh`).
+- No CI step checks the fixtures for drift (parked).
+- The QtRO boundary does not keep JS types:
+  - lists arrive as array-likes (R43, handled by `Format.list`);
+  - integers echoed from a reply arrive as doubles (`slippage_bps`, fixed in f4f46e1).
+
+**Evidence**
+- FFI tests: `an_unknown_view_is_bad_request`, `unknown_or_missing_view_is_a_bad_request`, `unknown_action_or_missing_field_is_a_bad_request`, `liquidate_plan_equals_ops`, `bid_plan_equals_ops`, `oracle_publish_plan_equals_ops`, `disable_protocol_token_plan_equals_the_cli_demo_step`, `prices_and_amounts_are_decimal_strings`, `quote_bid_view_equals_the_cli_quote`, `overview_accounting_equals_the_cli_config_line`.
+- Module tests: `view_passes_ctx_and_request`, `accounts_maps_the_view`.
+- CI: `scripts/ci/ffi-header-drift.sh` (`programs` job, R9).
+- QML tests: `test_list_accepts_array_likes`, `test_accounts_reply_as_array_like_is_read`.
+- Commits a4c0a7f, 720bdc2, e7c2aea, f4f46e1.
+
+**Status**
+Accepted (Plan 4, Tasks 3, 9 and 10)
+
+---

@@ -1,6 +1,6 @@
 # Client SDK (`crates/auction_sdk`)
 
-The SDK is the only way the CLI (and, in Plan 4, the FFI) talks to the engine. It is synchronous and generic over one trait.
+The SDK is the only way the CLI and the FFI (`crates/auction_ffi`, Plan 4) talk to the engine. It is synchronous and generic over one trait.
 
 ## Chain
 
@@ -58,6 +58,9 @@ Each row has a test against a local mock HTTP server (`rpc_tests.rs`, no externa
 | `confirm` | 10 | nonce-polling confirmation (Included / Dropped after 5 blocks), one in-flight transaction per signer via a lock file, `submit` = lock + sign + send + confirm |
 | `scan` | 11 | block scan with a persisted, atomically written cursor anchored to its chain (block 2's hash); a replaced chain is rescanned from block 1; rewinds when the cursor's block hash changed, only as far as it can prove; fails (cursor unchanged) on a missing or non-extending block or an unprovable rewind |
 | `rpc` | 12 | RpcChain over sequencer_service_rpc (getAccount, getAccountsNonces, getLastBlockId, getBlockRange, sendTransaction); blocks summarised to their public transactions |
+| `confirm` (`track_begin`, `poll_once`, `track_end`) | P4-2 | non-blocking confirmation for callers that must not block (ADR-053): take the lock, one poll step, release on a definite outcome; shares `verdict()` and the lock removal with `confirm` |
+| `ops` | P4-7 | the orchestration the CLI used to hold: one `prepare_*` per action returning `Prepared { steps, facts, touched }` (quote → min-out → needs-settlement → freshness → plan); the CLI and the FFI both call it |
+| `views`, `dec` | P4-8 | the read models the screens and the CLI print from: `accounting`, `host`, `oracle`, `auctions`/`auction_entry`, `positions`/`at_risk`, `accounts`; u128 serialised as decimal strings (`dec`); `scan::scan_page` for paged scans |
 
 ## Program-id verification (I4)
 
@@ -149,3 +152,25 @@ The CLI-driven run on a real standalone sequencer (every program instruction sen
 - Fuzz targets (Task 9): see Fuzzing above.
 - Oracle publisher and keeper (Task 10): `oracle.rs`, `plan_host.rs`, `auction-cli dev oracle-publish` and `dev keeper`, `host status` (ADR-050).
 - Demo scenario (Task 11): `demo.rs` and `cli/params/demo-*.json` (ADR-051).
+
+## Plan 4 changes
+
+- **Non-blocking confirmation (Task 2).** `track_begin`, `poll_once` and `track_end` in `confirm.rs` (ADR-053). `Tracking` serialises with the signer in base58 and the nonce as a decimal string. `submit` keeps `lock_with_current_baseline` + `confirm` (R6), so the CLI is unchanged. Tests: `poll_once_is_pending_until_the_nonce_moves`, `track_end_with_unknown_outcome_keeps_the_lock`.
+- **`ops` (Task 7).** The CLI's transaction commands are now printers over `ops::prepare_*`. Client-side refusals are `SdkError::Refused`. `params.rs` moved from the CLI into the SDK. Every golden test is unchanged. Tests: `ops_tests.rs`, one or more per `prepare_*`.
+- **`views` (Task 8).** `config`, `list-auctions`, `list-at-risk` and `host status` print from the views. The stale-candidate rule moved from the CLI into `views` (`Listed { items, skipped }`). `quote::position_health` gained `cr_bps`: the host's min-CR inequality at the redemption price R, solved for the ratio (R17). `quote::discount_schedule` samples the schedule for the chart. The scan cursor counts included bids per auction (`Cursor.bids`, `bid_txs`). Tests: `views_tests.rs`.
+
+## FFI (`crates/auction_ffi`)
+
+The FFI is a thin JSON layer over the SDK for the Basecamp core module ([basecamp-app.md](basecamp-app.md)). It has no logic of its own.
+- **`view`.** The views and quotes call `views::*` and `quote::*`.
+- **`prepare`.** It maps each action to `ops::prepare_*` (ADR-055).
+- **`tx_begin`, `tx_poll`, `tx_end`.** These are `track_begin`, `poll_once` and `track_end` (ADR-053).
+- **`ctx`.** It loads the deployment file and verifies the config (I4), as the CLI does. It reads through `RpcChain::connect_with_timeout(url, 5 s)` under a 12 s per-call deadline (ADR-052).
+- **Refusals.** Dev-only actions are refused off `localnet` and `testnet-legacy` (`ctx.require_dev`, kind `mismatch`). A lock path outside `<state_dir>/locks` is refused (R7).
+- **Safety.** `unsafe` appears only in the extern shims of `lib.rs`. Every call runs in `catch_unwind`.
+
+Tests:
+- one file per area: `envelope.rs`, `view.rs`, `prepare_all.rs`, `prepare_transfer.rs`, `track.rs`;
+- `parity.rs` checks the views against the CLI goldens (`quote_bid.txt`, `config.txt`).
+
+`scripts/ci/ffi-header-drift.sh` fails when the committed `include/auction_ffi.h` differs from a fresh cbindgen run. `scripts/basecamp/gen-qml-fixtures.sh` regenerates the app's QML fixtures from the FFI (`tests/fixtures.rs`, `#[ignore]`d) on the standard fixture world.

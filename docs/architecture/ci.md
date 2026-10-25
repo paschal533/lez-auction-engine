@@ -1,6 +1,6 @@
 # Continuous integration
 
-Workflows: `.github/workflows/core.yml` (every push and pull request), `fuzz.yml` (weekly), `guests.yml` (every push and pull request that touches a build input of the guests, weekly on Sunday at 04:05 UTC and on dispatch), `real-proofs.yml` and `e2e.yml` (pushes to `main`, tags where noted, schedule and dispatch). Everything the hosted jobs run can be run locally in WSL; the commands are listed per job below.
+Workflows: `.github/workflows/core.yml` (every push and pull request), `fuzz.yml` (weekly), `guests.yml` (every push and pull request that touches a build input of the guests, weekly on Sunday at 04:05 UTC and on dispatch), `real-proofs.yml` and `e2e.yml` (pushes to `main`, tags where noted, schedule and dispatch), `basecamp-module.yml` (every push and pull request that touches `crates/auction_ffi`, `modules/`, `apps/` or the root flake, and on dispatch; Plan 4). Everything the hosted jobs run can be run locally in WSL; the commands are listed per job below.
 
 Schedules are weekly, on Sunday (UTC), not nightly: the repository is private, and its 2,000 free Actions minutes a month would not cover the estimated 100 to 190 minutes a night of the scheduled jobs. The job, artifact and variable names (`fuzz-nightly`, `real-proof-nightly`, `real-proofs-nightly`, `NIGHTLY_TIER`, `PPE_NIGHTLY`) keep the word "nightly" so that `REQUIREMENTS.md` and the evidence keep pointing at the same jobs; read it as "scheduled". Every scheduled job can also be dispatched by hand.
 
@@ -9,11 +9,12 @@ Schedules are weekly, on Sunday (UTC), not nightly: the repository is private, a
 | Job / action | Where | What it covers |
 |--------------|-------|----------------|
 | `core` | `core.yml` | Format of our crates, clippy and tests of `auction_core`, the property tests with `PROPTEST_CASES=2000`, the Rust/Python differential check, the preflight script tests of `scripts/demo.sh` and `scripts/testnet-legacy.sh` (stubbed, no network). No risc0 toolchain. |
-| `programs` | `core.yml` | The guests built with the pinned risc0 toolchain; workspace clippy; the engine, real-guest integration, SDK and CLI suites; the vendored stablecoin and token suites; the cycle regression check (ADR-048). |
+| `programs` | `core.yml` | The guests built with the pinned risc0 toolchain; workspace clippy; the engine, real-guest integration, SDK, CLI and `auction_ffi` suites; the vendored stablecoin and token suites; the FFI header drift check (R9); the cycle regression check (ADR-048). |
 | `requirements` | `core.yml` | `scripts/check-requirements.py REQUIREMENTS.md`: every RFP-014 requirement has one row, and every test, golden file, script, CI job and document it names exists (an `#[ignore]`d test must be marked `[ignored]`); then the checker's own tests. It checks that evidence exists, not that a hosted job has run. |
 | `idl-drift` | `core.yml` | `tools/idl-gen` against both guest sources, diffed against the committed IDLs. |
 | `hook-patches` | `core.yml` | The exported hook patch series applied to pristine lez-programs, compared with `programs/stablecoin`. |
-| `coverage` | `core.yml` | `cargo llvm-cov` over the five Rust crates, then `scripts/check-coverage.py`: at least 80 % of lines per crate (ADR-049). |
+| `coverage` | `core.yml` | `cargo llvm-cov` over our Rust crates (five in Plan 3, plus `auction_ffi` from Plan 4), then `scripts/check-coverage.py`: at least 80 % of lines per crate (ADR-049). |
+| `module-and-qml-tests` | `basecamp-module.yml` | Plan 4: the `auction_engine` core module's unit tests (`nix build ./modules/auction_engine#unit-tests`, LOGOS_CMOCK with a mocked `auction_ffi` and `lez_core`) and the Auctions app's QML tests (`scripts/basecamp/qml-tests.sh`, offscreen, design system `88330d04`, ADR-054). Nix with the Logos binary caches. The story e2e is not a CI job (spec, designer's call 6). |
 | `fuzz-nightly` | `fuzz.yml` | Weekly (Sunday 01:33 UTC) and on dispatch: `scripts/fuzz-smoke.sh 300` runs the five `cargo-fuzz` targets of `fuzz/` for 300 s each on the nightly toolchain. |
 | `guest-repro` | `guests.yml` | Reproducible guests (ADR-047): our two guests rebuilt in Docker and compared byte for byte with `artifacts/guests`; every committed binary checked against `manifest.json`; the three upstream guests rebuilt only on the scheduled (weekly) and manual runs. |
 | `real-proof-push` | `real-proofs.yml` | Every push to `main`: `prove_settle_debt` proved with the risc0 prover (`RISC0_DEV_MODE=0`, po2 19) and its receipt verified; `scripts/check-proof-report.py` fails the job if the proof report is missing, empty, unverified or lacks `settle_debt` (ADR-045, tier B). |
@@ -26,22 +27,27 @@ Schedules are weekly, on Sunday (UTC), not nightly: the repository is private, a
 `core` (`ubuntu-22.04`, Rust 1.94.0):
 
 ```bash
-cargo fmt -p auction_core -p auction_engine_core -p auction_engine_program -p engine_integration_tests -p auction_sdk -p auction_cli -- --check
+cargo fmt -p auction_core -p auction_engine_core -p auction_engine_program -p engine_integration_tests -p auction_sdk -p auction_cli -p auction_ffi -- --check
 cargo clippy --locked -p auction_core --all-targets -- -D warnings
 cargo test --locked -p auction_core
 PROPTEST_CASES=2000 cargo test --locked -p auction_core --test invariants --test s5_pause_onset
 cargo run --locked -q -p auction_core --example vectors > /tmp/vectors.json && python3 tools/differential/check.py /tmp/vectors.json
+scripts/tests/demo-preflight.sh
+scripts/tests/testnet-legacy-preflight.sh
 ```
 
 `programs` (`ubuntu-22.04`, 150 minute limit, `RISC0_DEV_MODE=1`). It runs `scripts/ci/free-disk.sh`, installs clang, libclang, pkg-config and libssl, installs Rust 1.94.0 and the pinned risc0 components, then:
 
 ```bash
 RISC0_SKIP_BUILD=1 cargo clippy --locked --workspace --all-targets --exclude integration_tests -- -D warnings
-cargo test --locked -p auction_engine_core -p auction_engine_program -p engine_integration_tests -p auction_sdk -p auction_cli --features auction_sdk/testing,auction_sdk/rpc
+cargo test --locked -p auction_engine_core -p auction_engine_program -p engine_integration_tests -p auction_sdk -p auction_cli -p auction_ffi --features auction_sdk/testing,auction_sdk/rpc
 cargo test --locked -p stablecoin_core -p stablecoin_program -p token_program -p integration_tests
+RISC0_SKIP_BUILD=1 scripts/ci/ffi-header-drift.sh
 scripts/cycles.sh "$RUNNER_TEMP/cycles.jsonl" && python3 scripts/check-cycles.py cycles/baseline.json "$RUNNER_TEMP/cycles.jsonl"
 python3 -m unittest discover -s scripts/tests -v
 ```
+
+`scripts/ci/ffi-header-drift.sh` regenerates `crates/auction_ffi/include/auction_ffi.h` with cbindgen and fails with the diff if the committed header differs. It runs in `programs` rather than `core`, because building `auction_ffi` pulls in the risc0 graph, which `core` does not have (R9).
 
 The last two commands are the cycle gate (ADR-048): `scripts/cycles.sh` runs the `chains.rs` scenarios with `CYCLES_OUT` set, `scripts/check-cycles.py` compares the result with `cycles/baseline.json` (more than 10 % growth, an added or removed label, more than 10 executions or an execution over 32 Mi fails), and the unit tests cover the checker itself. The step uploads `cycles.jsonl` as the `cycles` artifact. Regenerate the baseline and `CYCLES.md` with `python3 scripts/check-cycles.py cycles/baseline.json /tmp/c.jsonl --write-baseline --write-md CYCLES.md`.
 
@@ -68,7 +74,7 @@ The first check requires the Docker rebuild of our two guests (and, on the sched
 
 ```bash
 IGNORE='(/tests/|_tests\.rs$|/testing/|/methods/|/examples/)'
-cargo llvm-cov --locked -p auction_core -p auction_engine_core -p auction_engine_program -p auction_sdk -p auction_cli --features auction_sdk/testing,auction_sdk/rpc --ignore-filename-regex "$IGNORE" --json --summary-only --output-path "$RUNNER_TEMP/cov.json"
+cargo llvm-cov --locked -p auction_core -p auction_engine_core -p auction_engine_program -p auction_sdk -p auction_cli -p auction_ffi --features auction_sdk/testing,auction_sdk/rpc --ignore-filename-regex "$IGNORE" --json --summary-only --output-path "$RUNNER_TEMP/cov.json"
 python3 scripts/check-coverage.py "$RUNNER_TEMP/cov.json" --root "$GITHUB_WORKSPACE"
 ```
 
@@ -112,6 +118,21 @@ Record new timings in this file and in [real-proofs.md](real-proofs.md).
 
 `requirements` (`ubuntu-22.04`): `python3 scripts/check-requirements.py REQUIREMENTS.md`, then the checker tests. No toolchain is installed; the job takes seconds.
 
+`module-and-qml-tests` (`basecamp-module.yml`, `ubuntu-22.04`, 120 minute limit, Plan 4). It runs `scripts/ci/free-disk.sh`, installs Nix (`cachix/install-nix-action@v31`, flakes on) with the Logos binary caches `cache.nix.logos.co/public` and `logos-co.cachix.org` as extra substituters, then:
+
+```bash
+nix build ./modules/auction_engine#unit-tests -L --no-link
+scripts/basecamp/qml-tests.sh
+```
+
+- The first command builds and runs the core module's C++ tests against LOGOS_CMOCK, with `auction_ffi` and `lez_core` mocked. The pinned builder names this output `unit-tests`; there is no `#tests` output.
+- The second runs every `apps/auctions/tests/qml/tst_*.qml` with `qmltestrunner`, offscreen, on the builder's Qt 6.9.2 and design system `88330d04` (ADR-054).
+- Without a cache hit, the builder's Qt and logos-cpp-sdk graph builds from source, so the first run's time depends on the caches.
+- The job has not run on a hosted runner: the Plan 4 branch has not been pushed. Last local results: 46 module tests (Task 11) and 171 QML tests (Task 16).
+- The live story (`apps/auctions/tests/story.mjs`) is not a CI job (spec, designer's call 6). It runs locally through `scripts/basecamp/run-app.sh` or `scripts/basecamp/install-lgx.sh` ([basecamp-app.md](basecamp-app.md)).
+
+Plan 4 CI status: none of the Plan 4 changes to `core.yml` (`auction_ffi` in `core`, `programs` and `coverage`, the header drift step) nor `basecamp-module.yml` has run on a hosted runner yet, because the branch has not been pushed.
+
 ## Pinned versions
 
 Never floated, and there is no bare `rzup install` anywhere (it would float the components).
@@ -151,6 +172,9 @@ The host is Windows; cargo runs in WSL through the wrappers. From Git Bash wrap 
 | `idl-drift` | `scripts/wsl-env.sh scripts/ci/idl-drift.sh` |
 | `hook-patches` | `scripts/wsl-env.sh env LEZ_PROGRAMS=$HOME/lez-spikes/s1/lez-programs scripts/check-hook-patches.sh` |
 | `fuzz-nightly` | `scripts/wsl-env.sh scripts/fuzz-smoke.sh 60`, then `rm -rf "$HOME/lez-target/plan2/fuzz"` |
+| `programs`, FFI header drift | `RISC0_SKIP_BUILD=1 scripts/wsl-env.sh ./scripts/ci/ffi-header-drift.sh` |
+| `module-and-qml-tests`, module | `scripts/basecamp/host.sh check && nix build ./modules/auction_engine#unit-tests -L --no-link` (needs at least 10 GB free on C:) |
+| `module-and-qml-tests`, QML | `scripts/basecamp/qml-tests.sh` (from Git Bash it re-runs itself through WSL) |
 
 Validate the workflow files with `actionlint` 1.7.7: `actionlint` (it reads every workflow and `.github/actionlint.yaml`).
 

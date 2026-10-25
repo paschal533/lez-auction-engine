@@ -12,7 +12,8 @@ class AuctionsBackend
     // replica setter, backend.setActiveAccount(label), gives the view the same call.
     PROP(QString activeAccount READWRITE)
     PROP(int blockHeight READONLY)
-    // Whether the last block-height read succeeded.
+    // False once a read fails with kind `chain` (node or RPC not answering); true again when the 5 s
+    // block poll (`overview` view) succeeds.
     PROP(bool nodeReachable READONLY)
     // The last error a slot or the startup sequence reported; empty when none.
     PROP(QString lastError READONLY)
@@ -23,8 +24,9 @@ class AuctionsBackend
     SLOT(QVariantMap submit(QVariantMap request))
     // Polls a submitted transaction; returns {state, ...} or {error, kind}.
     SLOT(QVariantMap txStatus(QString txId))
-    // Reads a screen's data (backed from the read-model task on); {error} until then.
+    // Reads a screen's data: any auction_engine view ({view, ...}); returns its JSON or {error, kind}.
     SLOT(QVariantMap view(QVariantMap request))
-    // The wallet's account labels (backed from the account-picker task on); empty until then.
+    // The account picker rows {label, id, role, stable_balance, coll_balance, holding}; a failure is the
+    // only row, [{error, kind}].
     SLOT(QVariantList accounts())
 }

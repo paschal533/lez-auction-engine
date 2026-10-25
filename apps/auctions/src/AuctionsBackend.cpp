@@ -9,8 +9,9 @@ namespace {
 const char ENV_DEPLOYMENT[] = "AUCTIONS_DEPLOYMENT";
 const char ENV_STATE_DIR[] = "AUCTIONS_STATE_DIR";
 const char ENV_WALLET_HOME[] = "LEE_WALLET_HOME_DIR";
-// The node is read through the wallet, so one height read per interval is enough for the header.
-const int CHAIN_POLL_MS = 15000;
+// The header's block height and node notice: one `overview` view per interval (it carries the block).
+const int CHAIN_POLL_MS = 5000;
+const char KIND_CHAIN[] = "chain";
 
 QVariantMap errorReply(const QString& message, const QString& kind)
 {
@@ -59,13 +60,26 @@ void AuctionsBackend::start()
 
 void AuctionsBackend::refreshChain()
 {
-    const QVariantMap reply = m_logos->auction_engine.blockHeight();
-    const bool reachable = !reply.contains(QStringLiteral("error"));
-    setNodeReachable(reachable);
-    if (reachable) {
-        setBlockHeight(reply.value(QStringLiteral("height")).toInt());
-        clearErrorOnSuccess(reply);
+    const QVariantMap reply =
+        m_logos->auction_engine.view(QVariantMap{{QStringLiteral("view"), QStringLiteral("overview")}});
+    if (reply.contains(QStringLiteral("error"))) {
+        // A `chain` failure is the node not answering: the header says so (noteChainFailure). Any other kind
+        // is an engine fault worth showing. Neither touches a transaction lane: its own txStatus poll decides.
+        if (!noteChainFailure(reply))
+            failed(reply);
+        return;
     }
+    setNodeReachable(true);
+    setBlockHeight(reply.value(QStringLiteral("block")).toInt());
+    clearErrorOnSuccess(reply);
+}
+
+bool AuctionsBackend::noteChainFailure(const QVariantMap& reply)
+{
+    if (reply.value(QStringLiteral("kind")).toString() != QLatin1String(KIND_CHAIN))
+        return false;
+    setNodeReachable(false);
+    return true;
 }
 
 void AuctionsBackend::clearErrorOnSuccess(const QVariantMap& reply)
@@ -96,6 +110,7 @@ QVariantMap AuctionsBackend::submit(QVariantMap request)
         return errorReply(QStringLiteral("The wallet is not open."), QStringLiteral("wallet"));
     // The caller shows this reply's error itself; lastError is not set again (no double banner).
     const QVariantMap reply = m_logos->auction_engine.submit(request);
+    noteChainFailure(reply);
     clearErrorOnSuccess(reply);
     return reply;
 }
@@ -104,16 +119,24 @@ QVariantMap AuctionsBackend::txStatus(QString txId)
 {
     const QVariantMap reply =
         m_logos->auction_engine.txStatus(QVariantMap{{QStringLiteral("txId"), txId}});
+    noteChainFailure(reply);
     clearErrorOnSuccess(reply);
     return reply;
 }
 
-QVariantMap AuctionsBackend::view(QVariantMap)
+QVariantMap AuctionsBackend::view(QVariantMap request)
 {
-    return errorReply(QStringLiteral("not yet"), QStringLiteral("not_ready"));
+    // The screen shows a failed view itself (StateNotice); only node trouble reaches the header.
+    const QVariantMap reply = m_logos->auction_engine.view(request);
+    noteChainFailure(reply);
+    return reply;
 }
 
 QVariantList AuctionsBackend::accounts()
 {
-    return {};
+    // A failure arrives in-band as the only row, [{error, kind}]; the picker shows it.
+    const QVariantList rows = m_logos->auction_engine.accounts();
+    if (rows.size() == 1)
+        noteChainFailure(rows.first().toMap());
+    return rows;
 }

@@ -39,6 +39,8 @@ design_src="$(nix flake prefetch "github:logos-co/logos-design-system/${DESIGN_S
 
 export QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QT_QUICK_CONTROLS_STYLE=Basic
 export QT_PLUGIN_PATH="${qt_svg}/lib/qt-6/plugins"
+# Tests read the generated JSON fixtures (tests/qml/Fixtures.js) through a file:// XMLHttpRequest.
+export QML_XHR_ALLOW_FILE_READ=1
 
 inputs=("$@")
 [[ ${#inputs[@]} -gt 0 ]] || inputs=(apps/auctions/tests/qml)

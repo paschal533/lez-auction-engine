@@ -35,4 +35,12 @@ TestCase {
         compare(Format.amount("1000", 0), "1,000")
         compare(Format.amount("", 0), "")
     }
+
+    // Account ids are base58; the header and picker show the first and last four characters.
+    function test_short_id() {
+        compare(Format.shortId("7wx93ACHrg2tR8vHRBcKnVkRJTrtT7zcP3UsxcViopKg"), "7wx9…opKg")
+        compare(Format.shortId("abcdefghij"), "abcdefghij")
+        compare(Format.shortId(""), "")
+        compare(Format.shortId(null), "")
+    }
 }

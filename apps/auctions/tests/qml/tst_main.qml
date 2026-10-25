@@ -31,12 +31,15 @@ TestCase {
             property string lastError: ""
             function submit(req) { testCase.calls.push(req); return req }
             function txStatus(id) { return id }
+            function accounts() { return { call: "accounts" } }
         }
 
         function module(name) { return backendStub }
         // The stub runs the success callback at once, with a canned reply per request.
         function watch(promise, ok, err) {
-            if (promise && promise.action === "token_transfer")
+            if (promise && promise.call === "accounts")
+                ok([])
+            else if (promise && promise.action === "token_transfer")
                 ok(testCase.submitReply)
             else
                 ok({ state: "included" })

@@ -33,3 +33,9 @@ function amount(decString, decimals) {
     var frac = s.substring(s.length - places).replace(/0+$/, "")
     return frac.length > 0 ? group(whole) + "." + frac : group(whole)
 }
+
+// shortId("7wx93ACH…ViopKg") -> "7wx9…opKg": the first and last four characters of an account id.
+function shortId(id) {
+    var s = String(id === undefined || id === null ? "" : id)
+    return s.length <= 10 ? s : s.substring(0, 4) + "…" + s.substring(s.length - 4)
+}

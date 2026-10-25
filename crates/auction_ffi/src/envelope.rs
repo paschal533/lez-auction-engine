@@ -58,6 +58,7 @@ pub fn kind_of(e: &SdkError) -> &'static str {
         SdkError::Mismatch { .. } => "mismatch",
         SdkError::Engine { .. } => "engine",
         SdkError::HostReject(_) => "host_reject",
+        SdkError::Refused(_) => "refused",
         SdkError::Deployment { .. } => "deployment",
         SdkError::Chain(_) => "chain",
         SdkError::Keystore(_) => "keystore",

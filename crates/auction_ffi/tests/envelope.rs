@@ -106,6 +106,7 @@ fn every_sdk_error_variant_has_a_kind() {
             "engine",
         ),
         (SdkError::HostReject(String::new()), "host_reject"),
+        (SdkError::Refused(String::new()), "refused"),
         (
             SdkError::Deployment {
                 path: String::new(),

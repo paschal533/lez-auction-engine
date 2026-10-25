@@ -41,6 +41,7 @@ impl From<SdkError> for CliError {
             SdkError::Keystore(k) => Self::Keystore(k),
             e @ SdkError::Mismatch { .. } => Self::Verify(e),
             SdkError::SendUncertain(m) | SdkError::Unconfirmed(m) => Self::Unknown(m),
+            SdkError::Refused(m) => Self::Usage(m),
             other => Self::Sdk(other),
         }
     }
@@ -82,6 +83,8 @@ mod tests {
         assert!(matches!(CliError::from(uncertain), CliError::Unknown(_)));
         let timeout = SdkError::Unconfirmed("late".into());
         assert!(matches!(CliError::from(timeout), CliError::Unknown(_)));
+        let refused = SdkError::Refused("live".into());
+        assert!(matches!(CliError::from(refused), CliError::Usage(m) if m == "live"));
         assert_eq!(
             CliError::from(SdkError::Keystore(KeystoreError::HomeNotSet)).exit_code(),
             4

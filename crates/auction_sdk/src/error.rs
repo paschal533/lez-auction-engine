@@ -26,6 +26,11 @@ pub enum SdkError {
     Engine { name: String, code: u32 },
     #[error("the host would reject this: {0}")]
     HostReject(String),
+    /// Refused client-side before anything is signed (`ops`): an invalid request (a bad parameter
+    /// file, a missing deployment entry) or a state the engine or host would reject. The message is
+    /// complete as it stands.
+    #[error("{0}")]
+    Refused(String),
     #[error("deployment file {path}: {reason}")]
     Deployment { path: String, reason: String },
     #[error("chain: {0}")]

@@ -10,7 +10,6 @@ pub mod error;
 mod host_cmds;
 mod oracle_cmds;
 pub mod output;
-mod params;
 mod read_cmds;
 mod tx_cmds;
 mod tx_report;

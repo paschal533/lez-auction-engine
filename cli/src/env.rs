@@ -9,17 +9,15 @@ use auction_sdk::{
     chain::{clock_ms, Chain},
     confirm::{submit, ConfirmSettings, Outcome},
     deployment::Deployment,
+    error::SdkResult,
     keystore::Keystore,
+    ops::{Accounts, Prepared},
     plan::Plan,
     verify::{verify_config, VerifiedConfig},
 };
-use lee_core::account::{Account, AccountId};
+use lee_core::account::AccountId;
 
-use crate::{
-    error::CliError,
-    output::kv,
-    tx_report::{print_applied, TxMeta},
-};
+use crate::{error::CliError, output::kv, tx_report::print_applied};
 
 pub struct Env<C: Chain> {
     pub chain: C,
@@ -72,14 +70,22 @@ impl<C: Chain> Env<C> {
 
     /// A base58 account id, or a wallet label (which needs the keystore).
     pub fn account(&self, arg: &str) -> Result<AccountId, CliError> {
+        Ok(self.resolve(arg)?)
+    }
+
+    /// `account` as the SDK's resolver (`ops::Accounts`).
+    pub fn resolve(&self, arg: &str) -> SdkResult<AccountId> {
         if let Ok(id) = arg.parse::<AccountId>() {
             return Ok(id);
         }
-        Ok(self.keystore()?.resolve(arg)?)
+        let path = Keystore::default_path(self.wallet_home.as_deref())?;
+        Ok(Keystore::open(&path)?.resolve(arg)?)
     }
 
-    pub fn is_fresh(&self, id: &AccountId) -> Result<bool, CliError> {
-        Ok(self.chain.account(id)? == Account::default())
+    /// Runs `f` with this environment's account resolver.
+    pub fn with_accounts<R>(&self, f: impl FnOnce(&Accounts<'_>) -> R) -> R {
+        let resolve = |arg: &str| self.resolve(arg);
+        f(&Accounts { resolve: &resolve })
     }
 
     #[must_use]
@@ -116,41 +122,36 @@ impl<C: Chain> Env<C> {
         Ok(())
     }
 
-    /// Lock, sign with the wallet, send, confirm (spec §6.5), then print the touched accounts as
-    /// re-read from the chain. Dropped is an error (exit 3); an unknown outcome (send uncertain, no
-    /// verdict) keeps the lock, says how to check, and is never resent.
-    pub fn send(
-        &self,
-        v: &VerifiedConfig,
-        plan: &Plan,
-        meta: &TxMeta,
-        out: &mut dyn Write,
-    ) -> Result<(), CliError> {
-        self.submit_and_report(plan, meta, out)?;
-        print_applied(self, v, &meta.touched, out)
+    /// Prints the facts, then for each step: lock, sign with the wallet, send, confirm (spec §6.5).
+    /// Dropped is an error (exit 3); an unknown outcome (send uncertain, no verdict) keeps the lock,
+    /// says how to check, and is never resent. The caller prints whatever it re-reads afterwards.
+    pub fn send_steps(&self, p: &Prepared, out: &mut dyn Write) -> Result<(), CliError> {
+        for f in &p.facts {
+            kv(out, f.key, &f.value)?;
+        }
+        for s in &p.steps {
+            self.send_plain(&s.plan, s.what, s.check, out)?;
+        }
+        Ok(())
     }
 
-    /// `send` for commands that have no verified config (config creation, host and dev setup): the
-    /// caller prints whatever it re-reads after inclusion.
+    /// `send_steps`, then the touched accounts as re-read from the chain.
+    pub fn send_prepared(
+        &self,
+        v: &VerifiedConfig,
+        p: &Prepared,
+        out: &mut dyn Write,
+    ) -> Result<(), CliError> {
+        self.send_steps(p, out)?;
+        print_applied(self, v, &p.touched, out)
+    }
+
+    /// One plan, for commands that build their own (config creation, host and dev setup).
     pub fn send_plain(
         &self,
         plan: &Plan,
         what: &'static str,
         check: &'static str,
-        out: &mut dyn Write,
-    ) -> Result<(), CliError> {
-        let meta = TxMeta {
-            what,
-            check,
-            touched: Vec::new(),
-        };
-        self.submit_and_report(plan, &meta, out)
-    }
-
-    fn submit_and_report(
-        &self,
-        plan: &Plan,
-        meta: &TxMeta,
         out: &mut dyn Write,
     ) -> Result<(), CliError> {
         let keystore = self.keystore()?;
@@ -159,7 +160,7 @@ impl<C: Chain> Env<C> {
             "plan",
             &format!(
                 "{} ({} accounts, {} signer(s))",
-                meta.what,
+                what,
                 plan.account_ids.len(),
                 plan.signing_requirements.len()
             ),
@@ -172,7 +173,7 @@ impl<C: Chain> Env<C> {
             &self.confirm,
             &self.sleep,
         )
-        .map_err(|e| self.with_check_hint(CliError::from(e), meta))?;
+        .map_err(|e| self.with_check_hint(CliError::from(e), check))?;
         kv(out, "submitted", &hex::encode(s.hash))?;
         match s.outcome {
             Outcome::Included { nonce_after } => {
@@ -182,11 +183,11 @@ impl<C: Chain> Env<C> {
         }
     }
 
-    fn with_check_hint(&self, e: CliError, meta: &TxMeta) -> CliError {
+    fn with_check_hint(&self, e: CliError, check: &str) -> CliError {
         match e {
             CliError::Unknown(m) => CliError::Unknown(format!(
                 "outcome unknown, lock kept ({m}). Do not resend: check the signer's nonce before acting, with `auction-cli {}`, or wait {} blocks and check again; the lock in {} clears itself once the window has passed",
-                meta.check,
+                check,
                 self.confirm.drop_after_blocks,
                 self.lock_dir().display()
             )),

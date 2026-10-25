@@ -5,8 +5,13 @@
 use std::io::Write;
 
 use auction_sdk::{
-    addresses::HostAddresses, chain::Chain, decode::Reader, deployment::program_id_hex,
-    error::SdkError, plan_host, verify::verify_binding,
+    addresses::HostAddresses,
+    chain::Chain,
+    decode::Reader,
+    deployment::program_id_hex,
+    ops::{self, CHECK_VERIFY},
+    plan_host,
+    verify::verify_binding,
 };
 use lee_core::account::{Account, AccountId};
 use stablecoin_core::{LiquidationEngineState, ProtocolParameters};
@@ -20,7 +25,6 @@ use crate::{
 };
 
 const CHECK_HOST: &str = "host addresses";
-const CHECK_VERIFY: &str = "admin verify";
 
 pub fn host<C: Chain>(
     env: &Env<C>,
@@ -100,13 +104,7 @@ pub(crate) fn require_host_admin<C: Chain>(
     signer: &str,
 ) -> Result<AccountId, CliError> {
     let signer = env.account(signer)?;
-    if signer != params.admin_account_id {
-        return Err(CliError::Verify(SdkError::Mismatch {
-            what: "host admin (refusing before signing: the signer is not the host admin)",
-            expected: params.admin_account_id.to_string(),
-            found: signer.to_string(),
-        }));
-    }
+    ops::require_host_admin(params, signer)?;
     Ok(signer)
 }
 

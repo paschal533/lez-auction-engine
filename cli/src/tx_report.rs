@@ -6,38 +6,15 @@ use std::io::Write;
 
 use lee_core::{account::AccountId, program::ProgramId};
 
-use auction_sdk::{chain::Chain, decode::Reader, error::SdkResult, verify::VerifiedConfig};
+use auction_sdk::{
+    chain::Chain, decode::Reader, error::SdkResult, ops::Touch, verify::VerifiedConfig,
+};
 
 use crate::{
     env::Env,
     error::CliError,
     output::{kv, yes_no},
 };
-
-/// An account a command touches, read back after inclusion.
-#[derive(Debug, Clone, Copy)]
-pub enum Touch {
-    /// A token holding (balance); `definition` is the token the holding must be of.
-    Holding {
-        label: &'static str,
-        id: AccountId,
-        definition: AccountId,
-    },
-    /// A liquidation auction.
-    Auction(AccountId),
-    /// The engine's accounting account.
-    Accounting,
-}
-
-/// How a command describes itself to `Env::send`.
-#[derive(Debug, Clone)]
-pub struct TxMeta {
-    /// Instruction name for the `plan` line.
-    pub what: &'static str,
-    /// Read command that shows the outcome when it is unknown (`auction-cli <check>`).
-    pub check: &'static str,
-    pub touched: Vec<Touch>,
-}
 
 /// Prints the applied result of every touched account. A failed read is reported, never fatal: the
 /// transaction is already included.
@@ -174,7 +151,7 @@ mod tests {
         let v = env.verified().expect("verifies");
         let holding = id(k::BIDDER_STABLE);
         let touch = [Touch::Holding {
-            label: "bidder",
+            label: "bidder".into(),
             id: holding,
             definition: v.state.stablecoin_definition_id,
         }];

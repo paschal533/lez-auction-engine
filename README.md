@@ -14,7 +14,7 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 - [DEMO.md](DEMO.md): one-command demo, run locally in both sequencer modes (dev mode 1 and 0); the e2e workflow passed on a hosted runner (`RISC0_DEV_MODE=0`).
 - Red-team pass: [docs/security/redteam-2026-10.md](docs/security/redteam-2026-10.md), 0 Critical, 0 High, 0 Medium (6 Low and 6 Info, all off-chain).
 - [SUBMISSION.md](SUBMISSION.md): the submission index with linked hashes; the demo recording, upstream filings and hosted runs are pending.
-- Next: Plan 4 (FFI, module, thin GUI).
+- Plan 4 (FFI, core module, Auctions app in Basecamp): built on `feat/plan-4`, not yet pushed or merged.
 
 **Plan 3a complete: engine hardening, SDK and CLI.** See `docs/superpowers/plans/2026-10-09-plan-3a-engine-hardening-sdk-cli.md`.
 
@@ -27,7 +27,7 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 - Stablecoin hooks: the vendored stablecoin (lez-programs `64c01210`) gains `set_liquidation_engine`, `liquidate_position` and `engine_freeze_new_debt`, exported as a patch series for upstream (ADR-025) and guarded by Variant C, caller program id plus the bound engine-authority PDA (ADR-026, [hooks](docs/architecture/hooks.md)).
 - Engine: the `auction_engine` program, 17 instructions over `auction_core` (liquidation, bids, settlement, F5 surplus and F4 debt auctions, `check_solvency`), with config-seeded PDAs, optional-account slots, sweep rules, the measured chained-call budget and a second host instance (ADR-027 to ADR-036, [programs](docs/architecture/programs.md)). Threat model and security review: [THREAT_MODEL.md](THREAT_MODEL.md), [per-instruction checklist](docs/architecture/security-checklist.md).
 - Tests: handler unit tests (`auction_engine_program`), and `engine_integration_tests`, which runs the real token, stablecoin and engine guests in-process (hooks, config, liquidation, bids, settlement, system auctions, solvency, security and laundering attacks, account invariants, chain budgets, two instances). Run them with the WSL command under "Build and test the programs" below (`scripts/wsl-cargo.sh test -p engine_integration_tests`).
-- Next: Plan 3 (SDK, CLI, CI and real proofs), then Plan 4 (thin GUI).
+- Next: Plan 3 (SDK, CLI, CI and real proofs), then Plan 4 (FFI, core module, Auctions app in Basecamp; built on `feat/plan-4`, not yet pushed or merged).
 
 **Plan 1 complete: core + spikes.**
 

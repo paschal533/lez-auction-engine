@@ -11,7 +11,7 @@ sha() { local out; out="$(sha256sum "$1")" || fail "cannot hash $1"; printf '%s'
 
 guest_bins=(artifacts/guests/*.bin)
 patches=(patches/stablecoin/*.patch)
-evidence=(REQUIREMENTS.md CYCLES.md cycles/baseline.json DEMO.md THREAT_MODEL.md docs/security/redteam-2026-10.md docs/architecture/real-proofs.md)
+evidence=(REQUIREMENTS.md CYCLES.md cycles/baseline.json DEMO.md THREAT_MODEL.md docs/security/redteam-2026-10.md docs/architecture/real-proofs.md docs/architecture/basecamp-app.md)
 evidence_extra=(docs/evidence/*.md)
 
 [[ -f artifacts/guests/manifest.json ]] || fail "missing artifacts/guests/manifest.json"

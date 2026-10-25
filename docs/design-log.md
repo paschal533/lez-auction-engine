@@ -1204,7 +1204,7 @@ The Plan 4 spec ("How it is built") makes the FFI "brain only": no chain I/O and
 
 **Decision**
 (B), the designer's call 1:
-- **Reads.** The FFI opens `RpcChain::connect_with_timeout(deployment.sequencer_url, 5 s)`. Views and plans use `ReadRetry { tries: 2, first_delay: 1 s }`; the transaction ops use `ReadRetry::NONE`.
+- **Reads.** The FFI opens `RpcChain::connect_with_timeout(deployment.sequencer_url, 5 s)`. Views and plans use `ReadRetry { attempts: 2, first_delay: 1 s }`; the transaction ops use `ReadRetry::NONE`.
 - **Time limits.**
   - A `Deadline` decorator gives every FFI call a 12 s budget (R8). The deadline caps the whole read, not just its start (R13).
   - A module method that makes several FFI calls shares one 15 s budget (`budget_ms`, R10). The `lez_core` send starts only if at least 3 s remain.

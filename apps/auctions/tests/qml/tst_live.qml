@@ -293,6 +293,20 @@ TestCase {
         verify(findChild(p, "bidPausedNotice").visible)
     }
 
+    // Board v4 "Live auction, paused": a paused feed freezes the discount clock (t_eff stops), so the row reads
+    // "Paused" with the discount greyed, and the bid card says the discount is frozen.
+    function test_paused_auction_row_and_frozen_discount() {
+        liveReply.items[0].paused = "PriceFeedStale"
+        auctionReply.paused = "PriceFeedStale"
+        const p = createPage()
+        tryCompare(findChild(p, "auctionDetail"), "auctionId", auctionReply.id)
+        const row = findChild(p, "liveItem_" + liveReply.items[0].id)
+        compare(findChild(row, "liveItemWhen").text, "Paused")
+        verify(findChild(row, "liveItemDiscount").color !== findChild(row, "liveItemWhen").color)
+        const notice = findChild(p, "bidPausedNotice")
+        verify(notice.message.indexOf("The discount is frozen at 3.7% while bidding is paused.") >= 0, notice.message)
+    }
+
     // The final bid: quote → dialog (its facts name bid_with_settlement) → submit → lane.
     function test_final_bid_confirms_bid_with_settlement_and_submits() {
         quoteReply.coin_in_max = "230000"

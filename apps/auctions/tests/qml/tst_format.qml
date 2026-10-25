@@ -118,4 +118,15 @@ TestCase {
         compare(Format.percentToBps(""), -1)
         compare(Format.percentToBps("x"), -1)
     }
+
+    // Products of u128 decimal strings (for comparisons such as lot × RAY < target × price), no double.
+    function test_mul_keeps_all_digits() {
+        compare(Format.mul("0", "123"), "0")
+        compare(Format.mul("12", "12"), "144")
+        compare(Format.mul("499975", "1000000000000000000000000000"), "499975000000000000000000000000000")
+        compare(Format.mul("340282366920938463463374607431768211455", "2"),
+                "680564733841876926926749214863536422910")
+        compare(Format.mul("007", "006"), "42")
+        compare(Format.mul("1.5", "2"), "", "not digits: no product")
+    }
 }

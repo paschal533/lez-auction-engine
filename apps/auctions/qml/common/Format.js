@@ -134,3 +134,39 @@ function percentToBps(text) {
     var frac = m[2] === undefined ? "00" : (m[2] + "0").substring(0, 2)
     return Number(m[1]) * 100 + Number(frac)
 }
+
+// mul("12", "12") -> "144": the product of two decimal strings, digit by digit (no double), for comparisons
+// of returned fields such as lot × RAY against target × price. Input that is not digits gives "".
+function mul(a, b) {
+    var x = stripZeros(String(a))
+    var y = stripZeros(String(b))
+    if (!isDigits(x) || !isDigits(y))
+        return ""
+    var out = []
+    for (var k = 0; k < x.length + y.length; k++)
+        out.push(0)
+    for (var i = x.length - 1; i >= 0; i--) {
+        var carry = 0
+        var dx = x.charCodeAt(i) - 48
+        for (var j = y.length - 1; j >= 0; j--) {
+            var cell = i + j + 1
+            var t = out[cell] + dx * (y.charCodeAt(j) - 48) + carry
+            out[cell] = t % 10
+            carry = Math.floor(t / 10)
+        }
+        out[i] += carry
+    }
+    return stripZeros(out.join(""))
+}
+
+// bpsPercent(16666, 1) -> "166.6": basis points as a percent, truncated like the CLI (R32).
+function bpsPercent(bps, places) {
+    return fixed(String(bps), 2, places)
+}
+
+// bpsPercentTrim(20000) -> "200", bpsPercentTrim(15050) -> "150.5": a parameter in bps as a percent,
+// trailing zeros dropped (exact: bps carry two decimals of a percent).
+function bpsPercentTrim(bps) {
+    var s = bpsPercent(bps, 2)
+    return s.indexOf(".") < 0 ? s : s.replace(/0+$/, "").replace(/\.$/, "")
+}

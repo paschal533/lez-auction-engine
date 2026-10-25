@@ -264,12 +264,15 @@ InsetCard {
         severity: LogosNotice.Warning
         title: qsTr("Bidding paused")
         shown: root.blocked
-        message: root.oracleUnknown
+        // A paused auction's clock stops (t_eff excludes paused time), so its discount holds where it is.
+        message: (root.oracleUnknown
                  ? qsTr("The oracle could not be read, so the price feed's freshness is unknown. Open the tab again or rescan to retry.")
                  : root.oracleStale || (root.paused && String(root.auction.paused) === "PriceFeedStale")
                  ? qsTr("The price feed is older than %1 minutes. Bids reopen when the oracle updates.")
                        .arg(root.oracle ? Math.floor(Number(root.oracle.max_age_ms) / 60000) : 60)
-                 : (root.paused ? qsTr("The engine would refuse a bid now: %1.").arg(String(root.auction.paused)) : "")
+                 : (root.paused ? qsTr("The engine would refuse a bid now: %1.").arg(String(root.auction.paused)) : ""))
+                 + (root.paused ? " " + qsTr("The discount is frozen at %1% while bidding is paused.")
+                                            .arg(Format.rayPercent(String(root.auction.discount_ray), 1)) : "")
     }
 
     // ---- You pay ----------------------------------------------------------------------------------

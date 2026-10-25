@@ -132,6 +132,9 @@ Rectangle {
 
                 ColumnLayout {
                     Layout.fillWidth: true
+                    // Takes what the bid card leaves; a long fact (a pause reason) must not widen it.
+                    Layout.preferredWidth: 0
+                    Layout.minimumWidth: 0
                     Layout.fillHeight: true
                     Layout.alignment: Qt.AlignTop
                     spacing: Theme.spacing.medium
@@ -218,7 +221,8 @@ Rectangle {
                             Layout.fillWidth: true
                             label: qsTr("Status")
                             value: !root.hasAuction ? ""
-                                   : root.auction.paused ? qsTr("Paused (%1)").arg(String(root.auction.paused))
+                                   // The reason is in the bid card's notice; here it would widen the grid.
+                                   : root.auction.paused ? qsTr("Paused")
                                    : root.auction.held_at_max ? qsTr("Held at max") : qsTr("Auctioning")
                         }
                     }

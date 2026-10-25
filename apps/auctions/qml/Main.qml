@@ -9,6 +9,7 @@ import "common"
 import "shell"
 import "dev"
 import "live"
+import "risk"
 
 Rectangle {
     id: root
@@ -119,7 +120,11 @@ Rectangle {
                 accounts: d.accounts
                 activeAccount: root.backend ? root.backend.activeAccount : ""
             }
-            EmptyPanel { heading: qsTr("At-risk positions") }
+            RiskPage {
+                backend: root.backend
+                accounts: d.accounts
+                activeAccount: root.backend ? root.backend.activeAccount : ""
+            }
             EmptyPanel { heading: qsTr("Settled") }
             EmptyPanel { heading: qsTr("System") }
             DevPage {

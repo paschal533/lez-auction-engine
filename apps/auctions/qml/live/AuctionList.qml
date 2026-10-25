@@ -102,13 +102,18 @@ ColumnLayout {
                         color: Theme.palette.textSecondary
                         elide: Text.ElideRight
                     }
+                    // Board v4 "Live auction, paused": a paused feed stops the discount clock, so there is no
+                    // max time to show.
                     LogosText {
-                        text: row.modelData.held_at_max
+                        objectName: "liveItemWhen"
+                        text: row.modelData.paused
+                              ? qsTr("Paused")
+                              : row.modelData.held_at_max
                               ? qsTr("Held at max")
                               : qsTr("Max at %1").arg(Qt.formatTime(new Date(Number(row.modelData.max_at_ms)), "hh:mm"))
                         font.pixelSize: Theme.typography.secondaryText
                         font.features: { "tnum": 1 }
-                        color: Theme.palette.textSecondary
+                        color: row.modelData.paused ? Theme.palette.warning : Theme.palette.textSecondary
                     }
                 }
                 RowLayout {
@@ -128,7 +133,8 @@ ColumnLayout {
                         font.pixelSize: Theme.typography.subtitleText
                         font.weight: Theme.typography.weightMedium
                         font.features: { "tnum": 1 }
-                        color: Theme.palette.accentOrange
+                        // Greyed while paused: the discount is frozen, not "now".
+                        color: row.modelData.paused ? Theme.palette.textTertiary : Theme.palette.accentOrange
                     }
                 }
                 RowLayout {

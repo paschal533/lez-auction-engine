@@ -15,7 +15,8 @@
 // A target or value may hold a {{name}} placeholder for a value only known at run time (an auction id); the
 // runner fills it from what earlier steps captured.
 
-// The auction the story liquidates first (P0); its id comes from the run.
+// The position the story liquidates first (P0) and the auction that liquidation opens; ids come from the run.
+export const POSITION_P0 = "{{position:p0}}";
 export const AUCTION_P0 = "{{auction:p0}}";
 
 // One bid from the Live auctions tab: pick the auction, type the amount, place the bid, confirm, wait for the
@@ -60,6 +61,34 @@ export function bidFinal(auction, amount) {
        timeoutMs: 5000 }]);
 }
 
+// Liquidate a position from the At-risk tab as the signing account (the keeper): pick it, check the quote,
+// liquidate, confirm, wait for the lane. The keeper's reward goes to its <label>-coll holding.
+export function liquidate(position) {
+  return [
+    { id: "liquidate-open-risk", segment: "task-13", caption: "Open the at-risk positions: lowest CR first.",
+      action: "click", target: "tabRisk" },
+    { id: "liquidate-pick-position", segment: "task-13",
+      caption: "Pick the position: its CR is below the minimum, so it can be liquidated.",
+      action: "click", target: `riskItem_${position}` },
+    { id: "liquidate-quote", segment: "task-13",
+      caption: "The quote shows the auction target, the collateral seized and the keeper's reward.",
+      action: "waitFor", target: "liquidateSubmit", property: "enabled", value: true, timeoutMs: 10000 },
+    { id: "liquidate-start", segment: "task-13", caption: "Liquidate: a fresh quote opens the confirmation.",
+      action: "click", target: "liquidateSubmit" },
+    { id: "liquidate-dialog", segment: "task-13", caption: "Check the liquidation before it is sent.",
+      action: "waitFor", target: "txDialog", property: "opened", value: true, timeoutMs: 10000 },
+    { id: "liquidate-confirm", segment: "task-13", caption: "Confirm: the keeper signs and sends it.",
+      action: "click", target: "txConfirm" },
+    { id: "liquidate-included", segment: "task-13", caption: "Included: the position's auction is open.",
+      action: "waitFor", target: "txLane", property: "state", value: "done", timeoutMs: 120000 },
+    // Lists come from the scan cursor, so the new auction shows under Live auctions after a rescan.
+    { id: "liquidate-rescan", segment: "task-13", caption: "Rescan: the scan picks up the new auction.",
+      action: "click", target: "riskRescan" },
+    { id: "liquidate-rescan-done", segment: "task-13", caption: "The scan has caught up with the chain.",
+      action: "waitFor", target: "riskRescan", property: "enabled", value: true, timeoutMs: 30000 },
+  ];
+}
+
 export const STORY_STEPS = [
   // ---- Task 11: shell. Pick the account that signs; the header follows. ----
   {
@@ -86,6 +115,9 @@ export const STORY_STEPS = [
     value: "keeper",
     timeoutMs: 10000,
   },
+
+  // ---- Task 13: At-risk positions. The keeper liquidates P0, which opens P0's auction. ----
+  ...liquidate(POSITION_P0),
 
   // ---- Task 12: Live auctions. The owner bids on P0's auction: a partial bid, then the final one. ----
   {

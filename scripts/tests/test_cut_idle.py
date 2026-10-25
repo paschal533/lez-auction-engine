@@ -30,6 +30,10 @@ class IdleCutsTest(unittest.TestCase):
         cuts = ci.idle_cuts([step("a-included", 20000, 30000, 10000)], offset=4.0, threshold=3.0, keep=1.5)
         self.assertEqual(cuts, [(25.5, 32.5)])
 
+    def test_wait_longer_than_its_step_is_clamped_to_the_step(self):
+        cuts = ci.idle_cuts([step("a-included", 0, 10000, 20000)], offset=0.0, threshold=3.0, keep=1.5)
+        self.assertEqual(cuts, [(1.5, 8.5)])
+
     def test_wait_at_or_under_threshold_is_kept(self):
         steps = [step("a", 0, 3000, 3000), step("b", 5000, 7000, 2000), step("c", 8000, 20000)]
         self.assertEqual(ci.idle_cuts(steps, offset=0.0, threshold=3.0, keep=1.5), [])
@@ -78,6 +82,20 @@ class PlanTest(unittest.TestCase):
         # f1-open raw 11 -> 1; f5-open raw 23 -> 23-10-7 = 6; freeze-open raw 33 -> 33-10-7-5 = 11
         self.assertEqual(at, [("f1-open", 1.0, 4.0), ("f5-open", 6.0, 9.0), ("freeze-open", 11.0, 14.0)])
 
+    def test_negative_offset_is_clamped_to_zero(self):
+        # The window appeared after the story's t0: treat the capture as starting at t0.
+        p = ci.plan(self.timeline(), [("f1-open", "F1", "x")], offset=-2.5, duration=40.0,
+                    threshold=3.0, keep=1.5, lead=1.0, hold=4.0)
+        self.assertEqual(p["offset"], 0.0)
+        self.assertEqual(p["cuts"][0], (3.5, 10.5))
+        self.assertAlmostEqual(p["cards"][0]["at"], 1.0)
+
+    def test_tail_cut_starts_where_the_window_was_gone(self):
+        # Basecamp closed 36 s into the capture: nothing after that is kept, even inside the hold.
+        p = ci.plan(self.timeline(), [], offset=10.0, duration=60.0,
+                    threshold=3.0, keep=1.5, lead=1.0, hold=4.0, end_at=36.0)
+        self.assertEqual(p["cuts"][-1], (36.0, 60.0))
+
     def test_card_for_a_missing_step_is_an_error(self):
         with self.assertRaises(SystemExit):
             ci.plan(self.timeline(), [("nope", "X", "y")], offset=0.0, duration=60.0)
@@ -103,6 +121,18 @@ class FilterTest(unittest.TestCase):
         self.assertIn("textfile=c0t.txt", f)
         self.assertIn("enable='between(t,1.000,4.000)'", f)
         self.assertIn("fontfile='C\\:/Windows/Fonts/segoeui.ttf'", f)
+
+
+class PlanOutTest(unittest.TestCase):
+    def test_plan_is_written_as_utf8_json(self):
+        import json
+        import tempfile
+        p = {"cuts": [(0.0, 1.0)], "cards": [{"id": "f1", "title": "F1 · Liquidation", "subtitle": "s",
+                                              "at": 0.0, "until": 3.5}], "out_duration": 2.0}
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d, "plan.json")
+            ci.write_plan(p, path)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["cards"][0]["title"], "F1 · Liquidation")
 
 
 if __name__ == "__main__":

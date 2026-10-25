@@ -92,8 +92,13 @@ in total, 329 s for the story): [docs/architecture/basecamp-app.md](docs/archite
 
 ### Re-recording the GUI run (Windows host, WSLg)
 
-`scripts/record/record-story.ps1` records the standalone-mode story to an mp4. Run it from Windows PowerShell
-with ffmpeg (with libx264 and drawtext, e.g. the gyan.dev build from winget) and Python 3 on the Windows PATH:
+`scripts/record/record-story.ps1` records the standalone-mode story to an mp4. Run it from Windows PowerShell.
+You need on the Windows PATH:
+- ffmpeg 7 or later (the script passes its filter with `-/vf`), with libx264 and drawtext, e.g. the gyan.dev
+  build from winget;
+- Python 3.
+
+The WSL distribution is `-Distro`, default `Ubuntu-20.04`.
 
     powershell -File scripts\record\record-story.ps1 -Out C:\Users\user\Videos\rfp014-demo\basecamp.mp4
 
@@ -101,19 +106,45 @@ It runs `scripts/basecamp/run-app.sh --setup --test apps/auctions/tests/story.mj
 `STORY_PACE_MS=1500`, so each step stays on screen long enough to read. When the Basecamp window appears, the
 script moves it to a second screen if there is one, keeps it on top, and captures its screen region with
 gdigrab at 30 fps. Capturing the WSLg window by title records black frames, so the region is captured instead.
+This has two consequences:
+- The Basecamp window must stay visible and uncovered for the whole run. Do not minimise or move it.
+- On a machine with one screen it records on the primary display, including any OS watermark there (such as
+  "Activate Windows").
+
 When the story ends, `scripts/record/cut-idle.py` reads `story-timeline.json`:
 - it cuts every transaction-lane wait longer than 3 s down to its first and last 1.5 s;
-- it trims everything before the first step and more than 4 s after the last;
+- it trims everything before the first step, and everything more than 4 s after the last step or after the
+  Basecamp window was last seen, whichever comes first;
 - it draws the title cards from `scripts/record/title-cards.txt` (F1–F5, shortfall, freeze) at the logged starts
-  of their steps.
+  of the steps whose actions they name.
 
 The capture and the story run on different clocks, so the script measures the WSL clock against the Windows clock
-before it starts. Next to the output it writes the run log, the ffmpeg log, the timeline and the cut plan
-(`<name>.plan.json`: the cuts and each card's time). It deletes the raw capture once the cut video is written.
-It refuses to start with less than 12 GB free on `C:` and stops everything if `C:` drops below 10 GB. When the
-Nix caches are unreachable, pass the already-built roots through, for example
+before it starts. Next to the output it writes the run log, the ffmpeg log, the cut log, the timeline and the cut
+plan (`<name>.plan.json`: the cuts and each card's time). It deletes the raw capture once the cut video checks
+out, and keeps it on any failure.
+
+Disk: it refuses to start with less than 12 GB free on `C:`, and stops everything if `C:` drops below 10 GB.
+
+Cleanup: whatever happens (a failure, an error or Ctrl-C), it stops ffmpeg, stops the run (run-app.sh, Basecamp
+and the sequencer) and takes the window off topmost.
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | ok |
+| 2 | a tool is missing |
+| 3 | low disk at the start |
+| 4 | aborted: the disk floor, no window, or ffmpeg died |
+| 5 | the story failed |
+| 6 | nothing was captured |
+| 7 | cut-idle.py failed |
+| 8 | the output did not check out |
+
+When the Nix caches are unreachable, pass the already-built roots through, for example
 `-WslEnv 'AUCTIONS_ROOT=$HOME/lez-target/basecamp/auctions AUCTION_ENGINE_ROOT=$HOME/lez-target/basecamp/auction_engine LOGOS_QT_MCP=$HOME/lez-target/basecamp/qt-mcp'`.
-The cut logic has unit tests: `python3 -m unittest scripts/tests/test_cut_idle.py`.
+
+The cut logic has unit tests: `python -I -m unittest discover -s scripts/tests -p test_cut_idle.py`.
 
 ## Public legacy testnet
 

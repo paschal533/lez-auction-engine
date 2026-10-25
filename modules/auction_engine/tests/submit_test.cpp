@@ -1,6 +1,3 @@
-#include "auction_engine_impl.h"
-
-#include <deque>
 #include <string>
 
 #include <QVariant>
@@ -8,96 +5,9 @@
 #include <logos_test.h>
 #include <nlohmann/json.hpp>
 
-#include "budget.h"
-#include "logos_sdk.h"
-#include "mock_ffi_state.h"
+#include "harness.h"
 
-namespace {
-
-using json = nlohmann::json;
-
-const std::string SIGNER_A = "SignerAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-const std::string SIGNER_B = "SignerBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
-const std::string SEND = "send_generic_public_transaction";
-const std::int64_t MODULE_BUDGET_MS = 15000;
-const std::int64_t VIEW_OVERRUN_MS = 11000;  // view / prepare: a 5 s read, a 1 s pause, another 5 s read
-const std::int64_t TX_OVERRUN_MS = 5000;     // tx_begin / tx_poll: one 5 s read
-
-std::string ok(const json& value) {
-    return json{{"ok", true}, {"value", value}}.dump();
-}
-
-json step(const std::string& signer) {
-    return {
-        {"program_id", std::string(64, 'a')},
-        {"accounts", json::array({{{"id", std::string(64, '1')}, {"signer", true}},
-                                  {{"id", std::string(64, '2')}, {"signer", false}}})},
-        {"instruction_words", json::array({1, 2})},
-        {"signers", json::array({signer})},
-        {"what", "transfer"},
-        {"check", "dev balance --account <account>"},
-    };
-}
-
-json tracking(const std::string& signer) {
-    return {{"signer", signer},
-            {"lock_path", "/state/locks/" + signer + ".lock"},
-            {"nonce_before", "0"},
-            {"height_before", 10}};
-}
-
-std::string sent(const std::string& hash) {
-    return json{{"success", true}, {"tx_hash", hash}, {"secrets", json::array()}, {"error", ""}}.dump();
-}
-
-// Mocked C replies must outlive the call: the mock store keeps a pointer to the string.
-const std::string& keep(std::string text) {
-    static std::deque<std::string> store;
-    store.push_back(std::move(text));
-    return store.back();
-}
-
-struct Harness {
-    LogosTestContext context{"auction_engine"};
-    LogosModules modules{context.api()};
-    AuctionEngineImpl module;
-
-    Harness() {
-        mock_ffi::reset();
-        auction_engine::setClockForTests(&mock_ffi::fakeNowMs);
-        module._logosCoreSetLogosModulesPtr_(&modules);
-        ffi("auction_ffi_view",
-            ok({{"network", "localnet"}, {"dev", true}, {"config", "cfg"}, {"genesis_ok", true}}));
-        module.configure({{"deployment", "/d/deployment.json"},
-                          {"state_dir", "/state"},
-                          {"wallet_home", "/wallet"}});
-    }
-
-    ~Harness() { auction_engine::setClockForTests(nullptr); }
-
-    void ffi(const std::string& name, const std::string& reply) {
-        context.mockCFunction(name).returns(keep(reply));
-    }
-
-    void prepared(int steps) {
-        json list = json::array();
-        for (int i = 0; i < steps; ++i) list.push_back(step(i == 0 ? SIGNER_A : SIGNER_B));
-        ffi("auction_ffi_prepare", ok({{"steps", list}, {"facts", json::array()}}));
-        ffi("auction_ffi_tx_begin", ok(tracking(SIGNER_A)));
-        ffi("auction_ffi_tx_end", ok(json::object()));
-        context.mockModule("lez_core", SEND).returns(sent("ab"));
-    }
-
-    int calls(const std::string& ffiName) { return context.cFunctionCallCount(ffiName); }
-
-    json lastRequest(const std::string& ffiName) {
-        return json::parse(mock_ffi::state().requests[ffiName].back());
-    }
-
-    LogosMap submit() { return module.submit({{"action", "token_transfer"}}); }
-};
-
-}  // namespace
+using namespace harness;
 
 LOGOS_TEST(submit_sends_one_step_and_returns_the_hash) {
     Harness h;
@@ -491,4 +401,166 @@ LOGOS_TEST(open_wallet_sees_an_open_wallet_by_its_accounts) {
     const LogosMap r = h.module.openWallet();
 
     LOGOS_ASSERT_EQ(r["alreadyOpen"].get<bool>(), true);
+}
+
+// ---- multi-step sequences: each step its own tracking, one transaction in flight per signer ----
+
+namespace {
+
+// oracle_publish: three steps, three signers (the plan Task 9's prepare returns).
+json oraclePublishSteps() {
+    return json::array({step(SIGNER_A, "publish price (source A)"),
+                        step(SIGNER_B, "publish price (source B)"),
+                        step(SIGNER_C, "publish price (source C)")});
+}
+
+}  // namespace
+
+LOGOS_TEST(oracle_publish_runs_three_steps_in_order) {
+    Harness h;
+    h.preparedSteps(oraclePublishSteps());
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "included"}, {"nonce_after", "1"}}));
+    const LogosMap first = h.module.submit({{"action", "oracle_publish"}, {"price", "1000"}});
+    LOGOS_ASSERT_EQ(first["steps"].get<int>(), 3);
+    LOGOS_ASSERT_EQ(first["tracking"]["signer"].get<std::string>(), SIGNER_A);
+
+    h.ffi("auction_ffi_tx_begin", ok(tracking(SIGNER_B)));
+    const LogosMap second = h.module.txStatus({{"txId", first["txId"]}});
+    LOGOS_ASSERT_EQ(second["state"].get<std::string>(), std::string("next"));
+    LOGOS_ASSERT_EQ(second["step"].get<int>(), 1);
+    LOGOS_ASSERT_EQ(second["tracking"]["signer"].get<std::string>(), SIGNER_B);
+
+    h.ffi("auction_ffi_tx_begin", ok(tracking(SIGNER_C)));
+    const LogosMap third = h.module.txStatus({{"txId", first["txId"]}});
+    LOGOS_ASSERT_EQ(third["state"].get<std::string>(), std::string("next"));
+    LOGOS_ASSERT_EQ(third["step"].get<int>(), 2);
+    LOGOS_ASSERT_EQ(third["tracking"]["signer"].get<std::string>(), SIGNER_C);
+
+    const LogosMap done = h.module.txStatus({{"txId", first["txId"]}});
+    LOGOS_ASSERT_EQ(done["state"].get<std::string>(), std::string("included"));
+    LOGOS_ASSERT_EQ(done["step"].get<int>(), 2);
+
+    // One lock per step, taken by that step's signer, in plan order; each released before the next is taken.
+    const std::vector<json> begun = h.requests("auction_ffi_tx_begin");
+    LOGOS_ASSERT_EQ(static_cast<int>(begun.size()), 3);
+    LOGOS_ASSERT_EQ(begun[0]["signer"].get<std::string>(), SIGNER_A);
+    LOGOS_ASSERT_EQ(begun[1]["signer"].get<std::string>(), SIGNER_B);
+    LOGOS_ASSERT_EQ(begun[2]["signer"].get<std::string>(), SIGNER_C);
+    const std::vector<json> ended = h.requests("auction_ffi_tx_end");
+    LOGOS_ASSERT_EQ(static_cast<int>(ended.size()), 3);
+    LOGOS_ASSERT_EQ(ended[0]["tracking"]["signer"].get<std::string>(), SIGNER_A);
+    LOGOS_ASSERT_EQ(ended[1]["tracking"]["signer"].get<std::string>(), SIGNER_B);
+    LOGOS_ASSERT_EQ(ended[2]["tracking"]["signer"].get<std::string>(), SIGNER_C);
+    for (const json& end : ended) {
+        LOGOS_ASSERT_EQ(end["outcome"].get<std::string>(), std::string("included"));
+    }
+    LOGOS_ASSERT_EQ(h.context.moduleCallCount("lez_core", SEND), 3);
+    LOGOS_ASSERT_EQ(h.module.txStatus({{"txId", first["txId"]}})["kind"].get<std::string>(),
+                    std::string("unknown_tx"));
+}
+
+LOGOS_TEST(a_dropped_middle_step_stops_the_sequence) {
+    Harness h;
+    h.preparedSteps(oraclePublishSteps());
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "included"}, {"nonce_after", "1"}}));
+    const LogosMap first = h.module.submit({{"action", "oracle_publish"}, {"price", "1000"}});
+    h.ffi("auction_ffi_tx_begin", ok(tracking(SIGNER_B)));
+    LOGOS_ASSERT_EQ(h.module.txStatus({{"txId", first["txId"]}})["state"].get<std::string>(),
+                    std::string("next"));
+
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "dropped"}, {"height", 20}}));
+    const LogosMap r = h.module.txStatus({{"txId", first["txId"]}});
+
+    LOGOS_ASSERT_EQ(r["state"].get<std::string>(), std::string("dropped"));
+    LOGOS_ASSERT_EQ(r["step"].get<int>(), 1);
+    LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 1);
+    LOGOS_ASSERT_EQ(r["discardedSteps"].get<int>(), 1);
+    // Step 2 never began: two locks taken, two released (included, then dropped), two sends.
+    LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_begin"), 2);
+    const std::vector<json> ended = h.requests("auction_ffi_tx_end");
+    LOGOS_ASSERT_EQ(static_cast<int>(ended.size()), 2);
+    LOGOS_ASSERT_EQ(ended[0]["outcome"].get<std::string>(), std::string("included"));
+    LOGOS_ASSERT_EQ(ended[1]["outcome"].get<std::string>(), std::string("dropped"));
+    LOGOS_ASSERT_EQ(ended[1]["tracking"]["signer"].get<std::string>(), SIGNER_B);
+    LOGOS_ASSERT_EQ(h.context.moduleCallCount("lez_core", SEND), 2);
+    // The remaining step is discarded with the sequence.
+    LOGOS_ASSERT_EQ(h.module.txStatus({{"txId", first["txId"]}})["kind"].get<std::string>(),
+                    std::string("unknown_tx"));
+    LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_begin"), 2);
+}
+
+LOGOS_TEST(a_second_send_by_a_signer_in_flight_is_refused_and_another_signer_may_send) {
+    Harness h;
+    h.prepared(1);
+    const LogosMap first = h.submit();
+    LOGOS_ASSERT_TRUE(first.contains("hash"));
+
+    // auction_ffi holds SIGNER_A's lock: its tx_begin answers in_flight, and nothing is sent.
+    h.ffi("auction_ffi_tx_begin", failed("in_flight", "SignerA has a transaction in flight"));
+    const LogosMap refused = h.submit();
+    LOGOS_ASSERT_EQ(refused["kind"].get<std::string>(), std::string("in_flight"));
+    LOGOS_ASSERT_EQ(h.context.moduleCallCount("lez_core", SEND), 1);
+    LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_end"), 0);
+
+    // Another signer's plan takes its own lock and is sent while the first is still pending.
+    h.preparedSteps(json::array({step(SIGNER_B)}));
+    const LogosMap other = h.submit();
+    LOGOS_ASSERT_TRUE(other.contains("hash"));
+    LOGOS_ASSERT_TRUE(other["txId"] != first["txId"]);
+    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_begin")["signer"].get<std::string>(), SIGNER_B);
+    LOGOS_ASSERT_EQ(h.context.moduleCallCount("lez_core", SEND), 2);
+}
+
+LOGOS_TEST(every_sequence_end_reports_included_and_discarded_steps_the_same_way) {
+    // Begin failure of step 0 (submit): nothing on chain, the two later steps discarded.
+    {
+        Harness h;
+        h.preparedSteps(oraclePublishSteps());
+        h.ffi("auction_ffi_tx_begin", failed("in_flight", "SignerA has a transaction in flight"));
+        const LogosMap r = h.module.submit({{"action", "oracle_publish"}, {"price", "1000"}});
+        LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("in_flight"));
+        LOGOS_ASSERT_EQ(r["step"].get<int>(), 0);
+        LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 0);
+        LOGOS_ASSERT_EQ(r["discardedSteps"].get<int>(), 2);
+    }
+    // Send failure of step 0 (submit).
+    {
+        Harness h;
+        h.preparedSteps(oraclePublishSteps());
+        h.context.mockModule("lez_core", SEND)
+            .returns(json{{"success", false}, {"tx_hash", ""}, {"error", "refused"}}.dump());
+        const LogosMap r = h.module.submit({{"action", "oracle_publish"}, {"price", "1000"}});
+        LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("send"));
+        LOGOS_ASSERT_EQ(r["step"].get<int>(), 0);
+        LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 0);
+        LOGOS_ASSERT_EQ(r["discardedSteps"].get<int>(), 2);
+    }
+    // Begin failure of step 1 (txStatus after step 0 is included): one on chain, one discarded.
+    {
+        Harness h;
+        h.preparedSteps(oraclePublishSteps());
+        h.ffi("auction_ffi_tx_poll", ok({{"state", "included"}, {"nonce_after", "1"}}));
+        const LogosMap first = h.module.submit({{"action", "oracle_publish"}, {"price", "1000"}});
+        h.ffi("auction_ffi_tx_begin", failed("in_flight", "SignerB has a transaction in flight"));
+        const LogosMap r = h.module.txStatus({{"txId", first["txId"]}});
+        LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("in_flight"));
+        LOGOS_ASSERT_EQ(r["step"].get<int>(), 1);
+        LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 1);
+        LOGOS_ASSERT_EQ(r["discardedSteps"].get<int>(), 1);
+    }
+    // Send failure of step 1 (txStatus).
+    {
+        Harness h;
+        h.preparedSteps(oraclePublishSteps());
+        h.ffi("auction_ffi_tx_poll", ok({{"state", "included"}, {"nonce_after", "1"}}));
+        const LogosMap first = h.module.submit({{"action", "oracle_publish"}, {"price", "1000"}});
+        h.ffi("auction_ffi_tx_begin", ok(tracking(SIGNER_B)));
+        h.context.mockModule("lez_core", SEND)
+            .returns(json{{"success", false}, {"tx_hash", ""}, {"error", "refused"}}.dump());
+        const LogosMap r = h.module.txStatus({{"txId", first["txId"]}});
+        LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("send"));
+        LOGOS_ASSERT_EQ(r["step"].get<int>(), 1);
+        LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 1);
+        LOGOS_ASSERT_EQ(r["discardedSteps"].get<int>(), 1);
+    }
 }

@@ -1,0 +1,9 @@
+{
+  "filled": "100",
+  "limit": "41",
+  "lot_left_after": "400",
+  "nonce": 0,
+  "now_ms": 1700000000000,
+  "slippage_bps": 50,
+  "tokens": "40"
+}

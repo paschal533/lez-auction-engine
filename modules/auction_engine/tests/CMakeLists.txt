@@ -12,6 +12,7 @@ logos_test(
         main.cpp
         lez_args_test.cpp
         submit_test.cpp
+        view_test.cpp
     MOCK_C_SOURCES
         mocks/mock_auction_ffi.cpp
     GENERATED_SOURCES

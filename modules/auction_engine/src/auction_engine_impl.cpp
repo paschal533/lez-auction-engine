@@ -25,6 +25,12 @@ constexpr const char* KIND_FFI = "ffi";
 constexpr const char* KIND_UNKNOWN_TX = "unknown_tx";
 constexpr const char* KIND_WALLET = "wallet";
 constexpr const char* DEFAULT_WALLET_SUBDIR = "/.lee/wallet";
+// One rescan page: one getBlockRange batch (ScanSettings::default().batch in auction_sdk) plus the head and
+// anchor reads, so a page needs few reads of the 4 s a view call gets after the read overrun (budget.h).
+// auction_ffi caps a page at 500 blocks; a caller may ask for any size up to that.
+constexpr int DEFAULT_RESCAN_PAGE_BLOCKS = 100;
+// The fields of an account picker row (auction_sdk views::AccountView).
+constexpr const char* ACCOUNT_FIELDS[] = {"label", "id", "role", "stable_balance", "coll_balance", "holding"};
 
 using FfiOp = char* (*)(const char*);
 
@@ -56,8 +62,11 @@ std::string textOf(const json& object, const char* key) {
     return it != object.end() && it->is_string() ? it->get<std::string>() : std::string();
 }
 
+/// What a successful reply's `value` must be: an object for every call but the `accounts` view (a list).
+enum class ValueShape { Object, Array };
+
 /// One auction_ffi call: dump, call, copy, free, parse the `{ok, value | error}` envelope.
-FfiResult callFfi(FfiOp op, const json& request) {
+FfiResult callFfi(FfiOp op, const json& request, ValueShape shape = ValueShape::Object) {
     const std::string payload = request.dump();
     char* raw = op(payload.c_str());
     if (raw == nullptr) return failure(KIND_BAD_REPLY, "auction_ffi returned no reply");
@@ -76,7 +85,11 @@ FfiResult callFfi(FfiOp op, const json& request) {
                        message.empty() ? "auction_ffi reported an error without a message" : message);
     }
     const auto value = envelope.find("value");
-    if (value == envelope.end() || !value->is_object()) {
+    if (shape == ValueShape::Array) {
+        if (value == envelope.end() || !value->is_array()) {
+            return failure(KIND_BAD_REPLY, "auction_ffi reply has no list \"value\"");
+        }
+    } else if (value == envelope.end() || !value->is_object()) {
         return failure(KIND_BAD_REPLY, "auction_ffi reply has no object \"value\"");
     }
     FfiResult r;
@@ -88,14 +101,14 @@ FfiResult callFfi(FfiOp op, const json& request) {
 /// A call under the module budget: refused with less than MIN_FFI_START_MS left, else the context carries
 /// what is left, less the call kind's read overrun, as `budget_ms`.
 FfiResult budgetedCall(FfiOp op, json request, const json& ctx, const Budget& budget,
-                       std::int64_t readOverrunMs) {
+                       std::int64_t readOverrunMs, ValueShape shape = ValueShape::Object) {
     if (!budget.hasAtLeast(auction_engine::MIN_FFI_START_MS)) {
         return failure(KIND_BUDGET, "the call's time budget ran out before the next step could start");
     }
     request["ctx"] = ctx;
     request["ctx"]["budget_ms"] =
         std::max(auction_engine::MIN_FFI_BUDGET_MS, budget.remainingMs() - readOverrunMs);
-    return callFfi(op, request);
+    return callFfi(op, request, shape);
 }
 
 /// `tx_end` reads no node, so it needs no budget: the lock is released even when the budget is spent.
@@ -116,6 +129,24 @@ LogosMap guarded(Body body) {
     } catch (const std::exception& e) {
         return errorMap(KIND_BAD_REPLY, e.what());
     }
+}
+
+/// One view read under a fresh module budget; the configured context replaces any the caller sent.
+/// Returns the FFI `value` or `{error, kind}`.
+json viewCall(const json& ctx, const json& req, ValueShape shape = ValueShape::Object) {
+    if (ctx.is_null()) return errorMap(KIND_NOT_CONFIGURED, "configure the module first");
+    const Budget budget;
+    const FfiResult r =
+        budgetedCall(auction_ffi_view, req, ctx, budget, auction_engine::VIEW_READ_OVERRUN_MS, shape);
+    return r.ok ? r.value : errorOf(r);
+}
+
+/// Where a sequence ended: `failedStep` was dropped or could not be sent, the steps before it are on chain and
+/// the steps after it are discarded, never begun. Every sequence end reports the same three fields.
+void markSequenceEnd(json& status, int failedStep, std::size_t stepCount) {
+    status["step"] = failedStep;
+    status["includedSteps"] = failedStep;
+    status["discardedSteps"] = static_cast<int>(stepCount) - failedStep - 1;
 }
 
 bool hasStrings(const json& object, const char* key) {
@@ -246,7 +277,11 @@ LogosMap AuctionEngineImpl::submit(const LogosMap& req) {
         json tracking;
         std::string hash;
         const LogosMap sent = beginAndSend(budget, steps.at(0), tracking, hash);
-        if (sent.contains("error")) return sent;
+        if (sent.contains("error")) {
+            LogosMap failed = sent;
+            markSequenceEnd(failed, 0, steps.size());
+            return failed;
+        }
 
         const std::string txId = "tx" + std::to_string(++m_lastTxNumber);
         m_pending[txId] = {{"steps", steps}, {"step", 0}, {"tracking", tracking}, {"hash", hash}};
@@ -284,8 +319,10 @@ LogosMap AuctionEngineImpl::txStatus(const LogosMap& req) {
             return status;
         }
         if (state == "dropped") {
+            // The sequence stops at the dropped step: the steps after it are discarded, never begun.
             status["state"] = "dropped";
             status["height"] = polled.value.value("height", 0);
+            markSequenceEnd(status, step, stepCount);
             const std::string note = endTracking(m_ctx, entry.at("tracking"), "dropped");
             m_pending.erase(found);
             if (!note.empty()) status["note"] = note;
@@ -312,8 +349,7 @@ LogosMap AuctionEngineImpl::txStatus(const LogosMap& req) {
         if (sent.contains("error")) {
             // Step `step` is on chain, the next one is not sent and nothing is waited on: the sequence ends here.
             LogosMap failed = sent;
-            failed["step"] = step + 1;
-            failed["includedSteps"] = step + 1;
+            markSequenceEnd(failed, step + 1, stepCount);
             if (!note.empty()) failed["note"] = note;
             m_pending.erase(found);
             return failed;
@@ -327,5 +363,40 @@ LogosMap AuctionEngineImpl::txStatus(const LogosMap& req) {
         status["tracking"] = tracking;
         if (!note.empty()) status["note"] = note;
         return status;
+    });
+}
+
+LogosMap AuctionEngineImpl::view(const LogosMap& req) {
+    return guarded([&]() -> LogosMap {
+        const std::string name = textOf(req, "view");
+        if (name.empty()) return errorMap(KIND_BAD_REQUEST, "the request names no \"view\"");
+        // A map reply cannot carry the accounts view's list.
+        if (name == "accounts") return errorMap(KIND_BAD_REQUEST, "the accounts view is a list: call accounts()");
+        return viewCall(m_ctx, req);
+    });
+}
+
+LogosList AuctionEngineImpl::accounts() {
+    const json result = guarded([&]() -> LogosMap {
+        const json rows = viewCall(m_ctx, {{"view", "accounts"}}, ValueShape::Array);
+        if (!rows.is_array()) return rows;  // {error, kind}
+        json picker = json::array();
+        for (const json& row : rows) {
+            if (!row.is_object()) return errorMap(KIND_BAD_REPLY, "an accounts row is not an object");
+            json entry = json::object();
+            for (const char* field : ACCOUNT_FIELDS) entry[field] = row.value(field, json());
+            picker.push_back(entry);
+        }
+        return {{"rows", picker}};
+    });
+    // A list has no room for {error, kind}: a failure is the list's only row.
+    return result.contains("error") ? json::array({result}) : result.at("rows");
+}
+
+LogosMap AuctionEngineImpl::rescan(const LogosMap& req) {
+    return guarded([&]() -> LogosMap {
+        json page = {{"view", "scan"}, {"max_blocks", DEFAULT_RESCAN_PAGE_BLOCKS}};
+        if (req.is_object() && req.contains("max_blocks")) page["max_blocks"] = req.at("max_blocks");
+        return viewCall(m_ctx, page);
     });
 }

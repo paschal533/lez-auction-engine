@@ -1,0 +1,74 @@
+[
+  {
+    "coll_balance": "0",
+    "holding": "owner-stable",
+    "id": "7wx93ACHrg2tR8vHRBcKnVkRJTrtT7zcP3UsxcViopKg",
+    "label": "owner",
+    "role": "owner",
+    "stable_balance": null
+  },
+  {
+    "coll_balance": null,
+    "holding": "keeper-coll",
+    "id": "5HSaTMUz6UMtMRwx8yH7Z9dHWLNF9G4op6dh8DM5KKeE",
+    "label": "keeper",
+    "role": "keeper",
+    "stable_balance": null
+  },
+  {
+    "coll_balance": null,
+    "holding": null,
+    "id": "7JbHyBcLCadmDaehnRpwUoFXnLrH5CVMf313TFT2o6oA",
+    "label": "caller",
+    "role": "caller",
+    "stable_balance": null
+  },
+  {
+    "coll_balance": null,
+    "holding": "taker-stable",
+    "id": "8PnJ5BQvgTJ4AshMPka8dqFfErymYLMRdqLve6qB9tkf",
+    "label": "taker",
+    "role": "taker",
+    "stable_balance": "1000"
+  },
+  {
+    "coll_balance": null,
+    "holding": null,
+    "id": "8bdxbAHypwGqkKBPXwfeKZrReyULFmCbWkSD98KDpJCx",
+    "label": "engine-admin",
+    "role": "engine-admin",
+    "stable_balance": null
+  },
+  {
+    "coll_balance": "0",
+    "holding": "bidder-stable",
+    "id": "8cQZn4pacXzqs54AYGgqkRRGu1wgVeC4MH8qsmzqXYEq",
+    "label": "bidder",
+    "role": null,
+    "stable_balance": "1000000"
+  },
+  {
+    "coll_balance": null,
+    "holding": null,
+    "id": "AsgxpkHiPwCSaYUddMfzcHtKSnv2WcSH8etwuycTPgTd",
+    "label": "freeze",
+    "role": null,
+    "stable_balance": null
+  },
+  {
+    "coll_balance": null,
+    "holding": null,
+    "id": "HNQ2aVbCErw9h3dNXu8m7WhYZCsHCZGpeRsu6AqjSqFd",
+    "label": "host-admin",
+    "role": null,
+    "stable_balance": null
+  },
+  {
+    "coll_balance": null,
+    "holding": null,
+    "id": "2o6Ae5oEDKRmmQy4qtm8YhLhe3rGtkuNjs57it4gGdm5",
+    "label": "owner2",
+    "role": null,
+    "stable_balance": null
+  }
+]

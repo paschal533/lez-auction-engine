@@ -32,12 +32,26 @@ public:
     LogosMap blockHeight();
 
     /// Plans the request with auction_ffi, takes the primary signer's lock and sends step 0 through lez_core.
-    /// Returns `{txId, hash, what, step, steps, tracking}`; later steps are sent by txStatus.
+    /// Returns `{txId, hash, what, step, steps, tracking}`; later steps are sent by txStatus. If step 0 cannot
+    /// begin or be sent: `{error, kind, step: 0, includedSteps: 0, discardedSteps}` (as every sequence end).
     LogosMap submit(const LogosMap& req);
 
     /// `{txId}`: polls the transaction. `{state: "pending"}`, `{state: "next", step}` (inclusion sent the next
-    /// step), or the final `{state: "included"}` / `{state: "dropped"}`.
+    /// step), or the final `{state: "included"}` / `{state: "dropped", includedSteps, discardedSteps}`. Each
+    /// step takes and releases its own signer's lock; a dropped step ends the sequence (later steps never begin).
     LogosMap txStatus(const LogosMap& req);
+
+    /// Any auction_ffi view (`{view, ...}`, e.g. overview, live, auction, quote_bid) with the configured
+    /// context; returns the view's JSON or `{error, kind}`. A ctx in the request is replaced.
+    LogosMap view(const LogosMap& req);
+
+    /// The account picker: one `{label, id, role, stable_balance, coll_balance, holding}` per row of the
+    /// `accounts` view. A failure is the only row: `[{error, kind}]`.
+    LogosList accounts();
+
+    /// One page of the event scan (`{max_blocks}`, default 100, at most 500):
+    /// `{scanned_to, head, done, restarted, note}`. The caller pages until `done`; never a full scan.
+    LogosMap rescan(const LogosMap& req);
 
 private:
     LogosMap beginAndSend(const auction_engine::Budget& budget,

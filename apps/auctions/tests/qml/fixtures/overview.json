@@ -1,0 +1,38 @@
+{
+  "accounting": {
+    "buffer": "2000",
+    "debt_live": true,
+    "debt_lot_left": "500",
+    "debt_nonce": 1,
+    "debt_on_auction": "500",
+    "earliest_debt_start_ms": null,
+    "freeze_threshold": "1000",
+    "surplus_live": true,
+    "surplus_lot_left": "500",
+    "surplus_nonce": 1,
+    "unbacked_debt": "1000"
+  },
+  "block": 3,
+  "counts": {
+    "at_risk": 1,
+    "live": 1,
+    "settled": 0
+  },
+  "host": {
+    "admin": "HNQ2aVbCErw9h3dNXu8m7WhYZCsHCZGpeRsu6AqjSqFd",
+    "freeze_authority": "AsgxpkHiPwCSaYUddMfzcHtKSnv2WcSH8etwuycTPgTd",
+    "frozen": false,
+    "market_oracle": "6QWeT6FpJrm8AF1btu6WH2k2Xhq6t5vbheKVfQavmeoZ",
+    "max_oracle_age_ms": 900000,
+    "min_cr_ray": "2000000000000000000000000000"
+  },
+  "oracle": {
+    "age_ms": 0,
+    "fresh": true,
+    "max_age_ms": 3600000,
+    "price_ray": "500000000000000000000000000",
+    "range_hi_ray": "1000000000000000000000000000",
+    "range_lo_ray": "250000000000000000000000000"
+  },
+  "scanned_to": 3
+}

@@ -180,10 +180,12 @@ InsetCard {
                         confirmLabel: surplus ? qsTr("Take surplus lot") : qsTr("Take debt lot")
                     }
                 },
-                // The slippage the confirmed quote was computed with, so its limit is the one sent.
+                // The slippage the confirmed quote was computed with, so its limit is the one sent. A number read
+                // back from a reply crosses the module as a double (50.0), which the engine's u32 refuses: `| 0`
+                // sends it as an integer.
                 submit: function(q) {
                     return { action: surplus ? "take_surplus" : "take_debt", payer: payer, receiver: receiver, amount: amount,
-                             slippage_bps: q.slippage_bps }
+                             slippage_bps: Number(q.slippage_bps) | 0 }
                 }
             })
         }

@@ -46,15 +46,34 @@ Rectangle {
         // A reply for a request older than the latest is dropped.
         property int accountsGeneration: 0
 
+        // The accounts() reply as a JS array. Through the remote-objects replica a QVariantList can arrive as an
+        // array-like sequence rather than a JS Array, and an in-band failure as the bare {error, kind} map.
+        function asRows(rows) {
+            if (Array.isArray(rows))
+                return rows
+            if (!rows || typeof rows !== "object")
+                return null
+            if (rows.error)
+                return [rows]
+            if (typeof rows.length === "number")
+                return Array.prototype.slice.call(rows)
+            const keys = Object.keys(rows)
+            if (keys.length > 0 && keys.every(function(k) { return /^\d+$/.test(k) }))
+                return keys.sort(function(a, b) { return Number(a) - Number(b) }).map(function(k) { return rows[k] })
+            return null
+        }
+
         function refreshAccounts() {
             if (!root.backend)
                 return
             const gen = ++accountsGeneration
             logos.watch(root.backend.accounts(), function(rows) {
                 if (gen !== accountsGeneration) return
-                accounts = Array.isArray(rows)
-                    ? rows
-                    : [{ error: qsTr("The engine sent an unreadable account list."), kind: "bad_reply" }]
+                const list = d.asRows(rows)
+                accounts = list !== null
+                    ? list
+                    : [{ error: qsTr("The engine sent an unreadable account list (%1).")
+                                    .arg(String(JSON.stringify(rows)).substring(0, 160)), kind: "bad_reply" }]
             }, function(err) {
                 if (gen === accountsGeneration) accounts = [{ error: String(err), kind: "ipc" }]
             })

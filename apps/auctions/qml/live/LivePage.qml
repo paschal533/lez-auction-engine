@@ -78,7 +78,7 @@ Item {
                     return
                 }
                 setListNotice("", null)
-                items = Array.isArray(reply.items) ? reply.items : []
+                items = Format.list(reply.items)
                 const sorted = list.sortItems(items)
                 if (!sorted.some(function(it) { return it.id === selectedId }))
                     selectedId = sorted.length > 0 ? String(sorted[0].id) : ""

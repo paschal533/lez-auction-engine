@@ -5,6 +5,7 @@ import Logos.Theme
 import Logos.Controls
 
 import "../common"
+import "../common/Format.js" as Format
 
 // The Settled tab (board v5): the settled auctions on the left, the selected one's panel on the right. There is
 // no poll (R28): the screen reads `view settled` and the selected `auction` when it is shown, after a claim's
@@ -70,7 +71,7 @@ Item {
                     return
                 }
                 setListNotice("", null)
-                items = Array.isArray(reply.items) ? reply.items : []
+                items = Format.list(reply.items)
                 scannedTo = reply.scanned_to !== undefined && reply.scanned_to !== null ? Number(reply.scanned_to) : -1
                 if (!items.some(function(it) { return it.id === selectedId }))
                     selectedId = items.length > 0 ? String(items[0].id) : ""

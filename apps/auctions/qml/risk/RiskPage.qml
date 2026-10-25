@@ -5,6 +5,7 @@ import Logos.Theme
 import Logos.Controls
 
 import "../common"
+import "../common/Format.js" as Format
 
 // The At-risk positions tab (board v4): the scanned positions on the left (lowest CR first), the selected
 // position's panel on the right. There is no overview poll (R28): the screen reads `view at_risk`, the selected
@@ -75,7 +76,7 @@ Item {
                     return
                 }
                 setListNotice("", null)
-                items = Array.isArray(reply.items) ? reply.items : []
+                items = Format.list(reply.items)
                 scannedTo = reply.scanned_to !== undefined && reply.scanned_to !== null ? Number(reply.scanned_to) : -1
                 const sorted = list.sortItems(items)
                 if (!sorted.some(function(it) { return it.position === selectedId }))

@@ -12,6 +12,7 @@ TestCase {
 
     property var calls: []
     property var submitReply: ({ txId: "tx1" })
+    property var accountsReply: []
 
     // Theme keeps its settings in QSettings, which needs an application identity.
     function initTestCase() {
@@ -40,7 +41,7 @@ TestCase {
         // The stub runs the success callback at once, with a canned reply per request.
         function watch(promise, ok, err) {
             if (promise && promise.call === "accounts")
-                ok([])
+                ok(testCase.accountsReply)
             else if (promise && promise.action === "token_transfer")
                 ok(testCase.submitReply)
             else
@@ -126,5 +127,19 @@ TestCase {
         verify(findChild(main, "devTransferSubmit").enabled)
         testCase.submitReply = { txId: "tx1" }
         main.destroy()
+    }
+
+    // Live run 1: through the remote-objects replica accounts() arrived as an array-like, not a JS Array, and
+    // the picker showed "unreadable account list". It is read as rows.
+    function test_accounts_reply_as_array_like_is_read() {
+        testCase.accountsReply = { length: 1, 0: { label: "admin", id: "HNQ2aVbCErw9h3dNXu8m7WhYZCsHCZGpeRsu6AqjSqFd",
+                                                   role: "admin", stable_balance: null, coll_balance: null, holding: null } }
+        const main = createMain()
+        verify(!findChild(main, "accountsNotice").shown, "no unreadable-list notice")
+        const picker = findChild(main, "accountPickerRoot")
+        compare(picker.accounts.length, 1, "the row reached the picker")
+        compare(picker.accounts[0].label, "admin")
+        main.destroy()
+        testCase.accountsReply = []
     }
 }

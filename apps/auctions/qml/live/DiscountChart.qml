@@ -50,10 +50,12 @@ Item {
 
         readonly property var raw: {
             const out = []
-            const rows = root.schedule || []
-            for (let i = 0; i < rows.length; i++)
-                if (rows[i] && rows[i].length === 2)
-                    out.push({ t: Number(rows[i][0]), pct: pct(rows[i][1]) })
+            const rows = Format.list(root.schedule)
+            for (let i = 0; i < rows.length; i++) {
+                const pair = Format.list(rows[i])
+                if (pair.length === 2)
+                    out.push({ t: Number(pair[0]), pct: pct(pair[1]) })
+            }
             return out
         }
         readonly property real lastT: raw.length > 0 ? raw[raw.length - 1].t : 1

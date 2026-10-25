@@ -22,7 +22,7 @@ Item {
 
     readonly property alias popup: popup
     readonly property var failure: rows && rows.length > 0 && rows[0] && rows[0].error ? rows[0] : null
-    readonly property var accounts: failure ? [] : (rows || []).filter(function(r) {
+    readonly property var accounts: failure ? [] : Format.list(rows).filter(function(r) {
         return r && r.label && root.devKeys.indexOf(r.label) < 0 && root.devKeys.indexOf(r.role) < 0
     })
     readonly property var activeRow: {

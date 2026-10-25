@@ -19,6 +19,7 @@ ALL_GOOD = [("crates/auction_core/src/math.rs", 100, 90),
             ("programs/auction_engine/core/src/state.rs", 100, 90),
             ("programs/auction_engine/src/bid.rs", 100, 90),
             ("crates/auction_sdk/src/quote.rs", 100, 90),
+            ("crates/auction_ffi/src/view.rs", 100, 90),
             ("cli/src/env.rs", 100, 90)]
 
 

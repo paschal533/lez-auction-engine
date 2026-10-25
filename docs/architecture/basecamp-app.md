@@ -32,3 +32,34 @@ XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir $BASECAMP_BIN --user-dir "$(mktemp -d)" \
 ```
 
 Result: the app starts, the log shows `Inspector server listening on port 3768`, and a TCP connection to `localhost:3768` is accepted. Without `XDG_RUNTIME_DIR` Basecamp aborts in WSL. `--user-dir` keeps the run out of `./.logos-basecamp-dev`.
+
+## Skeleton end-to-end (lez_core proof)
+
+`scripts/basecamp/run-app.sh` runs the Auctions app in standalone Basecamp against a localnet:
+
+```bash
+scripts/basecamp/run-app.sh [--setup] [--test FILE]
+```
+
+- `--setup` first runs `scripts/demo.sh --setup-only --sequencer-dev-mode 1`: the demo phases `accounts` to `positions`, then it keeps the sequencer running and prints `AUCTIONS_DEPLOYMENT=… LEE_WALLET_HOME_DIR=…` (the run's filled deployment file and wallet, never `deployments/localnet.json`).
+- It builds `modules/auction_engine#install` and `apps/auctions#install` (result links under `~/lez-target/basecamp/`) and launches `$BASECAMP_BIN --modules-dir $LEZ_CORE_ROOT --modules-dir <auction_engine install> --module <auctions install>` with that environment, `AUCTIONS_STATE_DIR=<run dir>/cli-state` (the CLI's locks) and `XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir`. The Basecamp log is `<run dir>/logs/basecamp.log`.
+- `--test FILE` runs `node FILE` against the inspector on port 3768 (logos-qt-mcp from Basecamp `e09962f5`), exits with its code, and stops Basecamp and, with `--setup`, the sequencer. Without `--test` both keep running.
+
+`apps/auctions/tests/skeleton.mjs` opens Dev tools, transfers `1` from `owner-stable` to `taker-stable`, waits up to 120 s for `devTransferStatus` to read `Done`, and checks with `auction-cli dev balance --account taker-stable` that the balance rose by 1. `SKELETON_SCREENSHOT=<png>` also saves a screenshot of the header and the five tabs.
+
+Result (2026-10-25, inside WSL, Basecamp `e09962f5`, lez_core `acf0cd50`, sequencer in dev mode):
+
+```text
+$ scripts/basecamp/run-app.sh --setup --test apps/auctions/tests/skeleton.mjs
+...
+Running 1 test(s)...
+
+    taker-stable balance: 0 -> 1
+  ✓ skeleton: Dev tools token transfer goes through lez_core and lands on chain
+
+1 passed, 0 failed
+```
+
+So `lez_core` loads in Basecamp master, accepts the plan's account ids, signer flags, instruction words as little-endian bytes and the program id hex, and sends a transaction that the sequencer includes (ADR-018). The keystore signing fallback is not needed.
+
+![Auctions app skeleton in Basecamp](img/skeleton.png)

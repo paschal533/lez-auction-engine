@@ -169,3 +169,17 @@ demo_scenario() {
     demo_run_phase "$name" "$title" "$fn"
   done
 }
+
+# Runs the phases in order up to and including LAST (scripts/demo.sh --setup-only); an unknown name fails.
+demo_scenario_until() {
+  local last="$1" entry name title fn
+  if [[ " ${DEMO_PHASES[*]%%|*} " != *" $last "* ]]; then
+    echo "demo_scenario_until: no phase named $last" >&2
+    return 1
+  fi
+  for entry in "${DEMO_PHASES[@]}"; do
+    IFS='|' read -r name title fn <<<"$entry"
+    demo_run_phase "$name" "$title" "$fn"
+    if [[ "$name" == "$last" ]]; then return 0; fi
+  done
+}

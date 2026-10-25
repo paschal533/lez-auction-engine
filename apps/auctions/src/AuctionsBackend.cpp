@@ -9,7 +9,7 @@ namespace {
 const char ENV_DEPLOYMENT[] = "AUCTIONS_DEPLOYMENT";
 const char ENV_STATE_DIR[] = "AUCTIONS_STATE_DIR";
 const char ENV_WALLET_HOME[] = "LEE_WALLET_HOME_DIR";
-// The header's block height and node notice: one `overview` view per interval (it carries the block).
+// The header's block height and node notice: one cheap height read per interval (R28).
 const int CHAIN_POLL_MS = 5000;
 const char KIND_CHAIN[] = "chain";
 
@@ -60,17 +60,22 @@ void AuctionsBackend::start()
 
 void AuctionsBackend::refreshChain()
 {
-    const QVariantMap reply =
-        m_logos->auction_engine.view(QVariantMap{{QStringLiteral("view"), QStringLiteral("overview")}});
+    // R28: the heartbeat is the module's cheap height read; screens fetch the views they show themselves.
+    const QVariantMap reply = m_logos->auction_engine.blockHeight();
     if (reply.contains(QStringLiteral("error"))) {
-        // A `chain` failure is the node not answering: the header says so (noteChainFailure). Any other kind
-        // is an engine fault worth showing. Neither touches a transaction lane: its own txStatus poll decides.
-        if (!noteChainFailure(reply))
-            failed(reply);
+        // `chain`: the node is not answering; the header says so and the next good beat recovers.
+        // Another kind is an engine fault, shown once: the same error is not re-set every beat.
+        if (!noteChainFailure(reply)) {
+            const QString error = reply.value(QStringLiteral("error")).toString();
+            if (error != m_lastBeatError)
+                failed(reply);
+            m_lastBeatError = error;
+        }
         return;
     }
+    m_lastBeatError.clear();
     setNodeReachable(true);
-    setBlockHeight(reply.value(QStringLiteral("block")).toInt());
+    setBlockHeight(reply.value(QStringLiteral("height")).toInt());
     clearErrorOnSuccess(reply);
 }
 

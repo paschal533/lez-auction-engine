@@ -28,7 +28,7 @@ public:
     /// `{opened: false, alreadyOpen: true}`.
     LogosMap openWallet();
 
-    /// The wallet's view of the chain height: `{height}`.
+    /// The wallet's view of the chain height: `{height}`; no height is `{error, kind: "chain"}` (the app heartbeat).
     LogosMap blockHeight();
 
     /// Plans the request with auction_ffi, takes the primary signer's lock and sends step 0 through lez_core.
@@ -36,8 +36,11 @@ public:
     /// begin or be sent: `{error, kind, step: 0, includedSteps: 0, discardedSteps}` (as every sequence end).
     LogosMap submit(const LogosMap& req);
 
-    /// `{txId}`: polls the transaction. `{state: "pending"}`, `{state: "next", step}` (inclusion sent the next
-    /// step), or the final `{state: "included"}` / `{state: "dropped", includedSteps, discardedSteps}`. Each
+    /// `{txId}`: polls the transaction. `{state: "pending", blocks_waited, drop_after_blocks}`, `{state: "next",
+    /// step}` (inclusion sent the next step), or the final `{state: "included"}` / `{state: "dropped",
+    /// drop_after_blocks, outcome: "dropped", includedSteps, discardedSteps}`. A step whose begin or send
+    /// fails ends the sequence: `{error, kind, outcome: "not_sent"|"dropped"|"unknown", step, includedSteps,
+    /// discardedSteps}`. Each
     /// step takes and releases its own signer's lock; a dropped step ends the sequence (later steps never begin).
     LogosMap txStatus(const LogosMap& req);
 
@@ -59,6 +62,8 @@ private:
                           nlohmann::json& tracking,
                           std::string& hash);
     std::string walletHome() const;
+    /// The configured ctx's `drop_after_blocks`, else the SDK default 5; echoed in pending/dropped txStatus.
+    int dropAfterBlocks() const;
     bool walletIsOpen();
 
     nlohmann::json m_ctx;

@@ -175,8 +175,11 @@ LOGOS_TEST(block_height_is_the_wallet_height) {
 
     LOGOS_ASSERT_EQ(h.module.blockHeight()["height"].get<int>(), 7);
 
+    // No height is the node not answering (the app's heartbeat shows "Node not answering" on `chain`).
     h.context.mockModule("lez_core", "get_current_block_height").returns(0);
-    LOGOS_ASSERT_TRUE(h.module.blockHeight().contains("error"));
+    const LogosMap r = h.module.blockHeight();
+    LOGOS_ASSERT_TRUE(r.contains("error"));
+    LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("chain"));
 }
 
 // ---- R10: one 15 s budget across the FFI calls and the lez_core send of a module call ----
@@ -519,9 +522,12 @@ LOGOS_TEST(every_sequence_end_reports_included_and_discarded_steps_the_same_way)
         h.ffi("auction_ffi_tx_begin", failed("in_flight", "SignerA has a transaction in flight"));
         const LogosMap r = h.module.submit({{"action", "oracle_publish"}, {"price", "1000"}});
         LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("in_flight"));
+        LOGOS_ASSERT_EQ(r["outcome"].get<std::string>(), std::string("not_sent"));
         LOGOS_ASSERT_EQ(r["step"].get<int>(), 0);
         LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 0);
         LOGOS_ASSERT_EQ(r["discardedSteps"].get<int>(), 2);
+        // No lock was taken, so none is ended.
+        LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_end"), 0);
     }
     // Send failure of step 0 (submit).
     {
@@ -531,9 +537,12 @@ LOGOS_TEST(every_sequence_end_reports_included_and_discarded_steps_the_same_way)
             .returns(json{{"success", false}, {"tx_hash", ""}, {"error", "refused"}}.dump());
         const LogosMap r = h.module.submit({{"action", "oracle_publish"}, {"price", "1000"}});
         LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("send"));
+        LOGOS_ASSERT_EQ(r["outcome"].get<std::string>(), std::string("dropped"));
         LOGOS_ASSERT_EQ(r["step"].get<int>(), 0);
         LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 0);
         LOGOS_ASSERT_EQ(r["discardedSteps"].get<int>(), 2);
+        LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_end"), 1);
+        LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_end")["outcome"].get<std::string>(), std::string("dropped"));
     }
     // Begin failure of step 1 (txStatus after step 0 is included): one on chain, one discarded.
     {
@@ -544,9 +553,12 @@ LOGOS_TEST(every_sequence_end_reports_included_and_discarded_steps_the_same_way)
         h.ffi("auction_ffi_tx_begin", failed("in_flight", "SignerB has a transaction in flight"));
         const LogosMap r = h.module.txStatus({{"txId", first["txId"]}});
         LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("in_flight"));
+        LOGOS_ASSERT_EQ(r["outcome"].get<std::string>(), std::string("not_sent"));
         LOGOS_ASSERT_EQ(r["step"].get<int>(), 1);
         LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 1);
         LOGOS_ASSERT_EQ(r["discardedSteps"].get<int>(), 1);
+        LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_end"), 1);
+        LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_end")["outcome"].get<std::string>(), std::string("included"));
     }
     // Send failure of step 1 (txStatus).
     {
@@ -559,8 +571,58 @@ LOGOS_TEST(every_sequence_end_reports_included_and_discarded_steps_the_same_way)
             .returns(json{{"success", false}, {"tx_hash", ""}, {"error", "refused"}}.dump());
         const LogosMap r = h.module.txStatus({{"txId", first["txId"]}});
         LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("send"));
+        LOGOS_ASSERT_EQ(r["outcome"].get<std::string>(), std::string("dropped"));
         LOGOS_ASSERT_EQ(r["step"].get<int>(), 1);
         LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 1);
         LOGOS_ASSERT_EQ(r["discardedSteps"].get<int>(), 1);
+        const std::vector<json> ended = h.requests("auction_ffi_tx_end");
+        LOGOS_ASSERT_EQ(static_cast<int>(ended.size()), 2);
+        LOGOS_ASSERT_EQ(ended[0]["outcome"].get<std::string>(), std::string("included"));
+        LOGOS_ASSERT_EQ(ended[1]["outcome"].get<std::string>(), std::string("dropped"));
     }
+    // A send of step 1 whose fate is not known (unreadable lez_core reply): unknown, the lock is kept.
+    {
+        Harness h;
+        h.preparedSteps(oraclePublishSteps());
+        h.ffi("auction_ffi_tx_poll", ok({{"state", "included"}, {"nonce_after", "1"}}));
+        const LogosMap first = h.module.submit({{"action", "oracle_publish"}, {"price", "1000"}});
+        h.ffi("auction_ffi_tx_begin", ok(tracking(SIGNER_B)));
+        h.context.mockModule("lez_core", SEND).returns(std::string("not json"));
+        const LogosMap r = h.module.txStatus({{"txId", first["txId"]}});
+        LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("send"));
+        LOGOS_ASSERT_EQ(r["outcome"].get<std::string>(), std::string("unknown"));
+        LOGOS_ASSERT_EQ(r["step"].get<int>(), 1);
+        LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 1);
+        LOGOS_ASSERT_EQ(r["discardedSteps"].get<int>(), 1);
+        LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_end")["outcome"].get<std::string>(), std::string("unknown"));
+    }
+    // A dropped step (tx_poll) ends the sequence with outcome dropped too.
+    {
+        Harness h;
+        h.prepared(1);
+        h.ffi("auction_ffi_tx_poll", ok({{"state", "dropped"}, {"height", 16}}));
+        const LogosMap first = h.submit();
+        const LogosMap r = h.module.txStatus({{"txId", first["txId"]}});
+        LOGOS_ASSERT_EQ(r["outcome"].get<std::string>(), std::string("dropped"));
+        LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 0);
+    }
+}
+
+LOGOS_TEST(tx_status_echoes_drop_after_blocks_default_five) {
+    Harness h;
+    h.prepared(1);
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "pending"}, {"blocks_waited", 1}}));
+    const LogosMap first = h.submit();
+    LOGOS_ASSERT_EQ(h.module.txStatus({{"txId", first["txId"]}})["drop_after_blocks"].get<int>(), 5);
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "dropped"}, {"height", 16}}));
+    LOGOS_ASSERT_EQ(h.module.txStatus({{"txId", first["txId"]}})["drop_after_blocks"].get<int>(), 5);
+}
+
+LOGOS_TEST(tx_status_echoes_drop_after_blocks_from_the_ctx) {
+    Harness h;
+    h.module.configure({{"deployment", "/d/deployment.json"}, {"state_dir", "/state"}, {"drop_after_blocks", 8}});
+    h.prepared(1);
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "pending"}, {"blocks_waited", 1}}));
+    const LogosMap first = h.submit();
+    LOGOS_ASSERT_EQ(h.module.txStatus({{"txId", first["txId"]}})["drop_after_blocks"].get<int>(), 8);
 }

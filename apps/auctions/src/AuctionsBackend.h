@@ -14,8 +14,8 @@ class LogosAPI;
 struct LogosModules;
 
 // Source side of the AuctionsBackend .rep contract. The auction logic lives in the auction_engine
-// core module; this class owns the startup sequence (configure, open the wallet), the 5 s block poll
-// (`overview` view -> blockHeight, nodeReachable), and forwards each slot to modules().auction_engine.
+// core module; this class owns the startup sequence (configure, open the wallet), the 5 s heartbeat
+// (auction_engine.blockHeight -> blockHeight, nodeReachable), and forwards each slot to modules().auction_engine.
 class AuctionsBackend : public AuctionsBackendSimpleSource {
     Q_OBJECT
 
@@ -42,6 +42,8 @@ private:
     LogosAPI* m_logosAPI;
     std::unique_ptr<LogosModules> m_logos;
     QTimer m_chainTimer;
+    // The last non-chain heartbeat error, so a repeating fault is reported once rather than every beat.
+    QString m_lastBeatError;
 };
 
 #endif // AUCTIONS_BACKEND_H

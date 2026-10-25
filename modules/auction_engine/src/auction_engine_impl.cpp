@@ -24,11 +24,20 @@ constexpr const char* KIND_SEND = "send";
 constexpr const char* KIND_FFI = "ffi";
 constexpr const char* KIND_UNKNOWN_TX = "unknown_tx";
 constexpr const char* KIND_WALLET = "wallet";
+constexpr const char* KIND_CHAIN = "chain";
 constexpr const char* DEFAULT_WALLET_SUBDIR = "/.lee/wallet";
 // One rescan page: one getBlockRange batch (ScanSettings::default().batch in auction_sdk) plus the head and
 // anchor reads, so a page needs few reads of the 4 s a view call gets after the read overrun (budget.h).
 // auction_ffi caps a page at 500 blocks; a caller may ask for any size up to that.
 constexpr int DEFAULT_RESCAN_PAGE_BLOCKS = 100;
+// auction_sdk ConfirmSettings::default().drop_after_blocks; the ctx may override it (auction_ffi ctx.rs).
+constexpr int DEFAULT_DROP_AFTER_BLOCKS = 5;
+// What became of a step whose begin or send failed (R27). `not_sent`: no lock was taken and nothing reached
+// the node; `dropped`: the lock was released, nothing reached the node; `unknown`: the send's fate is not
+// known, the lock is kept.
+constexpr const char* OUTCOME_NOT_SENT = "not_sent";
+constexpr const char* OUTCOME_DROPPED = "dropped";
+constexpr const char* OUTCOME_UNKNOWN = "unknown";
 // The fields of an account picker row (auction_sdk views::AccountView).
 constexpr const char* ACCOUNT_FIELDS[] = {"label", "id", "role", "stable_balance", "coll_balance", "holding"};
 
@@ -143,10 +152,16 @@ json viewCall(const json& ctx, const json& req, ValueShape shape = ValueShape::O
 
 /// Where a sequence ended: `failedStep` was dropped or could not be sent, the steps before it are on chain and
 /// the steps after it are discarded, never begun. Every sequence end reports the same three fields.
-void markSequenceEnd(json& status, int failedStep, std::size_t stepCount) {
+void markSequenceEnd(json& status, int failedStep, std::size_t stepCount, const std::string& outcome) {
+    status["outcome"] = outcome;
     status["step"] = failedStep;
     status["includedSteps"] = failedStep;
     status["discardedSteps"] = static_cast<int>(stepCount) - failedStep - 1;
+}
+
+LogosMap withOutcome(LogosMap error, const char* outcome) {
+    error["outcome"] = outcome;
+    return error;
 }
 
 bool hasStrings(const json& object, const char* key) {
@@ -177,6 +192,12 @@ LogosMap AuctionEngineImpl::configure(const LogosMap& ctx) {
                 {"dev", view.value.value("dev", false)},
                 {"config", view.value.value("config", json())}};
     });
+}
+
+int AuctionEngineImpl::dropAfterBlocks() const {
+    const auto it = m_ctx.find("drop_after_blocks");
+    if (it == m_ctx.end() || !it->is_number_integer() || it->get<int>() < 1) return DEFAULT_DROP_AFTER_BLOCKS;
+    return it->get<int>();
 }
 
 std::string AuctionEngineImpl::walletHome() const {
@@ -210,56 +231,64 @@ LogosMap AuctionEngineImpl::openWallet() {
 LogosMap AuctionEngineImpl::blockHeight() {
     return guarded([&]() -> LogosMap {
         const std::int64_t height = modules().lez_core.get_current_block_height();
-        if (height <= 0) return errorMap(KIND_WALLET, "the wallet is closed or the node is unreachable");
+        // The app calls this as its heartbeat once the wallet is open, so no height reads as node trouble.
+        if (height <= 0) return errorMap(KIND_CHAIN, "the node did not answer (or the wallet is closed)");
         return {{"height", height}};
     });
 }
 
 /// Checks the step, takes its primary-signer lock (tx_begin), then sends it through lez_core. On return without
-/// an error `tracking` and `hash` are set and the lock is held. A failure releases the lock it took: `dropped`
-/// when nothing reached the node, `unknown` (lock kept) when the send's outcome is not known.
+/// an error `tracking` and `hash` are set and the lock is held. Every error carries `outcome`: `not_sent` when
+/// no lock was taken (bad step, tx_begin failed), else what the lock was ended with: `dropped` (released,
+/// nothing reached the node) or `unknown` (kept, the send's fate is not known).
 LogosMap AuctionEngineImpl::beginAndSend(const Budget& budget,
                                          const json& step,
                                          json& tracking,
                                          std::string& hash) {
-    if (!hasStrings(step, "signers")) return errorMap(KIND_BAD_PLAN, "plan step has no signer");
+    if (!hasStrings(step, "signers"))
+        return withOutcome(errorMap(KIND_BAD_PLAN, "plan step has no signer"), OUTCOME_NOT_SENT);
     LezArgs args;
     try {
         args = toLezArgs(step);  // before the lock: a bad plan costs no lock
     } catch (const std::invalid_argument& e) {
-        return errorMap(KIND_BAD_PLAN, e.what());
+        return withOutcome(errorMap(KIND_BAD_PLAN, e.what()), OUTCOME_NOT_SENT);
     }
     const FfiResult begun = budgetedCall(auction_ffi_tx_begin, {{"signer", step.at("signers").at(0)}}, m_ctx,
                                          budget, auction_engine::TX_READ_OVERRUN_MS);
-    if (!begun.ok) return errorOf(begun);
+    if (!begun.ok) return withOutcome(errorOf(begun), OUTCOME_NOT_SENT);
     tracking = begun.value;
 
     if (!budget.hasAtLeast(auction_engine::MIN_SEND_START_MS)) {
-        return errorMap(KIND_BUDGET, "not enough of the call's time budget is left to send the transaction"
-                                         + endTracking(m_ctx, tracking, "dropped"));
+        return withOutcome(errorMap(KIND_BUDGET, "not enough of the call's time budget is left to send the transaction"
+                                         + endTracking(m_ctx, tracking, OUTCOME_DROPPED)),
+                           OUTCOME_DROPPED);
     }
 
     logos::CallError callError;
     const std::string raw = modules().lez_core.send_generic_public_transaction(
         args.accountIds, args.signers, args.instruction, args.programIdHex, &callError);
     if (!callError.ok()) {
-        return errorMap(KIND_SEND, "lez_core did not answer the send: it may or may not have reached the node"
-                                       + endTracking(m_ctx, tracking, "unknown"));
+        return withOutcome(errorMap(KIND_SEND, "lez_core did not answer the send: it may or may not have reached the node"
+                                         + endTracking(m_ctx, tracking, OUTCOME_UNKNOWN)),
+                           OUTCOME_UNKNOWN);
     }
     const json sent = json::parse(raw, nullptr, false);
     if (!sent.is_object() || !sent.contains("success") || !sent.at("success").is_boolean()) {
-        return errorMap(KIND_SEND, "lez_core sent an unreadable reply: the send may or may not have reached the node"
-                                       + endTracking(m_ctx, tracking, "unknown"));
+        return withOutcome(errorMap(KIND_SEND, "lez_core sent an unreadable reply: the send may or may not have reached the node"
+                                         + endTracking(m_ctx, tracking, OUTCOME_UNKNOWN)),
+                           OUTCOME_UNKNOWN);
     }
     if (!sent.at("success").get<bool>()) {
         const std::string why = textOf(sent, "error");
-        return errorMap(KIND_SEND, (why.empty() ? std::string("lez_core refused the transaction") : why)
-                                       + endTracking(m_ctx, tracking, "dropped"));
+        return withOutcome(errorMap(KIND_SEND, (why.empty() ? std::string("lez_core refused the transaction") : why)
+                                         + endTracking(m_ctx, tracking, OUTCOME_DROPPED)),
+                           OUTCOME_DROPPED);
     }
     hash = textOf(sent, "tx_hash");
     if (hash.empty()) {
-        return errorMap(KIND_SEND, "lez_core reported success without a transaction hash: the send may have reached the node"
-                                       + endTracking(m_ctx, tracking, "unknown"));
+        return withOutcome(errorMap(KIND_SEND, "lez_core reported success without a transaction hash: the send may have reached the node"
+                                         + endTracking(m_ctx, tracking, OUTCOME_UNKNOWN)),
+                           OUTCOME_UNKNOWN);
     }
     return json::object();
 }
@@ -279,7 +308,7 @@ LogosMap AuctionEngineImpl::submit(const LogosMap& req) {
         const LogosMap sent = beginAndSend(budget, steps.at(0), tracking, hash);
         if (sent.contains("error")) {
             LogosMap failed = sent;
-            markSequenceEnd(failed, 0, steps.size());
+            markSequenceEnd(failed, 0, steps.size(), textOf(sent, "outcome"));
             return failed;
         }
 
@@ -316,13 +345,15 @@ LogosMap AuctionEngineImpl::txStatus(const LogosMap& req) {
         if (state == "pending") {
             status["state"] = "pending";
             status["blocks_waited"] = polled.value.value("blocks_waited", 0);
+            status["drop_after_blocks"] = dropAfterBlocks();
             return status;
         }
         if (state == "dropped") {
             // The sequence stops at the dropped step: the steps after it are discarded, never begun.
             status["state"] = "dropped";
             status["height"] = polled.value.value("height", 0);
-            markSequenceEnd(status, step, stepCount);
+            status["drop_after_blocks"] = dropAfterBlocks();
+            markSequenceEnd(status, step, stepCount, OUTCOME_DROPPED);
             const std::string note = endTracking(m_ctx, entry.at("tracking"), "dropped");
             m_pending.erase(found);
             if (!note.empty()) status["note"] = note;
@@ -349,7 +380,7 @@ LogosMap AuctionEngineImpl::txStatus(const LogosMap& req) {
         if (sent.contains("error")) {
             // Step `step` is on chain, the next one is not sent and nothing is waited on: the sequence ends here.
             LogosMap failed = sent;
-            markSequenceEnd(failed, step + 1, stepCount);
+            markSequenceEnd(failed, step + 1, stepCount, textOf(sent, "outcome"));
             if (!note.empty()) failed["note"] = note;
             m_pending.erase(found);
             return failed;

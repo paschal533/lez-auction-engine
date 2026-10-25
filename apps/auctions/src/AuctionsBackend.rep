@@ -12,8 +12,8 @@ class AuctionsBackend
     // replica setter, backend.setActiveAccount(label), gives the view the same call.
     PROP(QString activeAccount READWRITE)
     PROP(int blockHeight READONLY)
-    // False once a read fails with kind `chain` (node or RPC not answering); true again when the 5 s
-    // block poll (`overview` view) succeeds.
+    // False once a read fails with kind `chain` (node or RPC not answering); true again on the next good
+    // 5 s heartbeat (auction_engine blockHeight).
     PROP(bool nodeReachable READONLY)
     // The last error a slot or the startup sequence reported; empty when none.
     PROP(QString lastError READONLY)

@@ -89,6 +89,36 @@ export function liquidate(position) {
   ];
 }
 
+// Claim the leftover collateral of a settled auction from the Settled tab as its position's owner (the signing
+// account must be the owner: the button is disabled for anyone else). Rescan first: the auction the final bid
+// settled reaches the list through the scan cursor. The leftover goes to the owner's <label>-coll holding.
+export function claimLeftover(auction) {
+  return [
+    { id: "claim-open-settled", segment: "task-14", caption: "Open the settled auctions.",
+      action: "click", target: "tabSettled" },
+    { id: "claim-rescan", segment: "task-14", caption: "Rescan: the scan picks up the auction the final bid settled.",
+      action: "click", target: "settledRescan" },
+    { id: "claim-rescan-done", segment: "task-14", caption: "The scan has caught up with the chain.",
+      action: "waitFor", target: "settledRescan", property: "enabled", value: true, timeoutMs: 30000 },
+    { id: "claim-pick-auction", segment: "task-14",
+      caption: "Pick the auction: the target was raised, so collateral is left over for the owner.",
+      action: "click", target: `settledItem_${auction}` },
+    { id: "claim-ready", segment: "task-14",
+      caption: "Signed in as the owner, the claim is open; anyone else sees who may claim.",
+      action: "waitFor", target: "claimSubmit", property: "enabled", value: true, timeoutMs: 10000 },
+    { id: "claim-start", segment: "task-14", caption: "Claim: a fresh read of the auction opens the confirmation.",
+      action: "click", target: "claimSubmit" },
+    { id: "claim-dialog", segment: "task-14", caption: "Check the claim before it is sent.",
+      action: "waitFor", target: "settledTxDialog", property: "opened", value: true, timeoutMs: 10000 },
+    { id: "claim-confirm", segment: "task-14", caption: "Confirm: the owner signs and sends it.",
+      action: "click", target: "settledTxConfirm" },
+    { id: "claim-included", segment: "task-14", caption: "Included: the leftover is in the owner's holding.",
+      action: "waitFor", target: "settledTxLane", property: "state", value: "done", timeoutMs: 120000 },
+    { id: "claim-claimed", segment: "task-14", caption: "The auction now shows what was claimed.",
+      action: "waitFor", target: "claimClaimed", property: "visible", value: true, timeoutMs: 10000 },
+  ];
+}
+
 export const STORY_STEPS = [
   // ---- Task 11: shell. Pick the account that signs; the header follows. ----
   {
@@ -146,4 +176,7 @@ export const STORY_STEPS = [
   },
   ...bidPartial(AUCTION_P0, 100000),
   ...bidFinal(AUCTION_P0, 230000),
+
+  // ---- Task 14: Settled. Still signed in as the owner, claim what the final bid left over. ----
+  ...claimLeftover(AUCTION_P0),
 ];

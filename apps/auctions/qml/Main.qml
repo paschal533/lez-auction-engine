@@ -10,11 +10,21 @@ import "shell"
 import "dev"
 import "live"
 import "risk"
+import "settled"
 
 Rectangle {
     id: root
 
     readonly property var backend: logos.module("auctions")
+    // The section the System tab should show when it opens ("accounting" from a Settled shortfall). Task 15's
+    // System screen reads it; until then it only records the request.
+    property string systemSection: ""
+
+    // Switch to the System tab (index 3) at `section`.
+    function openSystem(section) {
+        systemSection = section
+        header.currentIndex = 3
+    }
 
     color: Theme.palette.background
 
@@ -125,7 +135,12 @@ Rectangle {
                 accounts: d.accounts
                 activeAccount: root.backend ? root.backend.activeAccount : ""
             }
-            EmptyPanel { heading: qsTr("Settled") }
+            SettledPage {
+                backend: root.backend
+                accounts: d.accounts
+                activeAccount: root.backend ? root.backend.activeAccount : ""
+                onSystemRequested: function(section) { root.openSystem(section) }
+            }
             EmptyPanel { heading: qsTr("System") }
             DevPage {
                 objectName: "devPage"

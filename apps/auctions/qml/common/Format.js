@@ -75,6 +75,25 @@ function subtract(a, b) {
     return stripZeros(out)
 }
 
+// add("600000", "60000") -> "660000": the sum of two decimal strings, digit by digit (no double).
+// Input that is not digits gives "".
+function add(a, b) {
+    var x = stripZeros(String(a))
+    var y = stripZeros(String(b))
+    if (!isDigits(x) || !isDigits(y))
+        return ""
+    var out = ""
+    var carry = 0
+    for (var i = 0; i < Math.max(x.length, y.length); i++) {
+        var dx = i < x.length ? x.charCodeAt(x.length - 1 - i) - 48 : 0
+        var dy = i < y.length ? y.charCodeAt(y.length - 1 - i) - 48 : 0
+        var d = dx + dy + carry
+        carry = d >= 10 ? 1 : 0
+        out = String(d % 10) + out
+    }
+    return carry > 0 ? "1" + out : out
+}
+
 // fixed("12345", 2, 1) -> "123.4": the value decString / 10^decimals truncated (floored) to exactly `places`
 // fraction digits, whole part grouped, as the CLI prints (cli/src/output.rs bps(), R32). Input that is not
 // digits comes back unchanged.

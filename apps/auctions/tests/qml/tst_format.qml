@@ -135,4 +135,15 @@ TestCase {
         compare(Format.fixed(Format.mul("600001", "500000000000000000000000000"), Format.RAY_DECIMALS, 0), "300,000")
         compare(Format.fixed(Format.mul("15900", "752000000000000000000000"), Format.RAY_DECIMALS, 3), "11.956")
     }
+
+    // Sums of u128 decimal strings (the settled bar checks debt_repaid + penalty against raised), no double.
+    function test_add_keeps_all_digits() {
+        compare(Format.add("0", "0"), "0")
+        compare(Format.add("600000", "60000"), "660000")
+        compare(Format.add("999", "1"), "1000")
+        compare(Format.add("340282366920938463463374607431768211455", "1"),
+                "340282366920938463463374607431768211456")
+        compare(Format.add("007", "05"), "12")
+        compare(Format.add("1.5", "2"), "", "not digits: no sum")
+    }
 }

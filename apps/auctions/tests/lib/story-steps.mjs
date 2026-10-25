@@ -90,10 +90,14 @@ export function liquidate(position) {
 }
 
 // Claim the leftover collateral of a settled auction from the Settled tab as its position's owner (the signing
-// account must be the owner: the button is disabled for anyone else). Rescan first: the auction the final bid
-// settled reaches the list through the scan cursor. The leftover goes to the owner's <label>-coll holding.
+// account must be the owner: the button is disabled for anyone else). The first step checks that the header
+// names the owner, so a run signed as someone else fails there, not on a disabled button. Rescan next: the
+// auction the final bid settled reaches the list through the scan cursor. The leftover goes to the owner's
+// <label>-coll holding.
 export function claimLeftover(auction) {
   return [
+    { id: "claim-signed-as-owner", segment: "task-14", caption: "The owner of the position signs the claim.",
+      action: "waitFor", target: "headerAccount", property: "text", value: "owner", timeoutMs: 10000 },
     { id: "claim-open-settled", segment: "task-14", caption: "Open the settled auctions.",
       action: "click", target: "tabSettled" },
     { id: "claim-rescan", segment: "task-14", caption: "Rescan: the scan picks up the auction the final bid settled.",

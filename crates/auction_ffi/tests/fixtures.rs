@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use auction_ffi::view;
 use auction_sdk::decode::Reader;
 use auction_sdk::testing::standard::{self, ENGINE, R};
+use lee_core::account::AccountId;
 use serde_json::{json, Value};
 
 use common::{world, World};
@@ -83,20 +84,46 @@ fn write_qml_fixtures() {
         write(name, &ok(&w, req));
     }
 
-    // `settled` before and after: the fixture's auction marked settled (as the view tests do).
+    // Settled outcomes of the fixture's auction (lot 475,000, debt 600,000, penalty 60,000), states
+    // an engine can end in (as `views_tests::settle` builds them): bids pay debt first, then penalty;
+    // leftover only when the whole target was raised; otherwise the lot sold out.
+    //   settled / auction_settled:             target raised, 400,000 sold, 75,000 left over;
+    //   settled_short / auction_settled_short: 450,000 repaid, no penalty, lot sold out, 150,000 short.
+    settle(&w, &fx.live_auction, 600_000, 60_000, 75_000);
+    write_settled(&w, &auction, "");
+    settle(&w, &fx.live_auction, 450_000, 0, 0);
+    write_settled(&w, &auction, "_short");
+}
+
+/// Marks the auction settled with the given raised amounts and leftover; the rest of the lot sold.
+fn settle(w: &World, id: &AccountId, debt: u128, penalty: u128, leftover: u128) {
     let r = Reader::new(w.chain, ENGINE);
-    let mut st = r.auction(&fx.live_auction).expect("auction");
+    let mut st = r.auction(id).expect("auction");
+    let lot = st.collateral_sold + st.collateral_left;
+    assert!(debt <= st.debt_principal && debt + penalty <= st.amount_to_raise);
+    assert!(
+        leftover == 0 || debt + penalty == st.amount_to_raise,
+        "a leftover needs the whole target raised"
+    );
     st.settled = true;
-    w.chain.put_state(fx.live_auction, ENGINE, &st);
-    let settled = ok(&w, &json!({ "view": "settled" }));
+    st.collateral_sold = lot - leftover;
+    st.collateral_left = leftover;
+    st.leftover_claimable = leftover;
+    st.debt_raised = debt;
+    st.penalty_raised = penalty;
+    w.chain.put_state(*id, ENGINE, &st);
+}
+
+fn write_settled(w: &World, auction: &str, suffix: &str) {
+    let settled = ok(w, &json!({ "view": "settled" }));
     assert_eq!(
         settled["items"].as_array().map(Vec::len),
         Some(1),
         "{settled}"
     );
-    write("settled", &settled);
+    write(&format!("settled{suffix}"), &settled);
     write(
-        "auction_settled",
-        &ok(&w, &json!({ "view": "auction", "id": auction })),
+        &format!("auction_settled{suffix}"),
+        &ok(w, &json!({ "view": "auction", "id": auction })),
     );
 }

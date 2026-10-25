@@ -7,13 +7,15 @@ import "../../qml/settled"
 import "../../qml/common/Format.js" as Format
 import "Fixtures.js" as Fixtures
 
-// The Settled screen (board v5) against a stub backend that answers with the real fixtures (`settled`,
-// `auction_settled`: a settled auction with no bids and a full shortfall). Other outcomes are variants built
-// in-test from the real JSON, with numbers that keep the engine's rules (crates/auction_core/src/auction.rs):
-//   raised = debt_repaid + penalty; a bid pays debt first, then penalty;
-//   shortfall = debt_principal − debt_repaid (unbacked debt; the unraised penalty is never booked);
-//   leftover = the collateral left, only when the whole target was raised; claimed ≤ leftover.
-// The fixture's target 660,000 is a 600,000 debt plus a 60,000 penalty.
+// The Settled screen (board v5) against a stub backend that answers with the real fixtures, two states the
+// engine can end in (crates/auction_ffi/tests/fixtures.rs, R37):
+//   settled / auction_settled:             target raised (600,000 debt + 60,000 penalty), 400,000 of the
+//                                          475,000 lot sold, 75,000 left over for the owner (owner2);
+//   settled_short / auction_settled_short: 450,000 repaid, no penalty, the lot sold out, 150,000 short.
+// The rules they follow (crates/auction_core/src/auction.rs): raised = debt_repaid + penalty; a bid pays debt
+// first, then penalty; shortfall = debt_principal − debt_repaid (unbacked debt; an unraised penalty is never
+// booked); leftover only when the whole target was raised. The few outcomes no fixture has (claimed, sold out
+// after the debt, an owner outside the wallet) are variants of the real JSON that keep the same rules.
 TestCase {
     id: testCase
     name: "Settled"
@@ -109,7 +111,13 @@ TestCase {
         page = null
     }
 
-    // ---- Variants of the real fixture (engine-consistent, see the header) -------------------------
+    // ---- Fixtures and variants -------------------------------------------------------------------
+
+    // The ended-short fixture.
+    function endedShort() {
+        settledReply = Fixtures.load("settled_short")
+        auctionReply = Fixtures.load("auction_settled_short")
+    }
 
     // Applied to the list row and the `auction` view alike.
     function variant(fields) {
@@ -119,27 +127,14 @@ TestCase {
         }
     }
 
-    // The whole target raised with collateral to spare: debt 600,000 + penalty 60,000 = 660,000 raised,
-    // 400,000 of the 475,000 lot sold, 75,000 left over for the owner.
-    function targetRaised() {
-        variant({ bids: 3, debt_repaid: "600000", penalty: "60000", raised: "660000", shortfall: "0",
-                  sold: "400000", leftover: "75000", claimed: "0" })
-    }
-
-    // The lot sold out before the debt was covered: 450,000 repaid, no penalty, 150,000 short.
-    function endedShort() {
-        variant({ bids: 2, debt_repaid: "450000", penalty: "0", raised: "450000", shortfall: "150000",
-                  sold: "475000", leftover: "0", claimed: "0" })
-    }
-
     // The lot sold out after the debt but before the whole penalty: nothing short, nothing left over.
     function soldOut() {
-        variant({ bids: 4, debt_repaid: "600000", penalty: "30000", raised: "630000", shortfall: "0",
+        variant({ debt_repaid: "600000", penalty: "30000", raised: "630000", shortfall: "0",
                   sold: "475000", leftover: "0", claimed: "0" })
     }
 
-    function row(fields) {
-        const base = JSON.parse(JSON.stringify(Fixtures.load("settled").items[0]))
+    function row(fixture, fields) {
+        const base = JSON.parse(JSON.stringify(Fixtures.load(fixture).items[0]))
         for (const k in fields) base[k] = fields[k]
         return base
     }
@@ -178,8 +173,9 @@ TestCase {
 
     // ---- "Where the N went" ----------------------------------------------------------------------
 
-    // The segments are the view's own fields (debt_repaid, penalty, shortfall), never derived; the two that
-    // were raised add up to `raised`, and the widths split the track in the same proportions.
+    // The segments are the view's own fields (debt_repaid, penalty, shortfall), never derived. The debt and
+    // penalty segments are what was raised and sum to `raised` (N); the shortfall is a separate segment after
+    // them (debt not repaid, never raised). The widths split the track in the same proportions.
     function checkBar(p) {
         const debt = findChild(p, "outcomeDebt")
         const penalty = findChild(p, "outcomePenalty")
@@ -195,32 +191,25 @@ TestCase {
         fuzzyCompare(penalty.width, track.width * Format.ratio(auctionReply.penalty, whole), 0.5)
     }
 
+    // Brief name kept: the debt + penalty segments sum to raised; the shortfall is its own segment (above).
     function test_outcome_bar_sums_to_raised() {
-        targetRaised()
-        let p = ready()
+        const p = ready()
         checkBar(p)
         compare(findChild(p, "outcomeHeading").text, "Where the 660,000 stable went")
         compare(findChild(p, "legendDebt").text, "Debt repaid 600,000")
         compare(findChild(p, "legendPenalty").text, "Penalty to the buffer 60,000")
         compare(findChild(p, "legendShortfall").text, "Shortfall 0")
+    }
 
-        // Ended short: the shortfall is the debt not repaid, shown next to what was raised, not inside it.
+    // The ended-short fixture: the shortfall is the debt not repaid, shown next to what was raised.
+    function test_outcome_bar_ended_short() {
         endedShort()
-        p.refresh()
-        tryCompare(findChild(p, "outcomeDebt"), "value", "450000")
+        const p = ready()
         checkBar(p)
         compare(findChild(p, "outcomeHeading").text, "Where the 450,000 stable went")
         compare(findChild(p, "legendShortfall").text, "Shortfall 150,000")
+        compare(findChild(p, "outcomePenalty").width, 0)
         verify(findChild(p, "outcomeNote").text.indexOf("not repaid") >= 0, findChild(p, "outcomeNote").text)
-    }
-
-    // The real fixture: nothing raised, the whole 600,000 debt short.
-    function test_outcome_bar_with_nothing_raised() {
-        const p = ready()
-        checkBar(p)
-        compare(findChild(p, "outcomeHeading").text, "Nothing was raised")
-        fuzzyCompare(findChild(p, "outcomeShortfall").width, findChild(p, "outcomeTrack").width, 1)
-        compare(findChild(p, "legendShortfall").text, "Shortfall 600,000")
     }
 
     // ---- List ------------------------------------------------------------------------------------
@@ -229,11 +218,9 @@ TestCase {
     // (the scan cursor's id order: the chain records no settle time).
     function test_list_outcomes_in_view_order() {
         settledReply = { items: [
-            row({ id: "A1", debt_repaid: "600000", penalty: "60000", raised: "660000", shortfall: "0",
-                  sold: "400000", leftover: "75000", claimed: "0" }),
-            row({ id: "A2", debt_repaid: "450000", raised: "450000", shortfall: "150000", sold: "475000" }),
-            row({ id: "A3", debt_repaid: "600000", penalty: "60000", raised: "660000", shortfall: "0",
-                  sold: "400000", leftover: "75000", claimed: "75000" })
+            row("settled", { id: "A1" }),
+            row("settled_short", { id: "A2" }),
+            row("settled", { id: "A3", claimed: "75000" })
         ], scanned_to: 931, skipped: [] }
         const p = createPage()
         const list = findChild(p, "settledList")
@@ -253,9 +240,9 @@ TestCase {
 
     // ---- Detail ----------------------------------------------------------------------------------
 
-    // KPIs: raised of target, collateral sold of the lot, bids (R35: no end time, so no "ran for").
+    // KPIs: raised of target, collateral sold of the lot, bids (R35: no end time, so no "ran for"). The fixture
+    // chain has no bid transactions, so the scan counted 0.
     function test_kpis_and_facts() {
-        targetRaised()
         const p = ready()
         compare(findChild(p, "kpiLabel_0").text, "Raised")
         compare(findChild(p, "kpiValue_0").text, "660,000")
@@ -263,7 +250,7 @@ TestCase {
         compare(findChild(p, "kpiValue_1").text, "400,000")
         compare(findChild(p, "kpiCaption_1").text, "of 475,000")
         compare(findChild(p, "kpiLabel_2").text, "Bids")
-        compare(findChild(p, "kpiValue_2").text, "3")
+        compare(findChild(p, "kpiValue_2").text, String(auctionReply.bids))
         compare(findChild(p, "settledBadge").text, "Target raised")
         compare(findChild(findChild(p, "factLeftover"), "factValue").text, "75,000")
         compare(findChild(findChild(p, "factTarget"), "factValue").text, "660,000")
@@ -273,7 +260,6 @@ TestCase {
     // ---- Claim card states -----------------------------------------------------------------------
 
     function test_claim_disabled_for_non_owner() {
-        targetRaised()
         const p = ready("keeper")
         const button = findChild(p, "claimSubmit")
         verify(button.visible)
@@ -287,7 +273,6 @@ TestCase {
 
     // An owner the wallet does not hold is named by its short id.
     function test_claim_reason_names_an_unknown_owner_by_id() {
-        targetRaised()
         variant({ owner: "9abcDEFghijkLMNopqrsTUVwxyz123456789ABCDwxyz" })
         const p = ready("owner2")
         verify(!findChild(p, "claimSubmit").enabled)
@@ -297,7 +282,6 @@ TestCase {
     }
 
     function test_claim_enabled_for_the_owner() {
-        targetRaised()
         const p = ready("owner2")
         const button = findChild(p, "claimSubmit")
         tryVerify(function() { return button.enabled })
@@ -307,7 +291,6 @@ TestCase {
     }
 
     function test_claimed_shows_amount() {
-        targetRaised()
         variant({ claimed: "75000" })
         const p = ready("owner2")
         const claimed = findChild(p, "claimClaimed")
@@ -317,17 +300,19 @@ TestCase {
         compare(findChild(findChild(p, "settledItem_" + auctionReply.id), "settledItemOutcome").text, "Claimed")
     }
 
+    // Board v5 "Ended short": an Error notice, like the detail badge.
     function test_shortfall_notice_without_claim() {
         endedShort()
         const p = ready("owner2")
         const notice = findChild(p, "settledShortNotice")
         verify(notice.shown)
-        compare(notice.severity, LogosNotice.Warning)
+        compare(notice.severity, LogosNotice.Error)
         compare(notice.title, "150,000 stable short")
         compare(notice.message,
                 "Raised 450,000 of 660,000. The 150,000 of debt not repaid is now unbacked debt; the buffer covers it with Settle debt on System.")
         verify(findChild(p, "openSystemLink").visible)
         verify(!findChild(p, "claimSubmit").visible)
+        compare(findChild(p, "settledBadge").text, "Sold out")
     }
 
     function test_nothing_left_over() {
@@ -341,6 +326,7 @@ TestCase {
 
     // Ended short: the link switches to the System tab and asks it for Accounting (Main.systemSection).
     function test_shortfall_links_to_system() {
+        endedShort()
         backendStub.activeAccount = "owner2"
         const component = Qt.createComponent("../../qml/Main.qml")
         compare(component.status, Component.Ready, component.errorString())
@@ -351,7 +337,7 @@ TestCase {
         tryCompare(pages, "currentIndex", 2)
         const notice = findChild(main, "settledShortNotice")
         tryCompare(notice, "shown", true)
-        compare(notice.title, "600,000 stable short")
+        compare(notice.title, "150,000 stable short")
         const link = findChild(main, "openSystemLink")
         verify(link.visible)
         link.activate()
@@ -375,7 +361,6 @@ TestCase {
     }
 
     function test_claim_confirms_and_submits() {
-        targetRaised()
         const p = ready("owner2")
         const dialog = openDialog(p)
         compare(dialog.request.action, "claim_leftover")
@@ -396,7 +381,6 @@ TestCase {
 
     // The fresh read says it was claimed meanwhile: no dialog, the card shows the claimed state.
     function test_claim_rechecks_the_fresh_read() {
-        targetRaised()
         const p = ready("owner2")
         const button = findChild(p, "claimSubmit")
         tryVerify(function() { return button.enabled })
@@ -407,7 +391,6 @@ TestCase {
     }
 
     function test_refused_claim_shows_state_notice() {
-        targetRaised()
         submitReply = { error: "the engine would reject this: NothingToClaim (code 40)", kind: "refused" }
         const p = ready("owner2")
         findChild(openDialog(p), "settledTxConfirm").clicked()
@@ -418,7 +401,6 @@ TestCase {
     }
 
     function test_tx_names_are_scoped_to_the_settled_page() {
-        targetRaised()
         const p = ready("owner2")
         for (const name of ["settledTxDialog", "settledTxConfirm", "settledTxCancel", "settledTxLane", "settledTxRequote"])
             verify(findChild(p, name) !== null, name)
@@ -427,7 +409,6 @@ TestCase {
     }
 
     function test_lane_done_refreshes_the_views() {
-        targetRaised()
         const p = ready("owner2")
         findChild(openDialog(p), "settledTxConfirm").clicked()
         const before = callsOf("view", "settled").length
@@ -436,6 +417,21 @@ TestCase {
         lane.poll()
         compare(lane.state, "done")
         tryVerify(function() { return callsOf("view", "settled").length === before + 1 })
+    }
+
+    // Picking another auction drops the previous claim's lane.
+    function test_lane_clears_on_another_auction() {
+        settledReply = { items: [ row("settled", {}), row("settled_short", { id: "B2" }) ], scanned_to: 3, skipped: [] }
+        const p = ready("owner2")
+        findChild(openDialog(p), "settledTxConfirm").clicked()
+        const lane = findChild(p, "settledTxLane")
+        tryCompare(lane, "state", "waiting")
+        auctionReply = Fixtures.load("auction_settled_short")
+        auctionReply.id = "B2"
+        mouseClick(findChild(p, "settledItem_B2"))
+        tryCompare(findChild(p, "settledDetail"), "auctionId", "B2")
+        compare(lane.txId, "")
+        verify(!lane.visible)
     }
 
     // ---- Failures and rescan (Review Focus 5) ----------------------------------------------------

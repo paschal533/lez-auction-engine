@@ -6,6 +6,7 @@ import Logos.Theme
 import Logos.Controls
 
 import "../common/Format.js" as Format
+import "../common/Outcome.js" as Outcome
 
 // The left column of the Settled screen (board v5, AppManagerView's 200px list): the settled auctions under
 // "Scanned to block N · Rescan" (`settledScanned`, `settledRescan`). Each row: short id and the lot, the
@@ -30,13 +31,6 @@ ColumnLayout {
     // What is still claimable: leftover_claimable − leftover_claimed (auction_core claim_leftover).
     function toClaim(it) {
         return Format.subtract(String(it.leftover), String(it.claimed))
-    }
-
-    // How it ended: the whole target raised, or the lot sold out first (the two ways a bid ends an auction).
-    function endedHow(it) {
-        if (Format.cmp(String(it.raised), String(it.target)) >= 0) return qsTr("Target raised")
-        if (Format.cmp(String(it.sold), String(it.lot)) >= 0) return qsTr("Sold out")
-        return qsTr("Settled")
     }
 
     spacing: Theme.spacing.small
@@ -161,7 +155,7 @@ ColumnLayout {
                     }
                     LogosText {
                         objectName: "settledItemStatus"
-                        text: root.endedHow(row.modelData)
+                        text: Outcome.endedHow(row.modelData)
                         font.pixelSize: Theme.typography.secondaryText
                         color: Theme.palette.textTertiary
                     }

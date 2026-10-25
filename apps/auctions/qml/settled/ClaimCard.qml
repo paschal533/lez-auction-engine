@@ -14,7 +14,7 @@ import "../common/Format.js" as Format
 //     when the active account's id is the auction's `owner`; otherwise `claimReason` names the owner's wallet
 //     label ("Switch account to owner2") or, when the wallet does not hold it, its short id;
 //   claimed: "Claimed <amount> collateral" (`claimClaimed`; the chain records no claim block, R35);
-//   ended short: a Warning notice (`settledShortNotice`) and `openSystemLink` → systemRequested("accounting");
+//   ended short: an Error notice (`settledShortNotice`) and `openSystemLink` → systemRequested("accounting");
 //   nothing left over (`claimNothing`).
 // Claiming: a fresh `auction` view (the claim's quote; it must still show something to claim) → TxDialog →
 // submit {action: claim_leftover, owner, owner_holding: <label>-coll, auction} → TxLane in place of the button.
@@ -48,7 +48,11 @@ InsetCard {
     padding: Theme.spacing.large
     spacing: Theme.spacing.medium
 
-    onAuctionIdChanged: d.notice = null
+    // Another auction: its card starts clean (no notice, no lane of the previous auction's claim).
+    onAuctionIdChanged: {
+        d.notice = null
+        lane.txId = ""
+    }
 
     component Line: RowLayout {
         id: line
@@ -269,10 +273,11 @@ InsetCard {
     }
 
     // ---- Ended short ------------------------------------------------------------------------------
+    // Board v5 "Ended short" and the detail badge: an Error.
     LogosNotice {
         objectName: "settledShortNotice"
         Layout.fillWidth: true
-        severity: LogosNotice.Warning
+        severity: LogosNotice.Error
         shown: root.endedShort
         title: root.hasAuction ? qsTr("%1 stable short").arg(Format.amount(String(root.auction.shortfall), 0)) : ""
         message: root.hasAuction

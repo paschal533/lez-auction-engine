@@ -7,6 +7,7 @@ import Logos.Controls
 
 import "../common"
 import "../common/Format.js" as Format
+import "../common/Outcome.js" as Outcome
 
 // The panel of the Settled screen (board v5): title with how the auction ended, the KPI strip (raised of
 // target, collateral sold of the lot, bids), "Where the N went", the facts and the claim card. Every figure is
@@ -25,10 +26,7 @@ Rectangle {
 
     readonly property bool hasAuction: !!(auction && auction.id)
     readonly property string auctionId: hasAuction ? String(auction.id) : ""
-    readonly property string endedHow: !hasAuction ? ""
-        : Format.cmp(String(auction.raised), String(auction.target)) >= 0 ? qsTr("Target raised")
-        : Format.cmp(String(auction.sold), String(auction.lot)) >= 0 ? qsTr("Sold out")
-        : qsTr("Settled")
+    readonly property string endedHow: hasAuction ? Outcome.endedHow(auction) : ""
     readonly property string ownerName: {
         if (!hasAuction) return ""
         const rows = accounts || []

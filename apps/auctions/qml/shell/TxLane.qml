@@ -310,9 +310,12 @@ ColumnLayout {
 
     Timer {
         id: pollTimer
+        objectName: root.scoped("txPollTimer")
         interval: root.pollInterval
         repeat: true
-        onTriggered: root.poll()
+        // Only while the outcome is open (waiting, or unknown while the engine still tracks it): a tick that lands
+        // after done or dropped polls nothing.
+        onTriggered: if (root.state === "waiting" || root.state === "unknown") root.poll()
     }
 
     RowLayout {

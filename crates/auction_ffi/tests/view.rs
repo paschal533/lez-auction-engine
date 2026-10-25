@@ -220,6 +220,39 @@ fn auction_view_has_the_entry_and_its_schedule() {
     assert_eq!(v["schedule"], Value::Array(want));
 }
 
+/// The engine's minimum charge for a non-final bid, as the bid card shows it (R31).
+#[test]
+fn live_rows_and_the_auction_view_carry_the_min_bid() {
+    let w = scanned("localnet");
+    let fx = standard::standard();
+    let v = w.ctx.verified().expect("verified");
+    let want = Reader::new(w.chain, ENGINE)
+        .coll_config(&v.coll_config_id())
+        .expect("coll config")
+        .collateral_params()
+        .expect("params")
+        .min_bid
+        .to_string();
+    let live = ok(&w, json!({ "view": "live" }));
+    assert_eq!(live["items"][0]["min_bid"], want.as_str());
+    let auction = ok(
+        &w,
+        json!({ "view": "auction", "id": fx.live_auction.to_string() }),
+    );
+    assert_eq!(auction["min_bid"], want.as_str());
+    // Settled rows carry no bid floor.
+    let r = Reader::new(w.chain, ENGINE);
+    let mut st = r.auction(&fx.live_auction).expect("auction");
+    st.settled = true;
+    w.chain.put_state(fx.live_auction, ENGINE, &st);
+    let settled = ok(
+        &w,
+        json!({ "view": "auction", "id": fx.live_auction.to_string() }),
+    );
+    assert_eq!(settled["kind"], "settled");
+    assert_eq!(settled.get("min_bid"), None);
+}
+
 #[test]
 fn auction_view_needs_an_id() {
     let w = scanned("localnet");
@@ -455,6 +488,7 @@ fn prices_and_amounts_are_decimal_strings() {
         "/reserved",
         "/discount_ray",
         "/rate_per_min_ray",
+        "/min_bid",
     ];
     const LIQUIDATION: &[&str] = &[
         "/collateral",

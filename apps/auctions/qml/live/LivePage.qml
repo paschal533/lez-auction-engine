@@ -61,8 +61,10 @@ Item {
             detailNotice = notice
         }
 
+        // A refresh while a rescan pages is skipped: the rescan refreshes once it is done, and a reply
+        // started before a `restarted` page would bring back the replaced chain's auctions.
         function refresh() {
-            if (!root.backend)
+            if (!root.backend || rescanning)
                 return
             const gen = ++generation
             logos.watch(root.backend.view({ view: "live" }), function(reply) {
@@ -81,7 +83,7 @@ Item {
             }, function(err) {
                 if (gen === generation) setListNotice(qsTr("Live auctions"), failure(null, err))
             })
-            loadOracle()
+            loadOracle(gen)
         }
 
         function select(id) {
@@ -112,20 +114,21 @@ Item {
             })
         }
 
-        function loadOracle() {
+        // The oracle for the bid card. A failed read leaves it unknown (null): the card then says
+        // "Oracle unknown" and does not bid.
+        function loadOracle(gen) {
             logos.watch(root.backend.view({ view: "overview" }), function(reply) {
+                if (gen !== generation) return
                 const bad = failure(reply)
-                if (bad) {
-                    oracle = null
-                    return
-                }
-                oracle = reply.oracle || null
+                oracle = bad ? null : (reply.oracle || null)
             }, function(err) {
-                oracle = null
+                if (gen === generation) oracle = null
             })
         }
 
+        // A replaced chain: drop the list and every reply still on its way for the old one.
         function clearList() {
+            ++generation
             items = []
             selectedId = ""
             auction = null

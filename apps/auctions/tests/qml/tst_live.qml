@@ -31,6 +31,9 @@ TestCase {
     // With deferRescan the stub holds rescan replies; the test answers them through `deferred`.
     property bool deferRescan: false
     property var deferred: []
+    // With deferLive the stub holds `view live` replies; the test answers them through `deferredLive`.
+    property bool deferLive: false
+    property var deferredLive: []
     property var page: null
 
     function initTestCase() {
@@ -59,7 +62,9 @@ TestCase {
             switch (promise.call) {
             case "view":
                 switch (promise.req.view) {
-                case "live": ok(JSON.parse(JSON.stringify(testCase.liveReply))); return
+                case "live":
+                    if (testCase.deferLive) { testCase.deferredLive.push(ok); return }
+                    ok(JSON.parse(JSON.stringify(testCase.liveReply))); return
                 case "auction": ok(JSON.parse(JSON.stringify(testCase.auctionReply))); return
                 case "overview": ok(JSON.parse(JSON.stringify(testCase.overviewReply))); return
                 case "quote_bid": ok(JSON.parse(JSON.stringify(testCase.quoteReply))); return
@@ -99,6 +104,8 @@ TestCase {
         listCountAtRescan = []
         deferRescan = false
         deferred = []
+        deferLive = false
+        deferredLive = []
         page = null
     }
 
@@ -157,7 +164,7 @@ TestCase {
         const id = liveReply.items[0].id
         const row = findChild(p, "liveItem_" + id)
         verify(row !== null)
-        compare(findChild(row, "liveItemDiscount").text, "3.8%")
+        compare(findChild(row, "liveItemDiscount").text, "3.7%")
         compare(findChild(row, "liveItemLot").text, "475,000")
         compare(findChild(row, "liveItemRaised").text, "0% raised")
     }
@@ -167,8 +174,8 @@ TestCase {
     function test_kpis_show_discount_rate_and_max_time() {
         const p = createPage()
         tryCompare(findChild(p, "auctionDetail"), "auctionId", auctionReply.id)
-        compare(findChild(p, "kpiValue_0").text, "3.8%")
-        compare(findChild(p, "kpiCaption_0").text, "+0.18% per min")
+        compare(findChild(p, "kpiValue_0").text, "3.7%")
+        compare(findChild(p, "kpiCaption_0").text, "+0.17% per min")
         compare(findChild(p, "kpiLabel_1").text, "Max discount at")
         compare(findChild(p, "kpiValue_1").text, Qt.formatTime(new Date(auctionReply.max_at_ms), "hh:mm"))
         compare(findChild(p, "kpiValue_2").text, "0")
@@ -196,7 +203,7 @@ TestCase {
         fuzzyCompare(pin.y + pin.height / 2, expectedY, 0.5)
         const expectedX = chart.plotLeft + chart.plotWidth * auctionReply.t_eff_ms / chart.xMaxMs
         fuzzyCompare(pin.x + pin.width / 2, expectedX, 0.5)
-        compare(findChild(chart, "chartNowLabel").text, "Now 3.8%")
+        compare(findChild(chart, "chartNowLabel").text, "Now 3.7%")
         // R30: x runs to max_at + 25 %; the knee names the clock time of the maximum; no expiry marker.
         compare(chart.xMaxMs, (auctionReply.max_at_ms - auctionReply.started_at_ms) * 1.25)
         compare(findChild(chart, "chartKneeLabel").text,
@@ -305,7 +312,11 @@ TestCase {
                JSON.stringify(facts))
         compare(findChild(dialog.contentItem, "quoteRowValue_0").text, "bid_with_settlement")
         compare(dialog.request.action, "bid")
+        verify(facts.some(function(f) { return f.label === "Discount" && f.value === "3.7777%" }),
+               JSON.stringify(facts))
 
+        // Editing the field behind the open dialog does not change what was confirmed.
+        findChild(p, "bidAmount").text = "5"
         findChild(dialog, "txConfirm").clicked()
         const submits = callsOf("submit")
         compare(submits.length, 1)
@@ -397,6 +408,123 @@ TestCase {
         tryCompare(dialog, "opened", true)
         verify(!lane.visible, "the finished lane is gone while the next bid is confirmed")
         compare(lane.state, "")
+    }
+
+    // ---- Fix round 1 ------------------------------------------------------------------------------
+
+    // R31: the engine's minimum charge, which a final bid does not need.
+    function test_min_bid_hint() {
+        const p = createPage()
+        tryCompare(findChild(p, "auctionDetail"), "auctionId", auctionReply.id)
+        compare(findChild(p, "bidMin").text, "Min 25 (not for the final bid)")
+    }
+
+    // The SDK names the stable holding <label>-stable; a row without one cannot pay.
+    function test_account_without_stable_holding_cannot_bid() {
+        page = createTemporaryObject(pageComponent, testCase,
+                                     { accounts: Fixtures.load("accounts"), activeAccount: "keeper" })
+        tryCompare(findChild(page, "auctionDetail"), "auctionId", auctionReply.id)
+        findChild(page, "bidAmount").text = "100000"
+        const submit = findChild(page, "bidSubmit")
+        tryCompare(submit, "text", "No stable holding")
+        verify(!submit.enabled)
+        const hint = findChild(page, "bidHoldingHint")
+        verify(hint.visible)
+        compare(hint.text, "keeper has no keeper-stable holding to pay from. Pick an account that holds stable.")
+    }
+
+    function test_oracle_failure_disables_bid() {
+        overviewReply = { error: "the node did not answer", kind: "chain" }
+        const p = createPage()
+        tryCompare(findChild(p, "auctionDetail"), "auctionId", auctionReply.id)
+        findChild(p, "bidAmount").text = "100000"
+        const submit = findChild(p, "bidSubmit")
+        tryCompare(submit, "text", "Oracle unknown")
+        verify(!submit.enabled)
+        const badge = findChild(p, "bidOracleBadge")
+        verify(badge.visible)
+        compare(badge.text, "Unknown")
+        compare(findChild(p, "bidOraclePrice").text, "Oracle unknown")
+        verify(findChild(p, "bidPausedNotice").visible)
+    }
+
+    function test_invalid_slippage_is_an_error_not_the_old_value() {
+        const p = createPage()
+        tryCompare(findChild(p, "auctionDetail"), "auctionId", auctionReply.id)
+        findChild(p, "bidAmount").text = "100000"
+        const submit = findChild(p, "bidSubmit")
+        tryVerify(function() { return submit.enabled })
+        findChild(p, "bidSlippageEdit").activate()
+        const slip = findChild(p, "bidSlippage")
+        compare(slip.text, "0.5", "the field starts at the default slippage")
+        slip.text = ""
+        verify(findChild(p, "bidSlippageError").visible)
+        verify(!submit.enabled)
+        slip.text = "1."
+        verify(findChild(p, "bidSlippageError").visible)
+        slip.text = "2"
+        verify(!findChild(p, "bidSlippageError").visible)
+        verify(submit.enabled)
+    }
+
+    // While the lane waits the You-get card collapses; once it is done, Max to finish and Private bid are back
+    // (the story's second bid uses Max to finish).
+    function test_lane_waiting_collapses_and_done_restores_the_card() {
+        const p = createPage()
+        tryCompare(findChild(p, "auctionDetail"), "auctionId", auctionReply.id)
+        findChild(p, "bidAmount").text = "100000"
+        const submit = findChild(p, "bidSubmit")
+        tryVerify(function() { return submit.enabled })
+        submit.clicked()
+        const dialog = findChild(p, "txDialog")
+        tryCompare(dialog, "opened", true)
+        findChild(dialog, "txConfirm").clicked()
+        const lane = findChild(p, "txLane")
+        tryCompare(lane, "state", "waiting")
+        verify(!findChild(p, "bidYouGet").visible)
+        verify(!findChild(p, "bidMax").visible)
+        verify(!findChild(p, "bidPrivate").visible)
+        statusReply = { txId: "tx1", state: "included", step: 0, steps: 1 }
+        lane.poll()
+        compare(lane.state, "done")
+        verify(lane.visible)
+        verify(findChild(p, "bidYouGet").visible)
+        verify(findChild(p, "bidMax").visible)
+        verify(findChild(p, "bidPrivate").visible)
+    }
+
+    // A refresh started before a `restarted` page must not bring the replaced chain's auctions back.
+    function test_refresh_racing_a_restarted_page_keeps_the_list_empty() {
+        const p = createPage()
+        const list = findChild(p, "liveList")
+        compare(list.count, 1)
+        deferLive = true
+        p.refresh()
+        compare(deferredLive.length, 1, "a live read is on its way")
+        deferRescan = true
+        findChild(p, "liveRescan").activate()
+        deferred.shift()({ done: false, head: 5, note: "the chain was replaced", restarted: true, scanned_to: 2 })
+        compare(list.count, 0)
+        // The stale reply (the old chain's auction) lands after the restart, before the rescan is done.
+        deferredLive.shift()(Fixtures.load("live"))
+        compare(list.count, 0, "the stale reply is dropped")
+        deferred.shift()(Fixtures.load("scan_done"))
+        // The refresh the finished rescan started answers with the new chain's (empty) list.
+        compare(deferredLive.length, 1)
+        deferredLive.shift()({ items: [], scanned_to: 5, skipped: [] })
+        compare(list.count, 0)
+    }
+
+    function test_no_refresh_while_a_rescan_pages() {
+        const p = createPage()
+        deferRescan = true
+        findChild(p, "liveRescan").activate()
+        verify(p.rescanning)
+        const lives = callsOf("view", "live").length
+        p.refresh()
+        compare(callsOf("view", "live").length, lives, "a refresh during the rescan sends nothing")
+        deferred.shift()(Fixtures.load("scan_done"))
+        tryVerify(function() { return callsOf("view", "live").length === lives + 1 })
     }
 
     // ---- Rescan (Review Focus 5) ----------------------------------------------------------------

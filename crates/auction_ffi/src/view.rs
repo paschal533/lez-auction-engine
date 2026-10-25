@@ -204,16 +204,32 @@ pub fn scan_page(ctx: &Ctx, req: &Value) -> Result<Value, FfiError> {
     }))
 }
 
-/// `live` (`LiveAuctionView` rows) or `settled` (`SettledAuctionView` rows), in cursor order.
+/// The smallest charge a bid that does not end the auction may make (`CollateralParams::min_bid`,
+/// which the engine's `bid` checks: `BelowMinBid`). A final bid is exempt.
+fn min_bid(ctx: &Ctx, v: &VerifiedConfig) -> Result<u128, FfiError> {
+    let coll =
+        Reader::new(ctx.chain.as_ref(), v.engine.program).coll_config(&v.coll_config_id())?;
+    Ok(coll.collateral_params().map_err(SdkError::from)?.min_bid)
+}
+
+/// A live auction's JSON with `min_bid` (decimal string) added for the bid card.
+fn with_min_bid(mut row: Value, min_bid: u128) -> Value {
+    row["min_bid"] = Value::String(min_bid.to_string());
+    row
+}
+
+/// `live` (`LiveAuctionView` rows plus `min_bid`) or `settled` (`SettledAuctionView` rows), in
+/// cursor order.
 pub fn auctions(ctx: &Ctx, live: bool) -> Result<Value, FfiError> {
     let Read { v, now } = read(ctx)?;
     let c = cursor(ctx, &v)?;
     let all = views::auctions(ctx.chain.as_ref(), &v, &c, now)?;
+    let floor = if live { min_bid(ctx, &v)? } else { 0 };
     let items: Vec<Value> = all
         .items
         .iter()
         .filter_map(|e| match (e, live) {
-            (AuctionEntry::Live(a), true) => Some(to_json(a)),
+            (AuctionEntry::Live(a), true) => Some(to_json(a).map(|row| with_min_bid(row, floor))),
             (AuctionEntry::Settled(a), false) => Some(to_json(a)),
             _ => None,
         })
@@ -239,8 +255,8 @@ struct IdRequest {
     id: AccountId,
 }
 
-/// `{id}` -> the auction's `LiveAuctionView` or `SettledAuctionView` (`kind` says which) plus
-/// `schedule: [[t_ms, discount_ray], ...]` from `quote::discount_schedule`.
+/// `{id}` -> the auction's `LiveAuctionView` (plus `min_bid`) or `SettledAuctionView` (`kind` says
+/// which) plus `schedule: [[t_ms, discount_ray], ...]` from `quote::discount_schedule`.
 pub fn auction(ctx: &Ctx, req: &Value) -> Result<Value, FfiError> {
     let IdRequest { id } = parse(req)?;
     let chain = ctx.chain.as_ref();
@@ -250,7 +266,11 @@ pub fn auction(ctx: &Ctx, req: &Value) -> Result<Value, FfiError> {
         .get(&id.to_string())
         .copied()
         .unwrap_or(0);
-    let mut out = to_json(&views::auction_entry(chain, &v, &id, bids, now)?)?;
+    let entry = views::auction_entry(chain, &v, &id, bids, now)?;
+    let mut out = to_json(&entry)?;
+    if matches!(entry, AuctionEntry::Live(_)) {
+        out = with_min_bid(out, min_bid(ctx, &v)?);
+    }
     let state = Reader::new(chain, v.engine.program).auction(&id)?;
     let schedule: Vec<Value> = quote::discount_schedule(&state, SCHEDULE_SAMPLES)?
         .into_iter()

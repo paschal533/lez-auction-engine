@@ -8,6 +8,7 @@
   "kind": "live",
   "lot": "475000",
   "max_at_ms": 1700002100000,
+  "min_bid": "25",
   "paused": null,
   "position": "77ZYFewnzXYP12MJrLqu8yYFYZMsGJ9H1CwDvU75nQjP",
   "raised": "0",

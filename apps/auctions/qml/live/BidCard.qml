@@ -13,8 +13,9 @@ import "../common/Format.js" as Format
 // and freshness bar; "You pay" (`bidAmount`) with "Max to finish" (`bidMax`, fills what is left to raise);
 // "You get" (`bidYouGet`) from a live `quote_bid` with the slippage floor and Edit; the Private bid switch,
 // disabled ("Public transactions only"); and the Primary button (`bidSubmit`).
-// States: a stale oracle or a paused auction disables the button ("Bidding paused"); an amount over what is
-// left to raise turns the field red with "Use N" (`bidUseMax`).
+// States: a stale oracle or a paused auction disables the button ("Bidding paused"); an oracle that could not
+// be read disables it too ("Oracle unknown"); an amount over what is left to raise turns the field red with
+// "Use N" (`bidUseMax`); an active account without a `<label>-stable` holding cannot pay (`bidHoldingHint`).
 // Placing a bid: a fresh quote_bid → TxDialog (its facts name the instruction, bid or bid_with_settlement)
 // → submit → TxLane in place of the button. Failures of the quote or the submit (`refused` included) show in
 // `bidNotice`, never as node trouble. laneDone() fires when the lane reaches done.
@@ -37,12 +38,16 @@ InsetCard {
     readonly property bool amountValid: Format.isDigits(amount) && Format.cmp(amount, "0") > 0
     readonly property bool overMax: amountValid && Format.cmp(amount, leftToRaise) > 0
     readonly property string previewAmount: overMax ? leftToRaise : amount
+    readonly property bool oracleUnknown: !oracle
     readonly property bool oracleStale: !!(oracle && oracle.fresh === false)
     readonly property bool paused: !!(hasAuction && auction.paused)
-    readonly property bool blocked: oracleStale || paused
+    readonly property bool blocked: oracleUnknown || oracleStale || paused
     readonly property bool laneBusy: lane.visible && lane.state === "waiting"
+    // The SDK's picker convention (crates/auction_sdk/src/views/accounts.rs): `<label>-stable` is the row's
+    // stable holding, and `holding` names it when it exists.
+    readonly property bool hasStableHolding: d.bidder !== null && d.bidder.holding === activeAccount + "-stable"
     readonly property bool canBid: hasAuction && !blocked && amountValid && !overMax && !d.quoting
-                                   && !laneBusy && d.bidder !== null
+                                   && !laneBusy && hasStableHolding && d.slippageValid
     property alias slippageBps: d.slippageBps
 
     signal laneDone()
@@ -70,6 +75,8 @@ InsetCard {
         readonly property int defaultSlippageBps: 50
         property string auctionId: ""
         property int slippageBps: defaultSlippageBps
+        // False while the slippage field holds something that is not 0-99.99 (bidding is disabled then).
+        property bool slippageValid: true
         property var preview: null
         property int previewGeneration: 0
         property bool quoting: false
@@ -104,12 +111,13 @@ InsetCard {
             })
         }
 
-        // Holdings follow the demo's naming: <label>-stable pays, <label>-coll receives.
+        // Holdings by the SDK's label convention (crates/auction_sdk/src/views/accounts.rs): <label>-stable
+        // pays, <label>-coll receives. The amount is the one the confirmed quote was made for.
         function submitRequest(quote) {
             return {
                 action: "bid",
                 auction: String(quote.auction),
-                coin_in_max: root.amount,
+                coin_in_max: String(quote.coin_in_max),
                 bidder_stable: root.activeAccount + "-stable",
                 bidder_collateral: root.activeAccount + "-coll",
                 slippage_bps: slippageBps,
@@ -129,7 +137,7 @@ InsetCard {
                                                               .arg(slippageText) },
                 facts: [
                     { label: qsTr("Instruction"), value: String(quote.instruction) },
-                    { label: qsTr("Discount"), value: Format.rayPercent(String(quote.discount_ray), 2) + "%" },
+                    { label: qsTr("Discount"), value: Format.rayPercent(String(quote.discount_ray), 4) + "%" },
                     { label: qsTr("Price"), value: Format.rayPrice(String(quote.price_ray)),
                       unit: qsTr("collateral per stable") },
                     { label: qsTr("Debt part"), value: String(quote.debt_part), decimals: 0 },
@@ -208,7 +216,7 @@ InsetCard {
                 Layout.fillWidth: true
                 text: root.oracle
                       ? qsTr("1 stable = %1 collateral").arg(Format.rayPrice(String(root.oracle.price_ray)))
-                      : qsTr("Oracle price unknown")
+                      : qsTr("Oracle unknown")
                 font.pixelSize: Theme.typography.primaryText
                 font.weight: Theme.typography.weightMedium
                 font.features: { "tnum": 1 }
@@ -217,9 +225,8 @@ InsetCard {
             }
             LogosBadge {
                 objectName: "bidOracleBadge"
-                visible: !!root.oracle
-                text: root.oracleStale ? qsTr("Stale") : qsTr("Fresh")
-                color: root.oracleStale ? Theme.palette.warning : Theme.palette.success
+                text: root.oracleUnknown ? qsTr("Unknown") : root.oracleStale ? qsTr("Stale") : qsTr("Fresh")
+                color: root.oracleUnknown || root.oracleStale ? Theme.palette.warning : Theme.palette.success
             }
         }
         RowLayout {
@@ -257,7 +264,9 @@ InsetCard {
         severity: LogosNotice.Warning
         title: qsTr("Bidding paused")
         shown: root.blocked
-        message: root.oracleStale || (root.paused && String(root.auction.paused) === "PriceFeedStale")
+        message: root.oracleUnknown
+                 ? qsTr("The oracle could not be read, so the price feed's freshness is unknown. Open the tab again or rescan to retry.")
+                 : root.oracleStale || (root.paused && String(root.auction.paused) === "PriceFeedStale")
                  ? qsTr("The price feed is older than %1 minutes. Bids reopen when the oracle updates.")
                        .arg(root.oracle ? Math.floor(Number(root.oracle.max_age_ms) / 60000) : 60)
                  : (root.paused ? qsTr("The engine would refuse a bid now: %1.").arg(String(root.auction.paused)) : "")
@@ -322,13 +331,16 @@ InsetCard {
 
         RowLayout {
             Layout.fillWidth: true
-            visible: !root.overMax && !lane.visible
+            visible: !root.overMax && !root.laneBusy
             LogosText {
                 objectName: "bidMin"
                 Layout.fillWidth: true
-                // No view exposes the engine's minimum bid yet; shown once the auction view carries it.
-                text: root.hasAuction && root.auction.min_bid !== undefined
-                      ? qsTr("Min %1").arg(Format.amount(String(root.auction.min_bid), 0)) : ""
+                // Takes what Max to finish leaves and wraps there.
+                Layout.preferredWidth: 0
+                wrapMode: Text.WordWrap
+                // R31: the engine refuses a smaller charge (BelowMinBid) unless the bid ends the auction.
+                text: root.hasAuction && root.auction.min_bid !== undefined && root.auction.min_bid !== null
+                      ? qsTr("Min %1 (not for the final bid)").arg(Format.amount(String(root.auction.min_bid), 0)) : ""
                 font.pixelSize: Theme.typography.secondaryText
                 font.features: { "tnum": 1 }
                 color: Theme.palette.textTertiary
@@ -372,6 +384,8 @@ InsetCard {
     InsetCard {
         id: youGet
         Layout.fillWidth: true
+        // Collapsed while a bid is in flight, so the lane fits the 720 px plugin card.
+        visible: !root.laneBusy
         color: Theme.palette.backgroundSecondary
         border.width: 0
         padding: Theme.spacing.medium
@@ -433,12 +447,19 @@ InsetCard {
                 objectName: "bidSlippage"
                 Layout.preferredWidth: 80
                 Layout.preferredHeight: 32
-                text: "0.5"
+                text: String(d.defaultSlippageBps / 100)
                 validator: RegularExpressionValidator { regularExpression: /^\d{0,2}(\.\d{0,2})?$/ }
                 font.features: { "tnum": 1 }
                 onTextChanged: {
                     const bps = Format.percentToBps(text)
+                    d.slippageValid = bps >= 0
                     if (bps >= 0) d.slippageBps = bps
+                }
+                Binding {
+                    target: slippageField.backgroundItem.border
+                    property: "color"
+                    when: !d.slippageValid
+                    value: Theme.palette.error
                 }
             }
             LogosText {
@@ -446,6 +467,15 @@ InsetCard {
                 font.pixelSize: Theme.typography.secondaryText
                 color: Theme.palette.textSecondary
             }
+        }
+        LogosText {
+            objectName: "bidSlippageError"
+            Layout.fillWidth: true
+            visible: !d.slippageValid
+            wrapMode: Text.WordWrap
+            text: qsTr("Enter a slippage from 0 to 99.99%.")
+            font.pixelSize: Theme.typography.secondaryText
+            color: Theme.palette.error
         }
         LogosText {
             objectName: "bidSettles"
@@ -469,7 +499,7 @@ InsetCard {
     RowLayout {
         Layout.fillWidth: true
         // The lane takes its place while a bid is in flight (the card must fit the 720 px plugin card).
-        visible: !lane.visible
+        visible: !root.laneBusy
         spacing: Theme.spacing.small
         LogosSwitch {
             objectName: "bidPrivate"
@@ -493,6 +523,16 @@ InsetCard {
         }
     }
 
+    LogosText {
+        objectName: "bidHoldingHint"
+        Layout.fillWidth: true
+        visible: d.bidder !== null && !root.hasStableHolding
+        wrapMode: Text.WordWrap
+        text: qsTr("%1 has no %1-stable holding to pay from. Pick an account that holds stable.").arg(root.activeAccount)
+        font.pixelSize: Theme.typography.secondaryText
+        color: Theme.palette.warning
+    }
+
     StateNotice {
         objectName: "bidNotice"
         Layout.fillWidth: true
@@ -508,14 +548,20 @@ InsetCard {
         radius: Theme.spacing.radiusLarge
         variant: LogosButton.Variant.Primary
         enabled: root.canBid
-        text: root.blocked ? qsTr("Bidding paused")
+        text: root.oracleUnknown ? qsTr("Oracle unknown")
+              : root.blocked ? qsTr("Bidding paused")
               : d.bidder === null ? qsTr("Pick the signing account")
+              : !root.hasStableHolding ? qsTr("No stable holding")
               : d.quoting ? qsTr("Quoting…") : qsTr("Place bid")
         onClicked: d.placeBid()
-        // Primary buttons carry a black label (contrast on the orange fill).
-        Component.onCompleted: labelItem.color = Qt.binding(function() {
-            return enabled ? Theme.palette.backgroundBlack : Theme.palette.textMuted
-        })
+        // Primary buttons carry a black label (contrast on the orange fill), 14 px bold as on the board.
+        Component.onCompleted: {
+            labelItem.color = Qt.binding(function() {
+                return enabled ? Theme.palette.backgroundBlack : Theme.palette.textMuted
+            })
+            labelItem.font.pixelSize = Theme.typography.primaryText
+            labelItem.font.weight = Theme.typography.weightBold
+        }
     }
 
     TxLane {

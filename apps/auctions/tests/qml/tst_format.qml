@@ -44,14 +44,17 @@ TestCase {
         compare(Format.shortId(null), "")
     }
 
-    // Ray values (1e27 = 1) are u128 strings: percentages and prices come from string arithmetic.
-    function test_ray_percent_rounds_without_a_double() {
-        compare(Format.rayPercent("37777777777777777777777777", 1), "3.8")
-        compare(Format.rayPercent("1777777777777777777777778", 2), "0.18")
+    // Ray values (1e27 = 1) are u128 strings: percentages come from string arithmetic and truncate, as the
+    // CLI's bps() floors (R32): 37777…7 ray is 377.77 bps there, 3.7777% here.
+    function test_ray_percent_truncates_like_the_cli() {
+        compare(Format.rayPercent("37777777777777777777777777", 1), "3.7")
+        compare(Format.rayPercent("37777777777777777777777777", 4), "3.7777")
+        compare(Format.rayPercent("1777777777777777777777778", 2), "0.17")
         compare(Format.rayPercent("100000000000000000000000000", 1), "10.0")
         compare(Format.rayPercent("0", 1), "0.0")
         compare(Format.rayPercent("994999999999999999999999999", 0), "99")
-        compare(Format.rayPercent("995000000000000000000000000", 0), "100")
+        compare(Format.rayPercent("999999999999999999999999999", 0), "99")
+        compare(Format.rayPercent("9999999999999999999999999", 2), "0.99")
         compare(Format.rayPercent("2000000000000000000000000000000", 0), "200,000")
     }
 
@@ -61,13 +64,24 @@ TestCase {
         compare(Format.rayPrice("2000000000000000000000000000"), "2")
     }
 
-    function test_fixed_rounds_half_up_and_carries() {
-        compare(Format.fixed("12345", 2, 1), "123.5")
-        compare(Format.fixed("99995", 4, 2), "10.00")
+    function test_fixed_truncates() {
+        compare(Format.fixed("12345", 2, 1), "123.4")
+        compare(Format.fixed("99995", 4, 2), "9.99")
         compare(Format.fixed("5", 3, 0), "0")
-        compare(Format.fixed("500", 3, 0), "1")
+        compare(Format.fixed("999", 3, 0), "0")
+        compare(Format.fixed("1234567", 3, 0), "1,234")
         compare(Format.fixed("7", 0, 2), "7.00")
         compare(Format.fixed("abc", 2, 1), "abc")
+    }
+
+    function test_leading_zeros_are_ignored() {
+        compare(Format.fixed("0012345", 2, 1), "123.4")
+        compare(Format.fixed("000", 2, 2), "0.00")
+        compare(Format.fixed("0005", 3, 3), "0.005")
+        compare(Format.subtract("000660000", "0100000"), "560000")
+        compare(Format.subtract("0005", "005"), "0")
+        compare(Format.subtract("0010", "0001"), "9")
+        compare(Format.cmp("000700000", "660000"), 1)
     }
 
     function test_decimal_compare_and_subtract_beyond_2_pow_53() {
@@ -88,6 +102,10 @@ TestCase {
         compare(Format.ratio("900", "600"), 1)
         compare(Format.ratio("5", "0"), 0)
         fuzzyCompare(Format.ratio("1000000000000000000000000000", "3000000000000000000000000000"), 1 / 3, 1e-9)
+        // A part far longer than the whole clamps to 1; leading zeros do not count as digits.
+        compare(Format.ratio("340282366920938463463374607431768211455", "7"), 1)
+        compare(Format.ratio("000330000", "0660000"), 0.5)
+        compare(Format.ratio("1", "340282366920938463463374607431768211455"), 0)
     }
 
     function test_percent_to_bps() {

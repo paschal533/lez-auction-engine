@@ -75,20 +75,9 @@ function subtract(a, b) {
     return stripZeros(out)
 }
 
-// "1299" -> "1300": adds one to a digit string.
-function increment(digits) {
-    var out = ""
-    var carry = 1
-    for (var i = digits.length - 1; i >= 0; i--) {
-        var d = digits.charCodeAt(i) - 48 + carry
-        carry = d > 9 ? 1 : 0
-        out = String(d % 10) + out
-    }
-    return carry ? "1" + out : out
-}
-
-// fixed("12345", 2, 1) -> "123.5": the value decString / 10^decimals rounded half up to exactly `places`
-// fraction digits, whole part grouped. Input that is not digits comes back unchanged.
+// fixed("12345", 2, 1) -> "123.4": the value decString / 10^decimals truncated (floored) to exactly `places`
+// fraction digits, whole part grouped, as the CLI prints (cli/src/output.rs bps(), R32). Input that is not
+// digits comes back unchanged.
 function fixed(decString, decimals, places) {
     var s = String(decString === undefined || decString === null ? "" : decString)
     if (!isDigits(s) || !(decimals >= 0) || !(places >= 0))
@@ -101,8 +90,7 @@ function fixed(decString, decimals, places) {
         var drop = decimals - places
         while (s.length <= drop)
             s = "0" + s
-        var keep = s.substring(0, s.length - drop)
-        s = s.charAt(s.length - drop) >= "5" ? increment(keep) : keep
+        s = s.substring(0, s.length - drop)
     }
     while (s.length <= places)
         s = "0" + s
@@ -114,12 +102,12 @@ function fixed(decString, decimals, places) {
 var RAY_DECIMALS = 27
 var RAY_PERCENT_DECIMALS = 25
 
-// rayPercent("37777777777777777777777777", 1) -> "3.8" (percent, no sign).
+// rayPercent("37777777777777777777777777", 1) -> "3.7" (percent, no sign, truncated like the CLI).
 function rayPercent(ray, places) {
     return fixed(ray, RAY_PERCENT_DECIMALS, places)
 }
 
-// rayPrice("500000000000000000000000000") -> "0.5": a ray price to 6 places, trailing zeros dropped.
+// rayPrice("500000000000000000000000000") -> "0.5": a ray price truncated to 6 places, trailing zeros dropped.
 function rayPrice(ray) {
     var s = fixed(ray, RAY_DECIMALS, 6)
     return s.indexOf(".") < 0 ? s : s.replace(/0+$/, "").replace(/\.$/, "")

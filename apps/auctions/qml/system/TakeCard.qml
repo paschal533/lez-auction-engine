@@ -180,8 +180,10 @@ InsetCard {
                         confirmLabel: surplus ? qsTr("Take surplus lot") : qsTr("Take debt lot")
                     }
                 },
-                submit: function() {
-                    return { action: surplus ? "take_surplus" : "take_debt", payer: payer, receiver: receiver, amount: amount }
+                // The slippage the confirmed quote was computed with, so its limit is the one sent.
+                submit: function(q) {
+                    return { action: surplus ? "take_surplus" : "take_debt", payer: payer, receiver: receiver, amount: amount,
+                             slippage_bps: q.slippage_bps }
                 }
             })
         }
@@ -203,7 +205,8 @@ InsetCard {
     }
 
     LogosText {
-        text: qsTr("Stable to take")
+        // Surplus: the stable the taker receives; debt: the stable the taker pays (amount_coin either way).
+        text: root.surplus ? qsTr("Stable to take") : qsTr("Stable to pay")
         font.pixelSize: Theme.typography.secondaryText
         color: Theme.palette.textTertiary
     }
@@ -240,7 +243,7 @@ InsetCard {
         }
         LogosText {
             text: "→"
-            font.pixelSize: 18
+            font.pixelSize: Theme.typography.subtitleText
             color: Theme.palette.textTertiary
         }
         Side {

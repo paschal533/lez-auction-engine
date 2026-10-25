@@ -38,6 +38,23 @@ Item {
         return m
     }
     readonly property bool belowThreshold: !!acc && Format.cmp(String(acc.unbacked_debt), String(acc.freeze_threshold)) <= 0
+    readonly property bool hostFrozen: !!(overview && overview.host && overview.host.frozen === true)
+    // What check_solvency would decide (auction_core system.rs, programs.md §check_solvency): Healthy at or below
+    // the threshold (equality included); above it Freeze only when no debt auction can ever start (token not
+    // configured, or MintCapConfig / MintAuthorityMissing / ProtocolTokenMismatch), NoAction for a startable or
+    // transiently failing start, and a refusal (RecoveryInProgress) while a debt auction is live. The QML cannot
+    // tell those apart, so above the threshold it says "may".
+    readonly property string solvencyVerdict: {
+        if (!acc) return ""
+        const now = amount(acc.unbacked_debt)
+        if (belowThreshold)
+            return hostFrozen
+                ? qsTr("Now %1: at or below the threshold. Healthy: no new freeze; the host stays frozen until its freeze authority unfreezes it.").arg(now)
+                : qsTr("Now %1: at or below the threshold. Healthy: no freeze.").arg(now)
+        if (acc.debt_live)
+            return qsTr("Now %1: above the threshold, and a debt auction is live: the check is refused.").arg(now)
+        return qsTr("Now %1: above the threshold. The engine may freeze new debt (when no debt auction can ever start).").arg(now)
+    }
 
     onOverviewChanged: d.loadQuote()
 
@@ -201,7 +218,7 @@ Item {
                             { label: qsTr("Unbacked debt"), value: String(o.accounting.unbacked_debt), decimals: 0, unit: qsTr("stable") },
                             { label: qsTr("Freeze threshold"), value: String(o.accounting.freeze_threshold), decimals: 0, unit: qsTr("stable") }
                         ],
-                        note: qsTr("Settles what the buffer can first. Above the threshold the engine freezes new debt on the host unless a debt auction can start or is live."),
+                        note: qsTr("Settles what the buffer can first. At or below the threshold that is all: no freeze. Above it the engine may freeze new debt (when no debt auction can ever start); while a debt auction is live the check is refused."),
                         confirmLabel: qsTr("Check solvency")
                     }
                 },
@@ -390,7 +407,7 @@ Item {
                                     Layout.fillWidth: true
                                     wrapMode: Text.WordWrap
                                     text: root.acc
-                                          ? qsTr("Freezes new debt on the host if unbacked debt stays above %1 stable after the buffer settles what it can.")
+                                          ? qsTr("Settles what the buffer can, then judges unbacked debt against %1 stable. Above it the engine may freeze new debt (when no debt auction can ever start); while a debt auction is live the check is refused.")
                                                 .arg(root.amount(root.acc.freeze_threshold))
                                           : ""
                                     font.pixelSize: Theme.typography.secondaryText
@@ -400,11 +417,7 @@ Item {
                                     objectName: "solvencyVerdict"
                                     Layout.fillWidth: true
                                     wrapMode: Text.WordWrap
-                                    text: !root.acc ? ""
-                                          : root.belowThreshold
-                                            ? qsTr("Now %1: at or below the threshold, the host stays live.").arg(root.amount(root.acc.unbacked_debt))
-                                            : qsTr("Now %1: above the threshold. The check freezes the host unless a debt auction can start or is live.")
-                                                  .arg(root.amount(root.acc.unbacked_debt))
+                                    text: root.solvencyVerdict
                                     font.pixelSize: Theme.typography.secondaryText
                                     font.features: { "tnum": 1 }
                                     color: root.belowThreshold ? Theme.palette.success : Theme.palette.error

@@ -156,53 +156,61 @@ function systemTx(name, section, button, caption, confirmCaption, before = []) {
   ];
 }
 
+// The System builders. Each takes an id suffix (default none) so one step can appear twice in the story without
+// colliding ids: the demo settles debt and checks solvency more than once (e.g. settleDebt("-2")).
+
 // Upkeep as the caller (permissionless): record the feed, settle the buffer against unbacked debt.
-export function observeFeed() {
-  return systemTx("system-observe-feed", "accounting", "observeFeed",
+export function observeFeed(suffix = "") {
+  return systemTx(`system-observe-feed${suffix}`, "accounting", "observeFeed",
     "Accounting: upkeep anyone may run.", "Observe the feed: it records the feed's state, no price moves.");
 }
 
-export function settleDebt() {
-  return systemTx("system-settle-debt", "accounting", "settleDebtSubmit",
+export function settleDebt(suffix = "") {
+  return systemTx(`system-settle-debt${suffix}`, "accounting", "settleDebtSubmit",
     "Accounting: the buffer covers unbacked debt.",
     "Settle debt: the buffer's stable is burned against the debt.");
 }
 
-export function checkSolvency() {
-  return systemTx("system-check-solvency", "accounting", "checkSolvency",
+export function checkSolvency(suffix = "") {
+  return systemTx(`system-check-solvency${suffix}`, "accounting", "checkSolvency",
     "Accounting: is unbacked debt above the freeze threshold?", "Check solvency.");
 }
 
-export function startSurplus() {
-  return systemTx("system-start-surplus", "surplus", "startSurplus",
+export function startSurplus(suffix = "") {
+  return systemTx(`system-start-surplus${suffix}`, "surplus", "startSurplus",
     "Surplus auction: the buffer has more than it needs.", "Start the surplus auction.");
 }
 
-export function startDebt() {
-  return systemTx("system-start-debt", "debt", "startDebt",
+export function startDebt(suffix = "") {
+  return systemTx(`system-start-debt${suffix}`, "debt", "startDebt",
     "Debt auction: unbacked debt is put up for protocol tokens.", "Start the debt auction.");
 }
 
 // Take a lot as the signing account (the taker): type the stable amount, wait for its quote, confirm.
-export function takeSurplus(amount) {
-  return systemTx("system-take-surplus", "surplus", "takeSurplusSubmit",
+export function takeSurplus(amount, suffix = "") {
+  const name = `system-take-surplus${suffix}`;
+  return systemTx(name, "surplus", "takeSurplusSubmit",
     "Surplus auction: take the lot with protocol tokens.",
     "Confirm: the protocol tokens paid are burned.",
-    [{ id: "system-take-surplus-amount", segment: "task-15", caption: `Take ${amount} stable.`,
+    [{ id: `${name}-amount`, segment: "task-15", caption: `Take ${amount} stable.`,
        action: "setText", target: "takeSurplusAmount", value: String(amount) },
-     { id: "system-take-surplus-quote", segment: "task-15", caption: "The quote names the burn.",
+     { id: `${name}-quote`, segment: "task-15", caption: "The quote names the burn.",
        action: "waitFor", target: "takeSurplusBurnNote", property: "visible", value: true, timeoutMs: 10000 }]);
 }
 
-export function takeDebt(amount) {
-  return systemTx("system-take-debt", "debt", "takeDebtSubmit",
+export function takeDebt(amount, suffix = "") {
+  const name = `system-take-debt${suffix}`;
+  return systemTx(name, "debt", "takeDebtSubmit",
     "Debt auction: pay down bad debt for newly minted protocol tokens.",
     "Confirm: the stable paid is burned against the debt.",
-    [{ id: "system-take-debt-amount", segment: "task-15", caption: `Pay ${amount} stable.`,
+    [{ id: `${name}-amount`, segment: "task-15", caption: `Pay ${amount} stable.`,
        action: "setText", target: "takeDebtAmount", value: String(amount) },
-     { id: "system-take-debt-quote", segment: "task-15", caption: "The quote shows the tokens minted.",
+     { id: `${name}-quote`, segment: "task-15", caption: "The quote shows the tokens minted.",
        action: "waitFor", target: "takeDebtNote", property: "visible", value: true, timeoutMs: 10000 }]);
 }
+
+// Exported for Task 16 (story.mjs): sign as a label from the header picker, with the account guard.
+export { signAs };
 
 export const STORY_STEPS = [
   // ---- Task 11: shell. Pick the account that signs; the header follows. ----
@@ -265,7 +273,10 @@ export const STORY_STEPS = [
   // ---- Task 14: Settled. Still signed in as the owner, claim what the final bid left over. ----
   ...claimLeftover(AUCTION_P0),
 
-  // ---- Task 15: System. Upkeep as the caller, the surplus take as the taker, then the debt auction. ----
+  // ---- Task 15: System. Upkeep as the caller, then the surplus take as the taker. ----
+  // The debt side is not here (R39): startDebt() and takeDebt(5000) only make sense after the price publish,
+  // the P2 liquidation, its bid, a second settleDebt("-2") and a stable transfer to the taker, in the order of
+  // scripts/lib/demo-scenario.sh. Task 16 assembles them, with signAs(), from the exported builders.
   ...signAs("system-caller", "caller", "Upkeep is permissionless: sign as the caller."),
   ...observeFeed(),
   ...settleDebt(),
@@ -273,8 +284,4 @@ export const STORY_STEPS = [
   ...startSurplus(),
   ...signAs("system-taker", "taker", "The taker pays for the surplus lot."),
   ...takeSurplus(500),
-  ...signAs("system-caller-debt", "caller", "Sign as the caller to start the debt auction."),
-  ...startDebt(),
-  ...signAs("system-taker-debt", "taker", "The taker pays down a lot of bad debt."),
-  ...takeDebt(5000),
 ];

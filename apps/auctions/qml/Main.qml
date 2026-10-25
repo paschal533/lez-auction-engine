@@ -20,7 +20,8 @@ Rectangle {
     // The section the System tab should show when it opens ("accounting" from a Settled shortfall).
     property string systemSection: ""
     // The last `overview` reply any screen read (Live, At-risk and System read it; nothing polls it, R28). The
-    // header's Frozen badge binds to its host.frozen.
+    // header's Frozen badge binds to its host.frozen. It is the last KNOWN overview: it is not cleared when the
+    // network or the wallet changes, so the badge shows the previous reading until a screen reads again.
     property var lastOverview: null
 
     // Switch to the System tab (index 3) at `section`, even when the same section was asked for before.

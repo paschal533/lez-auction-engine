@@ -12,7 +12,8 @@ import "../common/Format.js" as Format
 //   Accounting       Unbacked (error) with the unbacked debt, or Covered (success) with the buffer;
 //   Surplus auction  Live (accentOrange) with the lot left, or Idle with the buffer;
 //   Debt auction     Live (accentOrange) with the lot left, or Idle with the unbacked debt;
-//   Host             Frozen (error) or Live (success), with the freeze threshold.
+//   Host             Frozen (error) or Live (success), with the freeze threshold (check_solvency may freeze above
+//                    it, never at or below).
 ColumnLayout {
     id: root
 
@@ -59,7 +60,7 @@ ColumnLayout {
             title: qsTr("Host"),
             verdict: !host ? "" : host.frozen ? qsTr("Frozen") : qsTr("Live"),
             tone: !host ? "" : host.frozen ? "error" : "success",
-            caption: !acc ? "" : qsTr("Freezes above %1").arg(amount(acc.freeze_threshold))
+            caption: !acc ? "" : qsTr("Freeze threshold %1").arg(amount(acc.freeze_threshold))
         }
     ]
 

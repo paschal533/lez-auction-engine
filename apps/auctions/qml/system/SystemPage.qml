@@ -35,7 +35,8 @@ Item {
 
     readonly property alias selected: d.selected
     readonly property alias overview: d.overview
-    readonly property bool busy: d.reading || (lane.txId.length > 0 && lane.state === "waiting")
+    // Busy from the read to the lane's outcome: reading, a submit in flight (no reply yet), or the lane waiting.
+    readonly property bool busy: d.reading || d.submitting || (lane.txId.length > 0 && lane.state === "waiting")
     // The active account's wallet row, or null: the signer of every System transaction.
     readonly property var signer: {
         const rows = accounts || []
@@ -70,6 +71,8 @@ Item {
         // A transaction being prepared (read → dialog → submit), and its read in flight.
         property var pending: null
         property bool reading: false
+        // A submit sent and not yet answered: a second Confirm or act() must not send another transaction.
+        property bool submitting: false
         property var actionNotice: null
         property string actionPrefix: ""
 
@@ -142,9 +145,11 @@ Item {
 
         function submit() {
             const spec = pending
-            if (!root.backend || !spec)
+            if (!root.backend || !spec || submitting)
                 return
+            submitting = true
             logos.watch(root.backend.submit(spec.submit(dialog.quote)), function(reply) {
+                submitting = false
                 const bad = failure(reply)
                 if (bad) {
                     setActionNotice(spec.title, bad)
@@ -155,6 +160,7 @@ Item {
                 lane.request = { from: root.signer ? String(root.signer.id) : "" }
                 lane.txId = String(reply.txId)
             }, function(err) {
+                submitting = false
                 setActionNotice(spec.title, failure(null, err))
             })
         }

@@ -31,6 +31,9 @@ TestCase {
     property var surplusQuote: ({})
     property var debtQuote: ({})
     property var submitReply: ({})
+    // With deferSubmit the stub holds submit replies back; the test answers them through `deferredSubmits`.
+    property bool deferSubmit: false
+    property var deferredSubmits: []
     property var statusReply: ({})
     property var calls: []
     property real fakeNow: 1700000000000
@@ -79,7 +82,13 @@ TestCase {
                 ok({ error: "unknown view", kind: "bad_request" })
                 return
             case "rescan": ok(Fixtures.load("scan_done")); return
-            case "submit": ok(copy(testCase.submitReply)); return
+            case "submit":
+                if (testCase.deferSubmit) {
+                    testCase.deferredSubmits.push(ok)
+                    return
+                }
+                ok(copy(testCase.submitReply))
+                return
             case "txStatus": ok(copy(testCase.statusReply)); return
             }
         }
@@ -102,6 +111,8 @@ TestCase {
         submitReply = { txId: "tx1", hash: "h", what: "settle_debt", step: 0, steps: 1, tracking: { signer: callerId } }
         statusReply = { txId: "tx1", state: "pending", blocks_waited: 1, step: 0, steps: 1 }
         calls = []
+        deferSubmit = false
+        deferredSubmits = []
         fakeNow = 1700000000000
         page = null
         backendStub.activeAccount = "caller"
@@ -109,6 +120,11 @@ TestCase {
 
     function cleanup() {
         page = null
+    }
+
+    // Collect this file's many fixture copies before the next file runs (optional per R41).
+    function cleanupTestCase() {
+        gc()
     }
 
     function accounting(fields) {
@@ -262,8 +278,57 @@ TestCase {
         verify(dialog.request.note.indexOf("burned") >= 0, dialog.request.note)
         confirm(p)
         compare(JSON.stringify(lastSubmit()), JSON.stringify({
-            action: "take_surplus", payer: "taker-protocol", receiver: "taker-stable", amount: "500"
+            action: "take_surplus", payer: "taker-protocol", receiver: "taker-stable", amount: "500",
+            slippage_bps: surplusQuote.slippage_bps
         }))
+    }
+
+    // check_solvency (auction_core system.rs, programs.md): Healthy at or below the threshold; above it Freeze
+    // only when no debt auction can ever start, and a refusal while one is live. The copy never promises a freeze
+    // and never says the host stays live when it is frozen.
+    function test_solvency_verdict_follows_the_engine() {
+        accounting({ unbacked_debt: "1500" })        // above 1,000, the fixture's debt auction is live
+        let p = createPage("accounting")
+        compare(findChild(p, "solvencyVerdict").text,
+                "Now 1,500: above the threshold, and a debt auction is live: the check is refused.")
+        accounting({ debt_live: false, debt_lot_left: null, debt_on_auction: "0" })
+        findChild(p, "systemRefresh").activate()
+        tryCompare(findChild(p, "solvencyVerdict"), "text",
+                   "Now 1,500: above the threshold. The engine may freeze new debt (when no debt auction can ever start).")
+        accounting({ unbacked_debt: "1000" })        // equality is Healthy
+        overviewReply.host.frozen = true
+        findChild(p, "systemRefresh").activate()
+        tryCompare(findChild(p, "solvencyVerdict"), "text",
+                   "Now 1,000: at or below the threshold. Healthy: no new freeze; the host stays frozen until its freeze authority unfreezes it.")
+    }
+
+    // A Confirm sends one submit; until it is answered the actions stay disabled and act() is ignored.
+    function test_no_second_action_while_a_submit_is_in_flight() {
+        const p = createPage("accounting")
+        deferSubmit = true
+        openDialog(p, "observeFeed")
+        confirm(p)
+        compare(callsOf("submit").length, 1)
+        verify(p.busy)
+        for (const name of ["observeFeed", "checkSolvency", "settleDebtSubmit"])
+            verify(!findChild(p, name).enabled, name)
+        const reads = callsOf("view").length
+        p.act({ title: "x", read: { view: "overview" }, dialog: function() { return {} }, submit: function() { return {} } })
+        compare(callsOf("view").length, reads, "act() while submitting reads nothing")
+        verify(!findChild(p, "systemTxDialog").opened)
+        deferredSubmits.shift()(submitReply)
+        tryCompare(findChild(p, "systemTxLane"), "state", "waiting")
+        compare(callsOf("submit").length, 1)
+        // An error reply also clears the guard.
+        statusReply = { txId: "tx1", state: "included", step: 0, steps: 1 }
+        findChild(p, "systemTxLane").poll()
+        tryVerify(function() { return !p.busy })
+        openDialog(p, "checkSolvency")
+        confirm(p)
+        verify(p.busy)
+        deferredSubmits.shift()({ error: "the engine would reject this: RecoveryInProgress (code 52)", kind: "refused" })
+        verify(!p.busy)
+        tryVerify(function() { return findChild(p, "checkSolvency").enabled })
     }
 
     // ---- Accounting --------------------------------------------------------------------------------
@@ -282,7 +347,7 @@ TestCase {
         fuzzyCompare(findChild(p, "coverBarUnbacked").width, track.width * 0.5, 1)
         fuzzyCompare(findChild(p, "coverTick").x, findChild(p, "coverTicks").width * 0.5, 2)
         compare(findChild(p, "coverScale").text, "0 – 2,000 stable")
-        compare(findChild(p, "solvencyVerdict").text, "Now 1,000: at or below the threshold, the host stays live.")
+        compare(findChild(p, "solvencyVerdict").text, "Now 1,000: at or below the threshold. Healthy: no freeze.")
     }
 
     function test_upkeep_actions_submit_as_caller() {
@@ -354,7 +419,7 @@ TestCase {
         compare(findChild(findChild(p, "systemItem_surplus"), "systemItemCaption").text, "500 stable left")
         compare(findChild(findChild(p, "systemItem_debt"), "systemItemVerdict").text, "Live")
         compare(findChild(findChild(p, "systemItem_host"), "systemItemVerdict").text, "Live")
-        compare(findChild(findChild(p, "systemItem_host"), "systemItemCaption").text, "Freezes above 1,000")
+        compare(findChild(findChild(p, "systemItem_host"), "systemItemCaption").text, "Freeze threshold 1,000")
         mouseClick(findChild(p, "systemItem_host"))
         compare(p.selected, "host")
         compare(findChild(findChild(p, "hostMinCr"), "factValue").text, "200%")
@@ -398,7 +463,8 @@ TestCase {
         openDialog(p, "takeDebtSubmit")
         confirm(p)
         compare(JSON.stringify(lastSubmit()), JSON.stringify({
-            action: "take_debt", payer: "taker-stable", receiver: "taker-protocol", amount: "5000"
+            action: "take_debt", payer: "taker-stable", receiver: "taker-protocol", amount: "5000",
+            slippage_bps: debtQuote.slippage_bps
         }))
     }
 

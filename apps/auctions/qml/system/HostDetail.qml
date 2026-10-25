@@ -109,7 +109,7 @@ Item {
         LogosText {
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
-            text: qsTr("Check solvency (Accounting) freezes new debt when unbacked debt stays above the freeze threshold. The engine never unfreezes; only the host's freeze authority does.")
+            text: qsTr("Check solvency (Accounting) may freeze new debt when unbacked debt is above the freeze threshold and no debt auction can ever start; while a debt auction is live it is refused. The engine never unfreezes; only the host's freeze authority does.")
             font.pixelSize: Theme.typography.secondaryText
             color: Theme.palette.textSecondary
         }

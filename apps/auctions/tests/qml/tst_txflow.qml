@@ -19,6 +19,8 @@ TestCase {
     // Replies txStatus hands out, oldest first; an empty queue answers "pending".
     property var statusQueue: []
     property var polled: []
+    // Date.now() at each txStatus call, for the poll-interval test.
+    property var pollTimes: []
     // With deferWatch the stub holds txStatus replies back; the test answers them through `deferred`.
     property bool deferWatch: false
     property var deferred: []
@@ -31,7 +33,11 @@ TestCase {
     QtObject {
         id: backendStub
         property string activeAccount: "owner"
-        function txStatus(id) { testCase.polled.push(id); return { call: "txStatus", txId: id } }
+        function txStatus(id) {
+            testCase.polled.push(id)
+            testCase.pollTimes.push(Date.now())
+            return { call: "txStatus", txId: id }
+        }
     }
 
     QtObject {
@@ -71,6 +77,7 @@ TestCase {
     function init() {
         statusQueue = []
         polled = []
+        pollTimes = []
         deferWatch = false
         deferred = []
         backendStub.activeAccount = "owner"
@@ -376,19 +383,21 @@ TestCase {
         deferWatch = false
     }
 
+    // Measured from the stub's own timestamps (R41), so a slow event loop elsewhere in the run cannot stretch
+    // the measurement: the first poll comes no sooner than 2 s after the lane starts, the next one about 2 s later
+    // (one call at a time, a fixed 2 s timer), and none after the outcome is known.
     function test_lane_polls_every_two_seconds() {
+        const laneStart = Date.now()
         const lane = laneFor("tx6", ownerId)
         compare(lane.pollInterval, 2000)
-        const started = Date.now()
-        wait(1800)
-        compare(polled.length, 0, "no poll before 2 s")
-        tryVerify(function() { return testCase.polled.length >= 1 }, 1000)
-        tryVerify(function() { return testCase.polled.length >= 2 }, 2500)
-        const second = Date.now() - started
-        verify(second >= 3800 && second <= 4800, "second poll at about 4 s, was " + second + " ms")
+        tryVerify(function() { return testCase.pollTimes.length >= 2 }, 8000)
+        const first = pollTimes[0] - laneStart
+        const gap = pollTimes[1] - pollTimes[0]
+        verify(first >= 1800, "first poll after about 2 s, was " + first + " ms")
+        verify(gap >= 1800 && gap <= 2600, "second poll about 2 s after the first, was " + gap + " ms")
 
         statusQueue = [{ txId: "tx6", state: "included", step: 0, steps: 1 }]
-        tryCompare(lane, "state", "done", 2500)
+        tryCompare(lane, "state", "done", 5000)
         verify(!lane.polling)
         const count = polled.length
         wait(2500)

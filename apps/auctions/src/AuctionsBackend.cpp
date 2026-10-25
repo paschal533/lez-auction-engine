@@ -62,8 +62,16 @@ void AuctionsBackend::refreshChain()
     const QVariantMap reply = m_logos->auction_engine.blockHeight();
     const bool reachable = !reply.contains(QStringLiteral("error"));
     setNodeReachable(reachable);
-    if (reachable)
+    if (reachable) {
         setBlockHeight(reply.value(QStringLiteral("height")).toInt());
+        clearErrorOnSuccess(reply);
+    }
+}
+
+void AuctionsBackend::clearErrorOnSuccess(const QVariantMap& reply)
+{
+    if (!reply.contains(QStringLiteral("error")) && !lastError().isEmpty())
+        setLastError(QString());
 }
 
 QVariantMap AuctionsBackend::configure(QString deployment, QString stateDir, QString walletHome)
@@ -86,8 +94,9 @@ QVariantMap AuctionsBackend::submit(QVariantMap request)
 {
     if (!walletOpen())
         return errorReply(QStringLiteral("The wallet is not open."), QStringLiteral("wallet"));
+    // The caller shows this reply's error itself; lastError is not set again (no double banner).
     const QVariantMap reply = m_logos->auction_engine.submit(request);
-    failed(reply);
+    clearErrorOnSuccess(reply);
     return reply;
 }
 
@@ -95,7 +104,7 @@ QVariantMap AuctionsBackend::txStatus(QString txId)
 {
     const QVariantMap reply =
         m_logos->auction_engine.txStatus(QVariantMap{{QStringLiteral("txId"), txId}});
-    failed(reply);
+    clearErrorOnSuccess(reply);
     return reply;
 }
 

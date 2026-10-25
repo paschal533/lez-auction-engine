@@ -7,6 +7,7 @@ import Logos.Controls
 // The five view tabs, in the header's right slot. Dev tools shows only on a dev network.
 LogosTabBar {
     id: root
+    objectName: "tabBar"
 
     property bool devVisible: false
 
@@ -35,5 +36,7 @@ LogosTabBar {
         objectName: "tabDev"
         text: qsTr("Dev tools")
         visible: root.devVisible
+        // A hidden tab must not leave a gap or widen the bar.
+        width: visible ? implicitWidth : 0
     }
 }

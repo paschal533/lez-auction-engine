@@ -43,6 +43,10 @@ Rectangle {
         }
 
         function submit() {
+            if (!root.backend) {
+                finish(qsTr("The backend is not ready."), true)
+                return
+            }
             const gen = ++generation
             busy = true
             failed = false
@@ -56,6 +60,10 @@ Rectangle {
                 if (gen !== generation) return
                 if (reply.error) {
                     finish(reply.error, true)
+                    return
+                }
+                if (!reply.txId) {
+                    finish(qsTr("The engine accepted the transfer but returned no transaction id."), true)
                     return
                 }
                 txId = reply.txId

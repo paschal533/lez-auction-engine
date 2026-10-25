@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # QML unit tests for the Auctions app (Plan 4 Task 5).
 #   scripts/basecamp/qml-tests.sh [dir-or-file ...]   default: every test in apps/auctions/tests/qml
-# Runs qmltestrunner (nixpkgs Qt, the revision the root flake locks) offscreen against the design
+# Runs qmltestrunner (Qt from the nixpkgs the pinned logos-module-builder uses) offscreen against the design
 # system Basecamp master ships (88330d04). Runs inside WSL; from Git Bash it re-runs itself through wsl.
 set -euo pipefail
 
@@ -17,10 +17,20 @@ fi
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$root"
 
+# Qt must be the one the app runs on: the nixpkgs the pinned logos-module-builder uses (not the root flake's).
 nixpkgs_rev="$(python3 -c "
 import json
-d = json.load(open('flake.lock'))
-print(d['nodes'][d['nodes']['root']['inputs']['nixpkgs']]['locked']['rev'])")"
+d = json.load(open('apps/auctions/flake.lock'))
+n = d['nodes']
+def resolve(ref):
+    if isinstance(ref, str):
+        return ref
+    cur = d['root']
+    for key in ref:
+        cur = resolve(n[cur]['inputs'][key])
+    return cur
+builder = resolve(n[d['root']]['inputs']['logos-module-builder'])
+print(n[resolve(n[builder]['inputs']['nixpkgs'])]['locked']['rev'])")"
 
 qt_decl="$(nix build "github:NixOS/nixpkgs/${nixpkgs_rev}#qt6.qtdeclarative" --no-link --print-out-paths | head -1)"
 qt_svg="$(nix build "github:NixOS/nixpkgs/${nixpkgs_rev}#qt6.qtsvg" --no-link --print-out-paths | head -1)"

@@ -21,6 +21,14 @@ TestCase {
         compare(Format.amount("1000000", 6), "1")
     }
 
+    function test_amount_returns_invalid_input_unchanged() {
+        compare(Format.amount("-100", 0), "-100")
+        compare(Format.amount("12a4", 2), "12a4")
+        compare(Format.amount("1.5", 0), "1.5")
+        compare(Format.amount("1000", -1), "1000")
+        compare(Format.amount("1000", 1.5), "1000")
+    }
+
     function test_amount_small_and_empty() {
         compare(Format.amount("0", 0), "0")
         compare(Format.amount("999", 0), "999")

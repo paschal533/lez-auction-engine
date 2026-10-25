@@ -34,6 +34,8 @@ private:
     void refreshChain();
     // Records the error of a failed engine reply in lastError; returns whether the reply failed.
     bool failed(const QVariantMap& reply);
+    // A reply that worked proves the engine is healthy, so an earlier error no longer applies.
+    void clearErrorOnSuccess(const QVariantMap& reply);
 
     LogosAPI* m_logosAPI;
     std::unique_ptr<LogosModules> m_logos;

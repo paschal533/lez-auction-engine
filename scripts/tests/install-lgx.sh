@@ -108,6 +108,17 @@ printf '{\n  "name": "lez_core",\n  "version": "0.5.2"\n}\n' > "$q/modules/lez_c
 run_case newer_lez_core_refused 4 "lez_core 0.5.2" -- "$q" --install-only
 [[ ! -e "$tmp/log/lgpm.log" ]] && echo "ok   newer_lez_core_installs_nothing" || { echo "FAIL newer_lez_core_installs_nothing"; fails=$((fails + 1)); }
 
+# The guard fails closed: a minified manifest is read, and one without a readable version is refused.
+m="$tmp/minified-new"; mkdir -p "$m/modules/lez_core"
+printf '{"name":"lez_core","dependencies":[{"name":"x","version":"0.4.1"}],"version":"0.5.1"}' > "$m/modules/lez_core/manifest.json"
+run_case minified_newer_refused 4 "lez_core 0.5.1" -- "$m" --install-only
+m="$tmp/minified-pinned"; mkdir -p "$m/modules/lez_core"
+printf '{"name":"lez_core","manifestVersion":"0.3.0","version":"0.4.1"}' > "$m/modules/lez_core/manifest.json"
+run_case minified_pinned_accepted 0 "installed into $m" -- "$m" --install-only
+m="$tmp/unreadable"; mkdir -p "$m/modules/lez_core"
+printf '{"name":"lez_core","manifestVersion":"0.3.0"}' > "$m/modules/lez_core/manifest.json"
+run_case unreadable_version_refused 4 "no readable version" -- "$m" --install-only
+
 # If lgpm leaves a different lez_core in place, the install is refused before launching.
 run_case installed_version_checked 4 "lez_core 0.5.0" STUB_LEZ_VERSION=0.5.0 -- "$tmp/fresh" --setup
 

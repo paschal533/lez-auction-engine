@@ -12,7 +12,8 @@
 # Without --setup it uses the deployment and wallet of the last setup run (AUCTIONS_DEPLOYMENT and
 # LEE_WALLET_HOME_DIR override). Without --test Basecamp keeps running; the script prints how to stop it.
 # Overrides: AUCTION_ENGINE_ROOT, AUCTIONS_ROOT (install roots; default: nix build of modules/auction_engine
-# and apps/auctions #install), LOGOS_QT_MCP, NODE, DEMO_RUN_DIR (default ~/lez-target/demo).
+# and apps/auctions #install), LOGOS_QT_MCP, NODE, DEMO_RUN_DIR (default ~/lez-target/demo),
+# BASECAMP_OUT_DIR (result links, default ~/lez-target/basecamp; host.sh reads it too).
 # Runs inside WSL; from Git Bash it re-runs itself through wsl.
 set -euo pipefail
 
@@ -47,10 +48,10 @@ done
 if [[ -n "$test_file" ]]; then test_file="$(cd "$(dirname "$test_file")" && pwd -P)/$(basename "$test_file")"; fi
 
 LN="${DEMO_RUN_DIR:-$HOME/lez-target/demo}"
-out="$HOME/lez-target/basecamp"
+out="${BASECAMP_OUT_DIR:-$HOME/lez-target/basecamp}"
 mkdir -p "$out"
 
-# Builds one flake output to a result link under ~/lez-target/basecamp and prints the store path.
+# Builds one flake output to a result link under $out and prints the store path.
 build() { # <flake ref> <link name>
   nix build "$1" --out-link "$out/$2" >&2
   readlink -f "$out/$2"
@@ -172,6 +173,7 @@ if [[ -z "$test_file" ]]; then
   exit 0
 fi
 
+if [[ -z "${LOGOS_QT_MCP:-}" ]]; then "$repo/scripts/basecamp/host.sh" check; fi
 export LOGOS_QT_MCP="${LOGOS_QT_MCP:-$(build "github:logos-co/logos-basecamp/${BASECAMP_REV}#logos-qt-mcp" qt-mcp)}"
 if [[ -z "${NODE:-}" ]]; then
   # Node from the nixpkgs Basecamp pins (shares its store paths) when none is on PATH.

@@ -10,7 +10,9 @@
 # Exit 4: the profile has a lez_core other than 0.4.1, e.g. a newer one from Basecamp's catalogue. The app is
 # built against lez_core 0.4.1 (LEZ v0.2.4); that profile is unsupported, use a fresh PROFILE_DIR.
 # Use a Linux path for PROFILE_DIR (e.g. /tmp/auctions-profile), not one under /mnt/c.
-# Overrides: BASECAMP_OUT_DIR (result links, default ~/lez-target/basecamp), MIN_C_GB, RUN_APP.
+# Exit 4 also when PROFILE_DIR/modules/lez_core/manifest.json exists but has no readable version (fails closed).
+# Overrides: BASECAMP_OUT_DIR (result links, default ~/lez-target/basecamp; run-app.sh honours it too), MIN_C_GB,
+# RUN_APP.
 # Runs inside WSL; from Git Bash it re-runs itself through wsl.
 set -euo pipefail
 
@@ -41,16 +43,35 @@ out="${BASECAMP_OUT_DIR:-$HOME/lez-target/basecamp}"
 mkdir -p "$out"
 export BASECAMP_OUT_DIR="$out"
 
-# The version in an installed module's manifest.json ("" when it is not installed).
-installed_version() { # <modules dir> <name>
-  local m="$1/$2/manifest.json"
-  [[ -f "$m" ]] || return 0
-  sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$m" | head -1
+# The top-level "version" of a manifest.json; prints nothing when none can be read. python3 reads the JSON;
+# without it, a regex over the whole file, accepted only when every "version" in it agrees.
+manifest_version() { # <manifest.json>
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import json, sys
+try:
+    v = json.load(open(sys.argv[1])).get("version")
+except Exception:
+    v = None
+print(v if isinstance(v, str) else "")' "$1"
+    return 0
+  fi
+  local all
+  all="$(tr -d '\n' < "$1" | grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]*"' \
+    | sed -E 's/.*"([^"]*)"$/\1/' | sort -u)"
+  [[ -n "$all" && "$all" != *$'\n'* ]] && echo "$all"
+  return 0
 }
+# Fails closed: a lez_core whose manifest has no readable version is refused like a newer one.
 require_pinned_lez_core() {
-  local v
-  v="$(installed_version "$profile/modules" lez_core)"
-  [[ -z "$v" || "$v" == "$LEZ_CORE_VERSION" ]] && return 0
+  local m="$profile/modules/lez_core/manifest.json" v
+  [[ -e "$m" ]] || return 0
+  v="$(manifest_version "$m")"
+  [[ "$v" == "$LEZ_CORE_VERSION" ]] && return 0
+  if [[ -z "$v" ]]; then
+    echo "install-lgx: $m has no readable version; the Auctions app needs lez_core $LEZ_CORE_VERSION" \
+      "(rev ${LEZ_CORE_REV:0:8}). That profile is unsupported: use a fresh PROFILE_DIR." >&2
+    exit 4
+  fi
   echo "install-lgx: $profile has lez_core $v; the Auctions app needs lez_core $LEZ_CORE_VERSION" \
     "(rev ${LEZ_CORE_REV:0:8}, LEZ v0.2.4). That profile is unsupported: use a fresh PROFILE_DIR." >&2
   exit 4

@@ -1,6 +1,7 @@
 // The demo story as data: one step object per thing a person does in the Auctions app, in story order.
 // Each Phase C task appends its segment; Task 16 writes the runner (story.mjs) that drives these through
-// the QML inspector and records the timeline. Nothing here runs on its own.
+// the QML inspector and records the timeline, and assembles the rest of the story (FULL_STORY, R39). Nothing
+// here runs on its own.
 //
 // Step fields:
 //   id        stable step name (timeline key)
@@ -18,6 +19,9 @@
 // The position the story liquidates first (P0) and the auction that liquidation opens; ids come from the run.
 export const POSITION_P0 = "{{position:p0}}";
 export const AUCTION_P0 = "{{auction:p0}}";
+// The position liquidated after the price move (P2) and its auction, which ends short of its target.
+export const POSITION_P2 = "{{position:p2}}";
+export const AUCTION_P2 = "{{auction:p2}}";
 
 // One bid from the Live auctions tab: pick the auction, type the amount, place the bid, confirm, wait for the
 // lane. `extra` steps run while the confirmation is open (before Confirm).
@@ -50,6 +54,12 @@ export function bidPartial(auction, amount) {
     `Bid ${amount}: part of what is left to raise.`);
 }
 
+// Any other bid, named by `suffix` ("-shortfall": the lot-binding bid on P2's auction after the price move, which
+// buys the whole lot and raises less than the target).
+export function bid(auction, amount, suffix) {
+  return bidSteps(`bid${suffix}`, auction, amount, `Bid ${amount} on the auction.`);
+}
+
 // The final bid: it raises the rest of the target, so the confirmation names bid_with_settlement (its first
 // fact, quoteRowValue_0) and the auction settles in the same transaction.
 export function bidFinal(auction, amount) {
@@ -62,29 +72,30 @@ export function bidFinal(auction, amount) {
 }
 
 // Liquidate a position from the At-risk tab as the signing account (the keeper): pick it, check the quote,
-// liquidate, confirm, wait for the lane. The keeper's reward goes to its <label>-coll holding.
-export function liquidate(position) {
+// liquidate, confirm, wait for the lane. The keeper's reward goes to its <label>-coll holding. `suffix` keeps
+// the ids unique when the story liquidates a second position ("-2" for P2).
+export function liquidate(position, suffix = "") {
   return [
-    { id: "liquidate-open-risk", segment: "task-13", caption: "Open the at-risk positions: lowest CR first.",
+    { id: `liquidate${suffix}-open-risk`, segment: "task-13", caption: "Open the at-risk positions: lowest CR first.",
       action: "click", target: "tabRisk" },
-    { id: "liquidate-pick-position", segment: "task-13",
+    { id: `liquidate${suffix}-pick-position`, segment: "task-13",
       caption: "Pick the position: its CR is below the minimum, so it can be liquidated.",
       action: "click", target: `riskItem_${position}` },
-    { id: "liquidate-quote", segment: "task-13",
+    { id: `liquidate${suffix}-quote`, segment: "task-13",
       caption: "The quote shows the auction target, the collateral seized and the keeper's reward.",
       action: "waitFor", target: "liquidateSubmit", property: "enabled", value: true, timeoutMs: 10000 },
-    { id: "liquidate-start", segment: "task-13", caption: "Liquidate: a fresh quote opens the confirmation.",
+    { id: `liquidate${suffix}-start`, segment: "task-13", caption: "Liquidate: a fresh quote opens the confirmation.",
       action: "click", target: "liquidateSubmit" },
-    { id: "liquidate-dialog", segment: "task-13", caption: "Check the liquidation before it is sent.",
+    { id: `liquidate${suffix}-dialog`, segment: "task-13", caption: "Check the liquidation before it is sent.",
       action: "waitFor", target: "riskTxDialog", property: "opened", value: true, timeoutMs: 10000 },
-    { id: "liquidate-confirm", segment: "task-13", caption: "Confirm: the keeper signs and sends it.",
+    { id: `liquidate${suffix}-confirm`, segment: "task-13", caption: "Confirm: the keeper signs and sends it.",
       action: "click", target: "riskTxConfirm" },
-    { id: "liquidate-included", segment: "task-13", caption: "Included: the position's auction is open.",
+    { id: `liquidate${suffix}-included`, segment: "task-13", caption: "Included: the position's auction is open.",
       action: "waitFor", target: "riskTxLane", property: "state", value: "done", timeoutMs: 120000 },
     // Lists come from the scan cursor, so the new auction shows under Live auctions after a rescan.
-    { id: "liquidate-rescan", segment: "task-13", caption: "Rescan: the scan picks up the new auction.",
+    { id: `liquidate${suffix}-rescan`, segment: "task-13", caption: "Rescan: the scan picks up the new auction.",
       action: "click", target: "riskRescan" },
-    { id: "liquidate-rescan-done", segment: "task-13", caption: "The scan has caught up with the chain.",
+    { id: `liquidate${suffix}-rescan-done`, segment: "task-13", caption: "The scan has caught up with the chain.",
       action: "waitFor", target: "riskRescan", property: "enabled", value: true, timeoutMs: 30000 },
   ];
 }
@@ -169,6 +180,21 @@ export function settleDebt(suffix = "") {
   return systemTx(`system-settle-debt${suffix}`, "accounting", "settleDebtSubmit",
     "Accounting: the buffer covers unbacked debt.",
     "Settle debt: the buffer's stable is burned against the debt.");
+}
+
+// Settle debt when there is nothing to settle (after F1–F3 the target was raised, so no debt is unbacked): the quote
+// says 0 and the button stays disabled, so the story shows it rather than sending a no-op transaction (the CLI demo's
+// `settle-debt` at this point changes nothing either).
+export function settleDebtNothingToSettle(suffix = "") {
+  const name = `system-settle-debt-nothing${suffix}`;
+  return [
+    { id: `${name}-open-system`, segment: "task-16", caption: "Open System.", action: "click", target: "tabSystem" },
+    { id: `${name}-section`, segment: "task-16", caption: "Accounting: is any debt unbacked?", action: "click",
+      target: "systemItem_accounting" },
+    { id: `${name}-quote`, segment: "task-16",
+      caption: "The target was raised: nothing is unbacked, so there is nothing for the buffer to settle.",
+      action: "waitFor", target: "settleDebtAmount", property: "text", value: "0", timeoutMs: 10000 },
+  ];
 }
 
 export function checkSolvency(suffix = "") {
@@ -279,9 +305,109 @@ export const STORY_STEPS = [
   // scripts/lib/demo-scenario.sh. Task 16 assembles them, with signAs(), from the exported builders.
   ...signAs("system-caller", "caller", "Upkeep is permissionless: sign as the caller."),
   ...observeFeed(),
-  ...settleDebt(),
+  ...settleDebtNothingToSettle(),
   ...checkSolvency(),
   ...startSurplus(),
   ...signAs("system-taker", "taker", "The taker pays for the surplus lot."),
   ...takeSurplus(500),
 ];
+
+// ---- Task 16: Dev tools. They replace the demo's terminal steps (scripts/lib/demo-scenario.sh). ----
+
+// The price move (dp_price_move): publish `price` (collateral per 1 stable, typed as a decimal) from Dev tools >
+// Oracle price. Signed by oracle-src, the active account as host admin, and engine-admin: three transactions,
+// so the lane waits for all three (R27).
+export function publishPrice(price, suffix = "") {
+  const name = `dev-publish-price${suffix}`;
+  return [
+    { id: `${name}-open-dev`, segment: "task-16", caption: "Open Dev tools: only on a verified dev network.",
+      action: "click", target: "tabDev" },
+    { id: `${name}-section`, segment: "task-16", caption: "Oracle price: move the market price.",
+      action: "click", target: "devItem_price" },
+    { id: `${name}-amount`, segment: "task-16", caption: `New price ${price}: inside ½ to 2 × the redemption price.`,
+      action: "setText", target: "devPrice", value: String(price) },
+    { id: `${name}-quoted`, segment: "task-16", caption: "The engine's reading at the new price: CR is judged at R, so no CR moves.",
+      action: "waitFor", target: "devAffectedTitle", property: "text", value: `At ${price} collateral per stable`,
+      timeoutMs: 15000 },
+    { id: `${name}-quote`, segment: "task-16",
+      caption: "The engine checks the price on its own feed path before anything is signed.",
+      action: "waitFor", target: "devPriceVerdict", property: "text", value: "The engine accepts this price now.",
+      timeoutMs: 15000 },
+    { id: `${name}-ready`, segment: "task-16", caption: "Publish is open.",
+      action: "waitFor", target: "devPricePublish", property: "enabled", value: true, timeoutMs: 10000 },
+    { id: `${name}-start`, segment: "task-16", caption: "Publish: a fresh quote opens the confirmation.",
+      action: "click", target: "devPricePublish" },
+    { id: `${name}-dialog`, segment: "task-16", caption: "Three signers, three transactions.",
+      action: "waitFor", target: "devTxDialog", property: "opened", value: true, timeoutMs: 10000 },
+    { id: `${name}-confirm`, segment: "task-16", caption: "Confirm: the price account, the host rotation, the engine follow-up.",
+      action: "click", target: "devTxConfirm" },
+    { id: `${name}-included`, segment: "task-16", caption: "All three steps included: the new price is live.",
+      action: "waitFor", target: "devTxLane", property: "state", value: "done", timeoutMs: 300000 },
+  ];
+}
+
+// The stable transfer before the debt take (dp_f4): Dev tools > Token transfer, its own status line (Task 5).
+export function tokenTransfer(from, to, amount, suffix = "") {
+  const name = `dev-transfer${suffix}`;
+  return [
+    { id: `${name}-open-dev`, segment: "task-16", caption: "Open Dev tools.", action: "click", target: "tabDev" },
+    { id: `${name}-section`, segment: "task-16", caption: "Token transfer: fund the taker.",
+      action: "click", target: "devItem_transfer" },
+    { id: `${name}-from`, segment: "task-16", caption: `From ${from}.`, action: "setText", target: "devTransferFrom",
+      value: from },
+    { id: `${name}-to`, segment: "task-16", caption: `To ${to}.`, action: "setText", target: "devTransferTo", value: to },
+    { id: `${name}-amount`, segment: "task-16", caption: `${amount} stable.`, action: "setText",
+      target: "devTransferAmount", value: String(amount) },
+    { id: `${name}-submit`, segment: "task-16", caption: "Transfer.", action: "click", target: "devTransferSubmit" },
+    { id: `${name}-done`, segment: "task-16", caption: "Included: the taker can pay for a debt lot.",
+      action: "waitFor", target: "devTransferStatus", property: "text", value: "Done", timeoutMs: 120000 },
+  ];
+}
+
+// The freeze trigger (dp_freeze): Dev tools > Protocol token, signed by engine-admin; the dialog repeats the
+// warning before anything is sent.
+export function disableProtocolToken(suffix = "") {
+  const name = `dev-disable-token${suffix}`;
+  return [
+    { id: `${name}-open-dev`, segment: "task-16", caption: "Open Dev tools.", action: "click", target: "tabDev" },
+    { id: `${name}-section`, segment: "task-16", caption: "Protocol token: the freeze trigger.",
+      action: "click", target: "devItem_token" },
+    { id: `${name}-ready`, segment: "task-16",
+      caption: "Without a protocol token no debt auction can cover the bad debt left.",
+      action: "waitFor", target: "devDisableProtocolToken", property: "enabled", value: true, timeoutMs: 10000 },
+    { id: `${name}-start`, segment: "task-16", caption: "Disable protocol token.", action: "click",
+      target: "devDisableProtocolToken" },
+    { id: `${name}-dialog`, segment: "task-16", caption: "The confirmation repeats the warning.",
+      action: "waitFor", target: "devTxDialog", property: "opened", value: true, timeoutMs: 10000 },
+    { id: `${name}-confirm`, segment: "task-16", caption: "Confirm: engine-admin signs.", action: "click",
+      target: "devTxConfirm" },
+    { id: `${name}-included`, segment: "task-16", caption: "Included: the protocol token is off.",
+      action: "waitFor", target: "devTxLane", property: "state", value: "done", timeoutMs: 120000 },
+  ];
+}
+
+// The story after the surplus take, in the order of scripts/lib/demo-scenario.sh (R39): the price move (1.9 R),
+// P2 liquidated and its lot-binding bid (the shortfall), the buffer settles what it can and a debt auction
+// starts, the taker is funded and takes one lot, then the freeze trigger and the solvency check that freezes
+// the host. Every id is unique (story.mjs refuses a story with a repeated id).
+export const STORY_STEPS_AFTER_SURPLUS = [
+  ...signAs("dev-admin", "admin", "The admin moves the price: sign as admin (host admin)."),
+  ...publishPrice("1.9"),
+  ...signAs("shortfall-keeper", "keeper", "The keeper liquidates P2 at the new price."),
+  ...liquidate(POSITION_P2, "-2"),
+  ...signAs("shortfall-owner", "owner", "The owner bids on P2's auction."),
+  ...bid(AUCTION_P2, 330000, "-shortfall"),
+  ...signAs("debt-caller", "caller", "Upkeep: sign as the caller."),
+  ...settleDebt("-2"),
+  ...startDebt(),
+  ...tokenTransfer("owner-stable", "taker-stable", 5000),
+  ...signAs("debt-taker", "taker", "The taker pays down a lot of bad debt."),
+  ...takeDebt(5000),
+  ...disableProtocolToken(),
+  ...signAs("freeze-caller", "caller", "Anyone may check solvency: sign as the caller."),
+  ...checkSolvency("-2"),
+  { id: "story-frozen", segment: "task-16", caption: "The host is frozen: new debt is refused.",
+    action: "waitFor", target: "headerFrozen", property: "visible", value: true, timeoutMs: 20000 },
+];
+
+export const FULL_STORY = [...STORY_STEPS, ...STORY_STEPS_AFTER_SURPLUS];

@@ -19,7 +19,7 @@ Rectangle {
     readonly property var backend: logos.module("auctions")
     // The section the System tab should show when it opens ("accounting" from a Settled shortfall).
     property string systemSection: ""
-    // The last `overview` reply any screen read (Live, At-risk and System read it; nothing polls it, R28). The
+    // The last `overview` reply any screen read (Live, At-risk, System and Dev tools read it; nothing polls it, R28). The
     // header's Frozen badge binds to its host.frozen. It is the last KNOWN overview: it is not cleared when the
     // network or the wallet changes, so the badge shows the previous reading until a screen reads again.
     property var lastOverview: null
@@ -147,6 +147,11 @@ Rectangle {
             DevPage {
                 objectName: "devPage"
                 backend: root.backend
+                accounts: d.accounts
+                activeAccount: root.backend ? root.backend.activeAccount : ""
+                devNetwork: root.backend ? !!root.backend.devNetwork : false
+                network: root.backend ? root.backend.network : ""
+                onOverviewRead: function(overview) { root.adoptOverview(overview) }
             }
         }
     }

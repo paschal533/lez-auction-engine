@@ -189,3 +189,44 @@ function bpsPercentTrim(bps) {
     var s = bpsPercent(bps, 2)
     return s.indexOf(".") < 0 ? s : s.replace(/0+$/, "").replace(/\.$/, "")
 }
+
+// toUnits("1.9", 27) -> "1900000000000000000000000000": a typed decimal as an integer string at `decimals`
+// places (a RAY price from "1.9"), digit by digit. More fraction digits than `decimals`, or anything that is not
+// a plain decimal, gives "".
+function toUnits(text, decimals) {
+    var m = /^(\d+)(?:\.(\d*))?$/.exec(String(text === undefined || text === null ? "" : text).trim())
+    if (!m || !(decimals >= 0))
+        return ""
+    var frac = m[2] === undefined ? "" : m[2]
+    if (frac.length > decimals)
+        return ""
+    while (frac.length < decimals)
+        frac += "0"
+    return stripZeros(m[1] + frac)
+}
+
+// duration(150000) -> "2m": an age in ms as whole seconds under a minute, else whole minutes (floored).
+function duration(ms) {
+    var n = Number(ms)
+    if (!(n >= 0))
+        return ""
+    if (n < 60000)
+        return Math.floor(n / 1000) + "s"
+    return Math.floor(n / 60000) + "m"
+}
+
+// list(v) -> a JS Array. Replies cross the remote-objects replica, where a QVariantList can arrive as an array-like
+// sequence (a `length` and indexes) or an object keyed "0", "1", ... rather than a JS Array; anything else gives [].
+function list(v) {
+    if (Array.isArray(v))
+        return v
+    if (!v || typeof v !== "object")
+        return []
+    if (typeof v.length === "number")
+        return Array.prototype.slice.call(v)
+    var keys = Object.keys(v)
+    if (keys.length === 0 || !keys.every(function(k) { return /^\d+$/.test(k) }))
+        return []
+    keys.sort(function(a, b) { return Number(a) - Number(b) })
+    return keys.map(function(k) { return v[k] })
+}

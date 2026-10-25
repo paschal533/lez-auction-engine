@@ -63,3 +63,28 @@ Running 1 test(s)...
 So `lez_core` loads in Basecamp master, accepts the plan's account ids, signer flags, instruction words as little-endian bytes and the program id hex, and sends a transaction that the sequencer includes (ADR-018). The keystore signing fallback is not needed.
 
 ![Auctions app skeleton in Basecamp](img/skeleton.png)
+
+## The whole demo story in Basecamp (Plan 4 Task 16)
+
+`apps/auctions/tests/story.mjs` drives every step of `scripts/lib/demo-scenario.sh` after the setup phases as UI actions, in its order (R39), with the matching account picked in the header: liquidate P0 (keeper) → bid 100000, then 230000 (owner) → claim the leftover (owner) → observe feed, settle debt, check solvency, start surplus (caller) → take surplus 500 (taker) → publish price 1.9 (admin; signed by oracle-src, admin and engine-admin, three transactions) → liquidate P2 (keeper) → bid 330000 (owner) → settle debt, start debt (caller) → transfer 5000 owner-stable → taker-stable (Dev tools) → take debt 5000 (taker) → disable protocol token (engine-admin) → check solvency (caller) → the header shows Frozen. The steps are data (`apps/auctions/tests/lib/story-steps.mjs`, `FULL_STORY`); the runner refuses a story with a repeated step id.
+
+After the steps that move the books it reads the figure from the screen by `objectName` (a System `Fact`'s raw `value`, the debt take's quote, the header badge) and checks it against ADR-051 and against `auction-cli` on the same state (`config` for unbacked debt, `dev balance` of the buffer and of `taker-protocol`, `host status` for frozen). It writes `story-timeline.json` (step id, caption, start/end ms, lane waits) next to the deployment (`STORY_TIMELINE` overrides) and pauses `STORY_PACE_MS` after each step (default 0). `STORY_SHOTS_DIR` keeps screenshots of the key steps; `STORY_FROM=<step id>` resumes on the same localnet.
+
+One step differs from the CLI script: after F1–F3 nothing is unbacked, so Settle debt quotes 0 and its button stays disabled; the story checks the quote reads 0 instead of sending the CLI's no-op `settle-debt`.
+
+Result (2026-10-25, inside WSL, Basecamp `e09962f5`, sequencer in dev mode, fresh localnet):
+
+```text
+$ scripts/basecamp/run-app.sh --setup --test apps/auctions/tests/story.mjs
+...
+    check buffer holds the 10 % penalty (F1–F3): ui 30000, cli 30000, expected 30000: ok
+    check buffer after the surplus lot: ui 29500, cli 29500, expected 29500: ok
+    check unbacked debt after the shortfall: ui 42277, cli 42277, expected [42154, 63200]: ok
+    check the buffer settled 29,500 of the bad debt: ui 12777, cli 12777, expected 12777: ok
+    check protocol tokens minted to the taker (balance before -> after): ui 13050, cli 13050, expected > 9800 (9800): ok
+    check one lot of bad debt burned: ui 7777, cli 7777, expected 7777: ok
+    check host frozen: ui yes, cli yes, expected yes: ok
+  ✓ story: the whole demo runs in Basecamp, figures match ADR-051 and auction-cli
+```
+
+Wall time: 992 s for the whole command, of which about 660 s is `demo.sh --setup-only` (build check, sequencer, deploy, positions) and 329 s the 172 story steps; 283 s of those are lane waits (transactions being included).

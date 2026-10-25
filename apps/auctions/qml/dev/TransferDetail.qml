@@ -5,23 +5,25 @@ import QtQuick.Layouts
 import Logos.Theme
 import Logos.Controls
 
+import "../common"
 import "../common/Format.js" as Format
 
-// Dev tools > Token transfer: moves tokens between two wallet accounts (for example to fund a taker
-// before a debt take). The engine refuses the request unless the network is a verified dev network.
-Rectangle {
+// Dev tools > Token transfer (board v5 "Token transfer · before Take debt lot"): moves tokens between two
+// wallet accounts, for example owner-stable -> taker-stable before a debt take. The engine refuses the request
+// unless the network is a verified dev network (kind `mismatch`, R22); DevPage clears `active` off one.
+Item {
     id: root
+    objectName: "transferDetail"
 
     property var backend: null
+    property bool active: true
 
     readonly property bool amountValid: /^[0-9]+$/.test(amountField.text)
     readonly property bool canSubmit: !d.busy
+                                      && root.active
                                       && fromField.text.length > 0
                                       && toField.text.length > 0
                                       && amountValid
-
-    color: Theme.palette.surfaceRaised
-    radius: Theme.spacing.radiusXlarge
 
     QtObject {
         id: d
@@ -104,7 +106,6 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.spacing.large
         spacing: Theme.spacing.medium
 
         RowLayout {
@@ -120,6 +121,7 @@ Rectangle {
             Item { Layout.fillWidth: true }
             LogosBadge {
                 text: qsTr("Dev network")
+                color: Theme.palette.textSecondary
             }
         }
 
@@ -137,7 +139,8 @@ Rectangle {
             color: Theme.palette.textSecondary
         }
 
-        ColumnLayout {
+        InsetCard {
+            objectName: "devTransferCard"
             Layout.fillWidth: true
             Layout.maximumWidth: 480
             spacing: Theme.spacing.medium

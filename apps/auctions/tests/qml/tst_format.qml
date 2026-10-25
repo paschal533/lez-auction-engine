@@ -146,4 +146,35 @@ TestCase {
         compare(Format.add("007", "05"), "12")
         compare(Format.add("1.5", "2"), "", "not digits: no sum")
     }
+
+    // Dev tools: a typed price becomes a RAY string digit by digit; too many places or junk gives "".
+    function test_to_units_makes_ray_prices() {
+        compare(Format.toUnits("1.9", 27), "1900000000000000000000000000")
+        compare(Format.toUnits("0.5", 27), "500000000000000000000000000")
+        compare(Format.toUnits("2", 27), "2000000000000000000000000000")
+        compare(Format.toUnits("1.", 3), "1000")
+        compare(Format.toUnits("0", 27), "0")
+        compare(Format.toUnits("1.2345", 3), "")
+        compare(Format.toUnits("-1", 3), "")
+        compare(Format.toUnits("", 3), "")
+        compare(Format.toUnits("1e3", 3), "")
+    }
+
+    function test_duration_floors_to_seconds_then_minutes() {
+        compare(Format.duration(0), "0s")
+        compare(Format.duration(59999), "59s")
+        compare(Format.duration(150000), "2m")
+        compare(Format.duration(3600000), "60m")
+        compare(Format.duration(-1), "")
+    }
+
+    // Lists in replies cross the remote-objects replica as array-likes; Format.list makes them JS arrays.
+    function test_list_accepts_array_likes() {
+        compare(JSON.stringify(Format.list([1, 2])), "[1,2]")
+        compare(JSON.stringify(Format.list({ length: 2, 0: "a", 1: "b" })), '["a","b"]')
+        compare(JSON.stringify(Format.list({ 1: "b", 0: "a" })), '["a","b"]')
+        compare(Format.list(null).length, 0)
+        compare(Format.list({ error: "x" }).length, 0)
+        compare(Format.list("abc").length, 0)
+    }
 }

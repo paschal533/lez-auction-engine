@@ -123,6 +123,87 @@ export function claimLeftover(auction) {
   ];
 }
 
+// Sign as `label` from the header picker; the last step checks the header names it, so a run signed as
+// someone else stops there, not on a disabled button.
+function signAs(name, label, caption) {
+  return [
+    { id: `${name}-open-picker`, segment: "task-15", caption, action: "click", target: "accountPicker" },
+    { id: `${name}-pick`, segment: "task-15", caption: `Sign as ${label}.`, action: "click",
+      target: `accountOption_${label}` },
+    { id: `${name}-signed`, segment: "task-15", caption: `The header names ${label}.`, action: "waitFor",
+      target: "headerAccount", property: "text", value: label, timeoutMs: 10000 },
+  ];
+}
+
+// One System transaction: open the tab and the section, wait for the button, click it, confirm, wait for the
+// lane. Every System transaction shares the "system" dialog and lane (R34); a new action clears a finished
+// lane before its dialog opens, so the lane wait sees this transaction. `before` steps run after the section
+// opens (an amount to type).
+function systemTx(name, section, button, caption, confirmCaption, before = []) {
+  return [
+    { id: `${name}-open-system`, segment: "task-15", caption: "Open System.", action: "click", target: "tabSystem" },
+    { id: `${name}-section`, segment: "task-15", caption, action: "click", target: `systemItem_${section}` },
+    ...before,
+    { id: `${name}-ready`, segment: "task-15", caption: "The figures are read; the action is open.",
+      action: "waitFor", target: button, property: "enabled", value: true, timeoutMs: 10000 },
+    { id: `${name}-start`, segment: "task-15", caption: "A fresh read opens the confirmation.",
+      action: "click", target: button },
+    { id: `${name}-dialog`, segment: "task-15", caption: "Check it before it is sent.",
+      action: "waitFor", target: "systemTxDialog", property: "opened", value: true, timeoutMs: 10000 },
+    { id: `${name}-confirm`, segment: "task-15", caption: confirmCaption, action: "click", target: "systemTxConfirm" },
+    { id: `${name}-included`, segment: "task-15", caption: "Included: the figures are read again.",
+      action: "waitFor", target: "systemTxLane", property: "state", value: "done", timeoutMs: 120000 },
+  ];
+}
+
+// Upkeep as the caller (permissionless): record the feed, settle the buffer against unbacked debt.
+export function observeFeed() {
+  return systemTx("system-observe-feed", "accounting", "observeFeed",
+    "Accounting: upkeep anyone may run.", "Observe the feed: it records the feed's state, no price moves.");
+}
+
+export function settleDebt() {
+  return systemTx("system-settle-debt", "accounting", "settleDebtSubmit",
+    "Accounting: the buffer covers unbacked debt.",
+    "Settle debt: the buffer's stable is burned against the debt.");
+}
+
+export function checkSolvency() {
+  return systemTx("system-check-solvency", "accounting", "checkSolvency",
+    "Accounting: is unbacked debt above the freeze threshold?", "Check solvency.");
+}
+
+export function startSurplus() {
+  return systemTx("system-start-surplus", "surplus", "startSurplus",
+    "Surplus auction: the buffer has more than it needs.", "Start the surplus auction.");
+}
+
+export function startDebt() {
+  return systemTx("system-start-debt", "debt", "startDebt",
+    "Debt auction: unbacked debt is put up for protocol tokens.", "Start the debt auction.");
+}
+
+// Take a lot as the signing account (the taker): type the stable amount, wait for its quote, confirm.
+export function takeSurplus(amount) {
+  return systemTx("system-take-surplus", "surplus", "takeSurplusSubmit",
+    "Surplus auction: take the lot with protocol tokens.",
+    "Confirm: the protocol tokens paid are burned.",
+    [{ id: "system-take-surplus-amount", segment: "task-15", caption: `Take ${amount} stable.`,
+       action: "setText", target: "takeSurplusAmount", value: String(amount) },
+     { id: "system-take-surplus-quote", segment: "task-15", caption: "The quote names the burn.",
+       action: "waitFor", target: "takeSurplusBurnNote", property: "visible", value: true, timeoutMs: 10000 }]);
+}
+
+export function takeDebt(amount) {
+  return systemTx("system-take-debt", "debt", "takeDebtSubmit",
+    "Debt auction: pay down bad debt for newly minted protocol tokens.",
+    "Confirm: the stable paid is burned against the debt.",
+    [{ id: "system-take-debt-amount", segment: "task-15", caption: `Pay ${amount} stable.`,
+       action: "setText", target: "takeDebtAmount", value: String(amount) },
+     { id: "system-take-debt-quote", segment: "task-15", caption: "The quote shows the tokens minted.",
+       action: "waitFor", target: "takeDebtNote", property: "visible", value: true, timeoutMs: 10000 }]);
+}
+
 export const STORY_STEPS = [
   // ---- Task 11: shell. Pick the account that signs; the header follows. ----
   {
@@ -183,4 +264,17 @@ export const STORY_STEPS = [
 
   // ---- Task 14: Settled. Still signed in as the owner, claim what the final bid left over. ----
   ...claimLeftover(AUCTION_P0),
+
+  // ---- Task 15: System. Upkeep as the caller, the surplus take as the taker, then the debt auction. ----
+  ...signAs("system-caller", "caller", "Upkeep is permissionless: sign as the caller."),
+  ...observeFeed(),
+  ...settleDebt(),
+  ...checkSolvency(),
+  ...startSurplus(),
+  ...signAs("system-taker", "taker", "The taker pays for the surplus lot."),
+  ...takeSurplus(500),
+  ...signAs("system-caller-debt", "caller", "Sign as the caller to start the debt auction."),
+  ...startDebt(),
+  ...signAs("system-taker-debt", "taker", "The taker pays down a lot of bad debt."),
+  ...takeDebt(5000),
 ];

@@ -23,6 +23,9 @@ Item {
     readonly property bool rescanning: d.rescanning
     readonly property alias items: d.items
 
+    // Every overview this screen reads, for the header (Main.lastOverview).
+    signal overviewRead(var overview)
+
     function refresh() { d.refresh() }
     function rescan() { d.rescanPage(true) }
 
@@ -121,6 +124,7 @@ Item {
                 if (gen !== generation) return
                 const bad = failure(reply)
                 oracle = bad ? null : (reply.oracle || null)
+                if (!bad) root.overviewRead(reply)
             }, function(err) {
                 if (gen === generation) oracle = null
             })

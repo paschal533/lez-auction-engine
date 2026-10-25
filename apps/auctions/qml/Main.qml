@@ -11,19 +11,28 @@ import "dev"
 import "live"
 import "risk"
 import "settled"
+import "system"
 
 Rectangle {
     id: root
 
     readonly property var backend: logos.module("auctions")
-    // The section the System tab should show when it opens ("accounting" from a Settled shortfall). Task 15's
-    // System screen reads it; until then it only records the request.
+    // The section the System tab should show when it opens ("accounting" from a Settled shortfall).
     property string systemSection: ""
+    // The last `overview` reply any screen read (Live, At-risk and System read it; nothing polls it, R28). The
+    // header's Frozen badge binds to its host.frozen.
+    property var lastOverview: null
 
-    // Switch to the System tab (index 3) at `section`.
+    // Switch to the System tab (index 3) at `section`, even when the same section was asked for before.
     function openSystem(section) {
         systemSection = section
+        systemPage.select(section)
         header.currentIndex = 3
+    }
+
+    function adoptOverview(overview) {
+        if (overview && !overview.error && overview.host)
+            lastOverview = overview
     }
 
     color: Theme.palette.background
@@ -61,24 +70,6 @@ Rectangle {
         function onWalletOpenChanged() { d.refreshAccounts() }
     }
 
-    // The page area of a tab whose content arrives in a later task.
-    component EmptyPanel: Rectangle {
-        property string heading: ""
-
-        color: Theme.palette.surfaceRaised
-        radius: Theme.spacing.radiusXlarge
-
-        LogosText {
-            anchors.left: parent.left
-            anchors.top: parent.top
-            anchors.margins: Theme.spacing.large
-            text: parent.heading
-            font.pixelSize: Theme.typography.panelTitleText
-            font.weight: Theme.typography.weightMedium
-            color: Theme.palette.text
-        }
-    }
-
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: Theme.spacing.xxlarge
@@ -93,6 +84,7 @@ Rectangle {
             accounts: d.accounts
             reachable: root.backend ? root.backend.nodeReachable : false
             devVisible: root.backend ? root.backend.devNetwork : false
+            frozen: !!(root.lastOverview && root.lastOverview.host && root.lastOverview.host.frozen === true)
             // R14: activeAccount is a READWRITE prop; assigning it reaches the backend.
             onAccountPicked: function(label) { if (root.backend) root.backend.activeAccount = label }
             onAccountsRefreshRequested: d.refreshAccounts()
@@ -129,11 +121,13 @@ Rectangle {
                 backend: root.backend
                 accounts: d.accounts
                 activeAccount: root.backend ? root.backend.activeAccount : ""
+                onOverviewRead: function(overview) { root.adoptOverview(overview) }
             }
             RiskPage {
                 backend: root.backend
                 accounts: d.accounts
                 activeAccount: root.backend ? root.backend.activeAccount : ""
+                onOverviewRead: function(overview) { root.adoptOverview(overview) }
             }
             SettledPage {
                 backend: root.backend
@@ -141,7 +135,14 @@ Rectangle {
                 activeAccount: root.backend ? root.backend.activeAccount : ""
                 onSystemRequested: function(section) { root.openSystem(section) }
             }
-            EmptyPanel { heading: qsTr("System") }
+            SystemPage {
+                id: systemPage
+                backend: root.backend
+                accounts: d.accounts
+                activeAccount: root.backend ? root.backend.activeAccount : ""
+                section: root.systemSection
+                onOverviewRead: function(overview) { root.adoptOverview(overview) }
+            }
             DevPage {
                 objectName: "devPage"
                 backend: root.backend

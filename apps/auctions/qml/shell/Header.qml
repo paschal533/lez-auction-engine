@@ -5,7 +5,8 @@ import Logos.Theme
 import Logos.Controls
 
 // Page header, same grid as Applications and Settings: title and subtitle on the left,
-// the view tabs in the right slot. The subtitle ends with the active-account picker (board v5).
+// the view tabs in the right slot. The subtitle ends with the active-account picker (board v5). A Frozen badge
+// (`headerFrozen`, LogosBadge in the error colour) follows the title on every tab while the host is frozen.
 RowLayout {
     id: root
 
@@ -14,6 +15,8 @@ RowLayout {
     // What auction_engine accounts() returned: the picker rows, or [{error, kind}].
     property var accounts: []
     property bool reachable: false
+    // overview.host.frozen of the last overview any screen read (Main.lastOverview; not polled, R28).
+    property bool frozen: false
     property alias currentIndex: tabs.currentIndex
     property alias devVisible: tabs.devVisible
 
@@ -29,12 +32,23 @@ RowLayout {
     ColumnLayout {
         spacing: Theme.spacing.tiny
 
-        LogosText {
-            objectName: "headerTitle"
-            text: qsTr("Auctions")
-            font.pixelSize: Theme.typography.pageTitleText
-            font.weight: Theme.typography.weightBold
-            color: Theme.palette.text
+        RowLayout {
+            spacing: Theme.spacing.medium
+
+            LogosText {
+                objectName: "headerTitle"
+                text: qsTr("Auctions")
+                font.pixelSize: Theme.typography.pageTitleText
+                font.weight: Theme.typography.weightBold
+                color: Theme.palette.text
+            }
+            LogosBadge {
+                objectName: "headerFrozen"
+                Layout.alignment: Qt.AlignVCenter
+                visible: root.frozen
+                text: qsTr("Frozen")
+                color: Theme.palette.error
+            }
         }
 
         RowLayout {

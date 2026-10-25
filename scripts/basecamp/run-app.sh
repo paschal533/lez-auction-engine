@@ -59,17 +59,27 @@ AUCTIONS_ROOT="${AUCTIONS_ROOT:-$(build "$repo/apps/auctions#install" auctions)}
 "$repo/scripts/basecamp/host.sh" check
 
 seq_started=0
-basecamp_pid=""
+basecamp_pid=""; demo_pid=""; tail_pid=""; setup_log=""
+alive() { [[ -n "$1" ]] && kill -0 "$1" 2>/dev/null; }
+# Basecamp runs in its own session (setsid): its pid is the process group of the module hosts it starts.
+stop_basecamp() {
+  alive "$basecamp_pid" || return 0
+  kill -- -"$basecamp_pid" 2>/dev/null || true
+  for _ in $(seq 1 20); do alive "$basecamp_pid" || break; sleep 0.5; done
+  kill -9 -- -"$basecamp_pid" 2>/dev/null || true
+  echo "run-app: stopped Basecamp (process group $basecamp_pid)"
+}
+# Leaves Basecamp and the sequencer running only after a successful run without --test.
 cleanup() {
   local s=$?
-  if [[ -n "$test_file" ]]; then
-    if [[ -n "$basecamp_pid" ]] && kill -0 "$basecamp_pid" 2>/dev/null; then
-      kill "$basecamp_pid" 2>/dev/null || true
-      for _ in $(seq 1 20); do kill -0 "$basecamp_pid" 2>/dev/null || break; sleep 0.5; done
-      kill -9 "$basecamp_pid" 2>/dev/null || true
-      echo "run-app: stopped Basecamp (pid $basecamp_pid)"
-    fi
-    if (( seq_started )); then
+  trap - EXIT INT TERM
+  if alive "$tail_pid"; then kill "$tail_pid" 2>/dev/null || true; fi
+  [[ -z "$setup_log" ]] || rm -f "$setup_log"
+  if (( s != 0 )) || [[ -n "$test_file" ]]; then
+    # demo.sh's own exit trap stops a sequencer it started when it is interrupted.
+    if alive "$demo_pid"; then kill "$demo_pid" 2>/dev/null || true; wait "$demo_pid" 2>/dev/null || true; fi
+    stop_basecamp
+    if (( seq_started )) || [[ -n "$demo_pid" && -f "$LN/sequencer.pid" ]]; then
       # shellcheck disable=SC1091
       (. "$repo/scripts/lib/localnet.sh" && ln_stop_sequencer) && echo "run-app: stopped the sequencer"
     fi
@@ -77,6 +87,8 @@ cleanup() {
   exit "$s"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if (( setup )); then
   setup_log="$(mktemp)"
@@ -90,8 +102,7 @@ if (( setup )); then
   wait "$tail_pid" || true
   (( demo_status == 0 )) || { echo "run-app: demo.sh --setup-only failed (exit $demo_status)" >&2; exit "$demo_status"; }
   seq_started=1
-  env_line="$(grep -E '^AUCTIONS_DEPLOYMENT=' "$setup_log" | tail -1)"
-  rm -f "$setup_log"
+  env_line="$(grep -E '^AUCTIONS_DEPLOYMENT=' "$setup_log" | tail -1 || true)"
   [[ -n "$env_line" ]] || { echo "run-app: demo.sh --setup-only printed no AUCTIONS_DEPLOYMENT line" >&2; exit 1; }
   read -r dep_kv wallet_kv <<<"$env_line"
   export AUCTIONS_DEPLOYMENT="${dep_kv#AUCTIONS_DEPLOYMENT=}" LEE_WALLET_HOME_DIR="${wallet_kv#LEE_WALLET_HOME_DIR=}"
@@ -104,6 +115,16 @@ export AUCTIONS_STATE_DIR="${AUCTIONS_STATE_DIR:-$(dirname "$AUCTIONS_DEPLOYMENT
   echo "run-app: no deployment at $AUCTIONS_DEPLOYMENT or wallet at $LEE_WALLET_HOME_DIR; run with --setup" >&2; exit 1; }
 mkdir -p "$AUCTIONS_STATE_DIR"
 
+export AUCTION_CLI="${AUCTION_CLI:-${CARGO_TARGET_DIR:-$repo/target}/debug/auction-cli}"
+[[ -x "$AUCTION_CLI" ]] || {
+  echo "run-app: auction-cli not found at $AUCTION_CLI (scripts/demo.sh --setup-only builds it; or set AUCTION_CLI)" >&2; exit 1; }
+if (( ! setup )); then
+  seq_pid="$(cat "$LN/sequencer.pid" 2>/dev/null || true)"
+  if ! alive "$seq_pid" && ! ss -ltn 2>/dev/null | grep -q ":3040 "; then
+    echo "run-app: no sequencer running for $LN (no live pid in $LN/sequencer.pid, nothing on port 3040); run with --setup" >&2
+    exit 1
+  fi
+fi
 if ss -ltn 2>/dev/null | grep -q ":$INSPECTOR_PORT "; then
   echo "run-app: port $INSPECTOR_PORT is in use (another Basecamp?); stop it first" >&2; exit 1
 fi
@@ -124,13 +145,12 @@ ss -ltn 2>/dev/null | grep -q ":$INSPECTOR_PORT " || {
   echo "run-app: no inspector on port $INSPECTOR_PORT after ${INSPECTOR_WAIT_S} s" >&2; exit 1; }
 
 if [[ -z "$test_file" ]]; then
-  echo "run-app: running; stop Basecamp with: kill $basecamp_pid"
+  echo "run-app: running; stop Basecamp with: kill -- -$basecamp_pid"
   if [[ -f "$LN/sequencer.pid" ]]; then echo "run-app: the sequencer (pid $(cat "$LN/sequencer.pid")) keeps running"; fi
   exit 0
 fi
 
 export LOGOS_QT_MCP="${LOGOS_QT_MCP:-$(build "github:logos-co/logos-basecamp/${BASECAMP_REV}#logos-qt-mcp" qt-mcp)}"
-export AUCTION_CLI="${AUCTION_CLI:-${CARGO_TARGET_DIR:-$repo/target}/debug/auction-cli}"
 if [[ -z "${NODE:-}" ]]; then
   # Node from the nixpkgs Basecamp pins (shares its store paths) when none is on PATH.
   NODE="$(command -v node || true)"

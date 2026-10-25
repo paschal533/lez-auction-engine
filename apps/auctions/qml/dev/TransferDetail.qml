@@ -81,7 +81,8 @@ Rectangle {
                 if (reply.error) {
                     finish(reply.error, true)
                 } else if (reply.state === "included") {
-                    // The lane's last state (Submitted → Including → Done); skeleton.mjs waits for it.
+                    // Progress texts: "Sending…", "Sent. Waiting for the block…", "Step N of M sent.", then
+                    // "Done" (skeleton.mjs waits for it; any other text is a failure).
                     finish(qsTr("Done"), false)
                 } else if (reply.state === "dropped") {
                     finish(qsTr("The network dropped the transfer."), true)

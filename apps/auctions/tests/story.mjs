@@ -14,6 +14,7 @@
 //   STORY_TIMELINE        optional: where story-timeline.json goes (default next to the deployment)
 //   STORY_SHOTS_DIR       optional: screenshots at key steps (default <deployment dir>/story-shots)
 //   STORY_FROM            optional: start at this step id (a resumed run on the same localnet)
+//   STORY_OPEN_APP        optional: click sidebar.app.<name> first (the full Basecamp; run-app.sh --profile sets it)
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -64,6 +65,7 @@ if (duplicates.length > 0) {
 
 const DEP_DIR = dirname(need("AUCTIONS_DEPLOYMENT"));
 const PACE_MS = Number(process.env.STORY_PACE_MS || 0);
+const OPEN_APP = process.env.STORY_OPEN_APP || "";
 const TIMELINE = process.env.STORY_TIMELINE || join(DEP_DIR, "story-timeline.json");
 const SHOTS_DIR = process.env.STORY_SHOTS_DIR || join(DEP_DIR, "story-shots");
 
@@ -374,6 +376,8 @@ test("story: the whole demo runs in Basecamp, figures match ADR-051 and auction-
   const save = () => writeFileSync(TIMELINE, JSON.stringify(timeline, null, 2) + "\n");
   const t0 = Date.now();
 
+  // The full Basecamp (run-app.sh --profile) starts on its welcome page: open the installed app from the sidebar.
+  if (OPEN_APP) await click(app, `sidebar.app.${OPEN_APP}`);
   // The app is ready once configure and openWallet succeeded on a verified dev network.
   await app.waitFor(async () => {
     if ((await read(app, "tabDev", "visible")) !== true) throw new Error("Dev tools hidden");

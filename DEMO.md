@@ -67,6 +67,29 @@ Parameters: `cli/params/demo-engine.json`, `cli/params/demo-collateral.json` (th
 `band_hi_bps` of 20_000, a debt lot and freeze threshold of 5_000; ADR-051). The same economics run in-process in
 `programs/integration_tests/tests/demo_scenario.rs`.
 
+## GUI run (Basecamp)
+
+The same scenario runs as UI actions in the Auctions app inside Basecamp. It needs Nix inside WSL and the
+prerequisites above, with at least 10 GB free on `C:`. Install the app as `.lgx` packages into a fresh profile
+and run the story in the full Basecamp:
+
+    scripts/basecamp/install-lgx.sh /tmp/auctions-profile --setup --test apps/auctions/tests/story.mjs
+
+This builds lez_core 0.4.1, `auction_engine` and `auctions` as `.lgx` packages and installs them with `lgpm`,
+core modules first. It then sets up a fresh localnet (`demo.sh --setup-only`), starts Basecamp with
+`--user-dir /tmp/auctions-profile`, opens Auctions from the sidebar and drives all 172 steps. The figures on
+screen are checked against the table above and against `auction-cli`.
+
+Options:
+- Leave out `--test …` to keep Basecamp and the sequencer running and click through by hand.
+- Use `--install-only` to stop after the install.
+- Use `scripts/basecamp/run-app.sh --setup --test apps/auctions/tests/story.mjs` for the standalone-mode
+  variant, used while developing the app.
+
+A profile with a lez_core newer than 0.4.1, for example one taken from Basecamp's catalogue, is unsupported
+(exit 4). Use a fresh profile and do not accept a lez_core upgrade there. Details and the recorded run (1261 s
+in total, 329 s for the story): [docs/architecture/basecamp-app.md](docs/architecture/basecamp-app.md).
+
 ## Public legacy testnet
 
 `scripts/testnet-legacy.sh` runs the same scenario (`scripts/lib/demo-scenario.sh`) on the public LEZ v0.2.4

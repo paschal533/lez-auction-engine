@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# Runs the Auctions app in Basecamp's standalone mode against a localnet (Plan 4 Task 6).
-#   scripts/basecamp/run-app.sh [--setup] [--test FILE]
+# Runs the Auctions app in Basecamp against a localnet: standalone mode (Plan 4 Task 6) or, with --profile, the full
+# Basecamp on a profile where install-lgx.sh installed the .lgx packages (Task 17).
+#   scripts/basecamp/run-app.sh [--setup] [--test FILE] [--profile DIR]
 # --setup      scripts/demo.sh --setup-only --sequencer-dev-mode 1 first (fresh localnet, kept running)
 # --test FILE  node FILE against the inspector (localhost:3768); exits with its code and stops what this
 #              run started (Basecamp, and the sequencer with --setup)
+# --profile DIR  the full Basecamp (BASECAMP_FULL_BIN; default .#app at BASECAMP_REV) with --user-dir DIR, where
+#              scripts/basecamp/install-lgx.sh installed the app as .lgx packages (Task 17). The test opens the
+#              app from the sidebar (STORY_OPEN_APP=auctions). Without it: standalone mode, a fresh temporary
+#              user dir.
 # Without --setup it uses the deployment and wallet of the last setup run (AUCTIONS_DEPLOYMENT and
 # LEE_WALLET_HOME_DIR override). Without --test Basecamp keeps running; the script prints how to stop it.
 # Overrides: AUCTION_ENGINE_ROOT, AUCTIONS_ROOT (install roots; default: nix build of modules/auction_engine
@@ -28,12 +33,13 @@ if [[ -z "${CARGO_TARGET_DIR:-}" && -f "$HOME/lez-spikes/s1/env.sh" ]]; then
   exec "$repo/scripts/wsl-env.sh" "$repo/scripts/basecamp/run-app.sh" "$@"
 fi
 
-usage() { echo "usage: scripts/basecamp/run-app.sh [--setup] [--test FILE]" >&2; exit 2; }
-setup=0; test_file=""
+usage() { echo "usage: scripts/basecamp/run-app.sh [--setup] [--test FILE] [--profile DIR]" >&2; exit 2; }
+setup=0; test_file=""; profile=""
 while (( $# )); do
   case "$1" in
     --setup) setup=1 ;;
     --test) test_file="${2:-}"; [[ -n "$test_file" ]] || usage; shift ;;
+    --profile) profile="${2:-}"; [[ -n "$profile" ]] || usage; shift ;;
     *) usage ;;
   esac
   shift
@@ -50,13 +56,25 @@ build() { # <flake ref> <link name>
   readlink -f "$out/$2"
 }
 
-eval "$("$repo/scripts/basecamp/host.sh" paths)"
-[[ -x "$BASECAMP_BIN" && -d "$LEZ_CORE_ROOT/modules" ]] || {
-  echo "run-app: Basecamp or lez_core missing; run scripts/basecamp/host.sh build" >&2; exit 1; }
-"$repo/scripts/basecamp/host.sh" check
-AUCTION_ENGINE_ROOT="${AUCTION_ENGINE_ROOT:-$(build "$repo/modules/auction_engine#install" auction_engine)}"
-AUCTIONS_ROOT="${AUCTIONS_ROOT:-$(build "$repo/apps/auctions#install" auctions)}"
-"$repo/scripts/basecamp/host.sh" check
+if [[ -n "$profile" ]]; then
+  # The full Basecamp loads what lgpm installed in the profile; no module is passed on the command line.
+  profile="$(cd "$profile" 2>/dev/null && pwd -P)" || { echo "run-app: no profile directory $profile" >&2; exit 1; }
+  [[ -f "$profile/plugins/auctions/manifest.json" && -f "$profile/modules/auction_engine/manifest.json" ]] || {
+    echo "run-app: the Auctions app is not installed in $profile; run scripts/basecamp/install-lgx.sh $profile" >&2
+    exit 1; }
+  "$repo/scripts/basecamp/host.sh" check
+  BASECAMP_BIN="${BASECAMP_FULL_BIN:-$(build "github:logos-co/logos-basecamp/${BASECAMP_REV}#app" app-full)/bin/LogosBasecamp}"
+  "$repo/scripts/basecamp/host.sh" check
+  export STORY_OPEN_APP=auctions
+else
+  eval "$("$repo/scripts/basecamp/host.sh" paths)"
+  [[ -x "$BASECAMP_BIN" && -d "$LEZ_CORE_ROOT/modules" ]] || {
+    echo "run-app: Basecamp or lez_core missing; run scripts/basecamp/host.sh build" >&2; exit 1; }
+  "$repo/scripts/basecamp/host.sh" check
+  AUCTION_ENGINE_ROOT="${AUCTION_ENGINE_ROOT:-$(build "$repo/modules/auction_engine#install" auction_engine)}"
+  AUCTIONS_ROOT="${AUCTIONS_ROOT:-$(build "$repo/apps/auctions#install" auctions)}"
+  "$repo/scripts/basecamp/host.sh" check
+fi
 
 seq_started=0
 basecamp_pid=""; demo_pid=""; tail_pid=""; setup_log=""
@@ -128,11 +146,15 @@ fi
 if ss -ltn 2>/dev/null | grep -q ":$INSPECTOR_PORT "; then
   echo "run-app: port $INSPECTOR_PORT is in use (another Basecamp?); stop it first" >&2; exit 1
 fi
-user_dir="$(mktemp -d)"
 log_dir="$(dirname "$AUCTIONS_DEPLOYMENT")/logs"
 mkdir -p "$log_dir"
-XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir setsid nohup "$BASECAMP_BIN" --user-dir "$user_dir" \
-  --modules-dir "$LEZ_CORE_ROOT" --modules-dir "$AUCTION_ENGINE_ROOT" --module "$AUCTIONS_ROOT" \
+if [[ -n "$profile" ]]; then
+  basecamp_args=(--user-dir "$profile")
+else
+  basecamp_args=(--user-dir "$(mktemp -d)"
+    --modules-dir "$LEZ_CORE_ROOT" --modules-dir "$AUCTION_ENGINE_ROOT" --module "$AUCTIONS_ROOT")
+fi
+XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir setsid nohup "$BASECAMP_BIN" "${basecamp_args[@]}" \
   > "$log_dir/basecamp.log" 2>&1 < /dev/null &
 basecamp_pid=$!
 echo "run-app: Basecamp pid $basecamp_pid, log $log_dir/basecamp.log"

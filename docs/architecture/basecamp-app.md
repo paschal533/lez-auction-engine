@@ -88,3 +88,55 @@ $ scripts/basecamp/run-app.sh --setup --test apps/auctions/tests/story.mjs
 ```
 
 Wall time: 992 s for the whole command, of which about 660 s is `demo.sh --setup-only` (build check, sequencer, deploy, positions) and 329 s the 172 story steps; 283 s of those are lane waits (transactions being included).
+
+## Installed as .lgx packages in the full Basecamp (Plan 4 Task 17)
+
+`scripts/basecamp/install-lgx.sh` installs the app the way a user gets it: as `.lgx` packages in a Basecamp profile, run by the full Basecamp rather than standalone mode.
+
+```bash
+scripts/basecamp/install-lgx.sh PROFILE_DIR [--install-only] [run-app.sh options]
+```
+
+It runs these steps in order:
+
+1. Builds five outputs, with result links under `~/lez-target/basecamp/`:
+   - `#lgx` of lez_core `acf0cd50` (0.4.1), `modules/auction_engine` and `apps/auctions`;
+   - the full Basecamp `#app` at `e09962f5` (the dev build, inspector on);
+   - `lgpm`, from `logos-package-manager` `30b3a3f8`, the revision that Basecamp `e09962f5` locks.
+2. Installs the core modules first: `lgpm --modules-dir PROFILE_DIR/modules install --file …` for lez_core, then auction_engine.
+3. Installs the UI plugin second: `lgpm --ui-plugins-dir PROFILE_DIR/plugins install --file …` for auctions.
+4. Hands over to `run-app.sh --profile PROFILE_DIR …`. This starts the full Basecamp with `--user-dir PROFILE_DIR` against the localnet. It uses the same `--setup`, `--test` and teardown as standalone runs.
+
+Notes:
+
+- With `--profile`, `story.mjs` first clicks `sidebar.app.auctions` (`STORY_OPEN_APP`). The full Basecamp starts on its welcome page.
+- `--install-only` stops after the install.
+- Use a Linux path for `PROFILE_DIR` (for example `/tmp/auctions-profile`), not one under `/mnt/c`.
+- The packages are unsigned dev builds. lgpm warns `Package is unsigned` and installs them.
+- With `--profile`, `run-app.sh` keeps its default path otherwise unchanged. Without it, it still runs standalone mode with a fresh temporary user dir.
+
+**Unsupported: a profile with a newer lez_core (design call 3).** The app is built against lez_core 0.4.1 (LEZ v0.2.4, 4-argument send, enum-index instructions). Basecamp's catalogue can offer a newer `lez_core` (0.5.x, LEZ v0.3.1). A profile that already has one, or that is upgraded to one from the Package Manager, is unsupported. `install-lgx.sh` refuses such a profile with exit 4, before and after installing (`install-lgx: PROFILE has lez_core 0.5.x; the Auctions app needs lez_core 0.4.1 …`). Use a fresh `PROFILE_DIR`, and do not accept a lez_core upgrade in a profile that runs the Auctions app. Nothing in the app works around a newer lez_core.
+
+`scripts/tests/install-lgx.sh` covers the script with stubbed `nix`, `lgpm` and `df`: the pinned refs, core-before-UI order, `--install-only`, the hand-over to `run-app.sh --profile`, the newer-lez_core refusals and the low-disk refusal.
+
+Result (2026-10-25, inside WSL, fresh `/tmp/auctions-profile`, fresh localnet, sequencer in dev mode):
+
+```text
+$ scripts/basecamp/install-lgx.sh /tmp/auctions-profile --setup --test apps/auctions/tests/story.mjs
+...
+install-lgx: installed into /tmp/auctions-profile (lez_core 0.4.1, auction_engine, auctions)
+...
+    check buffer holds the 10 % penalty (F1–F3): ui 30000, cli 30000, expected 30000: ok
+    check buffer after the surplus lot: ui 29500, cli 29500, expected 29500: ok
+    check unbacked debt after the shortfall: ui 42302, cli 42302, expected [42154, 63200]: ok
+    check the buffer settled 29,500 of the bad debt: ui 12802, cli 12802, expected 12802: ok
+    check protocol tokens minted to the taker (balance before -> after): ui 13050, cli 13050, expected > 9800 (9800): ok
+    check one lot of bad debt burned: ui 7802, cli 7802, expected 7802: ok
+    check host frozen: ui yes, cli yes, expected yes: ok
+  ✓ story: the whole demo runs in Basecamp, figures match ADR-051 and auction-cli
+1 passed, 0 failed
+```
+
+Basecamp's log reads `Base data directory: /tmp/auctions-profile` and `Loading core dependencies for "auctions" : QList("lez_core", "auction_engine")`, with no `Standalone mode` line. Every module came from the profile.
+
+Wall time: 1261 s for the whole command. The story itself took 329 s for 172 steps, of which 284 s were lane waits, the same as standalone. The rest went to evaluating the flakes, installing, and `demo.sh --setup-only`. The full `#app` and lgpm came from the Logos cache (the app was a 14.5 MiB download). The only local derivations were the `.lgx` packaging steps; neither Qt nor Basecamp was compiled.

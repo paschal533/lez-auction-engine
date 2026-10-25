@@ -48,6 +48,21 @@ On the author's machine (WSL, repository on `/mnt/c`) run it as `scripts/wsl-env
 recorded run and the exit codes are in [DEMO.md](DEMO.md). The same scenario on the public v0.2.4 legacy testnet:
 `scripts/testnet-legacy.sh` ([testnet-legacy.md](docs/architecture/testnet-legacy.md)).
 
+## Basecamp app
+
+`apps/auctions` (a `ui_qml` app) and `modules/auction_engine` (its core module) put the engine in Basecamp. They
+sign through the `lez_core` 0.4.1 wallet module (`acf0cd50`). To install them as `.lgx` packages into a clean
+Basecamp profile and run the whole demo as UI actions in the full Basecamp (WSL, Nix):
+
+```bash
+scripts/basecamp/install-lgx.sh /tmp/auctions-profile --setup --test apps/auctions/tests/story.mjs
+```
+
+Without `--test`, Basecamp stays open on a fresh localnet. `scripts/basecamp/run-app.sh` runs the app in
+Basecamp's standalone mode for development. A profile with a newer `lez_core` (0.5.x, from Basecamp's catalogue)
+is unsupported. Details, pins and recorded runs: [docs/architecture/basecamp-app.md](docs/architecture/basecamp-app.md);
+the GUI run in [DEMO.md](DEMO.md#gui-run-basecamp).
+
 ## Run the tests
 
 Git Bash on Windows cannot resolve the LEZ and risc0 git dependencies of the workspace (`programs/UPSTREAM.md`), so the core checks run in Linux/WSL through the wrapper (ADR-025, `.github/workflows/core.yml`). Rust 1.94.0 (pinned by `rust-toolchain.toml`) and Python 3 are enough. Format is checked only on our crates with `-p` (vendored code keeps its upstream formatting). From the repository root in WSL:

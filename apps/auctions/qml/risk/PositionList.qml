@@ -29,11 +29,18 @@ ColumnLayout {
     signal rescanRequested()
 
     // Lowest CR first (the view's order, kept here so the screen never depends on it); ties keep view order.
+    // A row without a CR (no debt: `cr_bps` null) has nothing at risk and goes last.
+    function crKey(it) {
+        return it.cr_bps === null || it.cr_bps === undefined ? Infinity : Number(it.cr_bps)
+    }
+
     function sortItems(list) {
         const copy = (list || []).map(function(it, i) { return { it: it, i: i } })
         copy.sort(function(a, b) {
-            const byCr = Number(a.it.cr_bps) - Number(b.it.cr_bps)
-            return byCr !== 0 ? byCr : a.i - b.i
+            const ka = crKey(a.it)
+            const kb = crKey(b.it)
+            if (ka !== kb) return ka < kb ? -1 : 1
+            return a.i - b.i
         })
         return copy.map(function(x) { return x.it })
     }
@@ -138,7 +145,8 @@ ColumnLayout {
                     Layout.fillWidth: true
                     LogosText {
                         objectName: "riskItemCr"
-                        text: qsTr("CR %1%").arg(Format.bpsPercent(row.modelData.cr_bps, 1))
+                        text: row.modelData.cr_bps === null || row.modelData.cr_bps === undefined
+                              ? qsTr("CR —") : qsTr("CR %1%").arg(Format.bpsPercent(row.modelData.cr_bps, 1))
                         font.pixelSize: Theme.typography.subtitleText
                         font.weight: Theme.typography.weightBold
                         font.features: { "tnum": 1 }

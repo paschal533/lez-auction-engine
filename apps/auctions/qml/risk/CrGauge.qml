@@ -14,9 +14,9 @@ ColumnLayout {
     id: root
     objectName: "crGauge"
 
-    // Basis points; -1 when the view has no CR (no debt).
-    property int crBps: -1
-    property int minCrBps: 0
+    // Basis points (u64 in the view, so real: an int would wrap); -1 when the view has no CR (no debt).
+    property real crBps: -1
+    property real minCrBps: 0
     property bool liquidatable: false
 
     readonly property int axisLowBps: 10000

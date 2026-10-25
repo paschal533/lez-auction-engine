@@ -228,6 +228,10 @@ pub struct LiquidationQuoteView {
     pub market_ray: u128,
     pub price_ray: u128,
     pub quote: LiquidationQuote,
+    /// The collateral schedule's discount at elapsed 0: where the auction this opens starts.
+    pub start_discount_ray: u128,
+    /// The capacity the engine checks the target against (`CapacityExhausted`), before this one.
+    pub caps: CapState,
 }
 
 /// Mirrors `liquidate.rs` step for step (see the Task 6 report for the table).
@@ -257,6 +261,13 @@ pub fn quote_liquidation<C: Chain + ?Sized>(
         .ok_or(EngineError::WrongDefinition)?;
     let health = health_of(position, &pos, &host, redemption_wide(&r, v, now_ms)?)?;
     let price = bid_price(market, redemption, &coll.feed_params()?);
+    let params = coll.collateral_params()?;
+    let caps = CapState {
+        type_cap: coll.type_cap,
+        type_reserved: coll.type_reserved,
+        global_cap: cfg.global_cap,
+        global_reserved: cfg.global_reserved,
+    };
     let quote = core_quote_liquidation(
         &LiquidationInput {
             position_collateral: pos.collateral_amount,
@@ -264,13 +275,8 @@ pub fn quote_liquidation<C: Chain + ?Sized>(
             nominal_debt: health.nominal_debt,
             price_ray: price,
         },
-        &coll.collateral_params()?,
-        &CapState {
-            type_cap: coll.type_cap,
-            type_reserved: coll.type_reserved,
-            global_cap: cfg.global_cap,
-            global_reserved: cfg.global_reserved,
-        },
+        &params,
+        &caps,
     )
     .map_err(eng)?;
     // Engine errors above take precedence, as on-chain. Then the host hook (`liquidate_position`
@@ -297,6 +303,8 @@ pub fn quote_liquidation<C: Chain + ?Sized>(
         market_ray: market,
         price_ray: price,
         quote,
+        start_discount_ray: params.schedule.discount_ray(0),
+        caps,
     })
 }
 

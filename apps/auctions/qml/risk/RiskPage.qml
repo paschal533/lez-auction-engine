@@ -37,7 +37,9 @@ Item {
         property int scannedTo: -1
         property string selectedId: ""
         property var position: null
-        property var oracle: null
+        // The whole overview reply (its oracle, and the block the quote header names), or null.
+        property var overview: null
+        readonly property var oracle: overview && overview.oracle ? overview.oracle : null
         property var listNotice: null
         property string listPrefix: ""
         property var detailNotice: null
@@ -111,14 +113,14 @@ Item {
             })
         }
 
-        // The oracle for the pause states. A failed read leaves it unknown (null): the quote card then says
-        // "Oracle unknown" and does not liquidate.
+        // The overview: its oracle for the pause states and its block for the quote header. A failed read
+        // leaves it unknown (null): the quote card then says "Oracle unknown" and does not liquidate.
         function loadOracle(gen) {
             logos.watch(root.backend.view({ view: "overview" }), function(reply) {
                 if (gen !== generation) return
-                oracle = failure(reply) ? null : (reply.oracle || null)
+                overview = failure(reply) ? null : reply
             }, function(err) {
-                if (gen === generation) oracle = null
+                if (gen === generation) overview = null
             })
         }
 
@@ -223,6 +225,8 @@ Item {
                 backend: root.backend
                 position: d.position
                 oracle: d.oracle
+                block: d.overview && d.overview.block !== undefined && d.overview.block !== null
+                       ? Number(d.overview.block) : -1
                 accounts: root.accounts
                 activeAccount: root.activeAccount
                 onLaneDone: d.refresh()

@@ -9,12 +9,15 @@ import "../shell"
 import "../common/Format.js" as Format
 
 // The quote card of the At-risk screen (board v4, right column). Every figure is a field of the `position`
-// view's liquidation quote (the SDK's LiquidationQuoteView, what `auction-cli quote-liquidation` prints):
-//   what the auction must raise: debt to cover (debt_principal), auction target (amount_to_raise);
-//   where the collateral goes: seized, your reward (keeper_reward) with the engine's formula, to auction (lot).
-// "Will end short" shows when the lot is worth less than the target at the quote price (lot × RAY <
-// amount_to_raise × price_ray, a comparison of returned fields). The board's penalty, network fee and cap
-// rows have no field in the quote or the views and are left out.
+// view's liquidation quote (the SDK's LiquidationQuoteView, what `auction-cli quote-liquidation` prints) or a
+// subtraction of two of them (R33):
+//   what the auction must raise: debt to cover (debt_principal), penalty (amount_to_raise - debt_principal,
+//   crates/auction_core/src/liquidation.rs:79), auction target (amount_to_raise);
+//   where the collateral goes: seized, your reward (keeper_reward) with the engine's formula, to auction (lot);
+//   capacity: the collateral and global caps, what is already reserved and what this target takes.
+// "Will end short" shows when the lot cannot raise the target even at the schedule's starting discount:
+// lot × (RAY - start_discount_ray) < amount_to_raise × price_ray, exact string maths. The header names the
+// block the overview was read at. The board's network fee has no field and is left out.
 // States: healthy (button disabled, `liquidateReason`), price feed stale / out of range / collateral paused by
 // the admin (`riskFeedNotice`, "Liquidations paused"), oracle unknown. Other refusals (`refused` in the view,
 // a failed quote or submit) show in `liquidateNotice`, never as node trouble unless their kind is `chain`.
@@ -29,6 +32,8 @@ InsetCard {
     property var position: null
     // overview.oracle {price_ray, fresh, age_ms, max_age_ms, range_lo_ray, range_hi_ray}, or null while unknown.
     property var oracle: null
+    // overview.block, -1 while unknown.
+    property int block: -1
     property var accounts: []
     property string activeAccount: ""
 
@@ -54,12 +59,16 @@ InsetCard {
     readonly property bool canLiquidate: hasPosition && !!quote && !!position.liquidatable && !paused
                                          && !oracleUnknown && d.keeper !== null && !d.quoting && !laneBusy
     readonly property string rayOne: "1000000000000000000000000000"
+    // At the starting discount d the lot raises at most lot / price × (1 - d); short when that is below the
+    // target, i.e. lot × (RAY - d) < target × price (both sides scaled by RAY × price).
     readonly property bool endsShort: {
-        if (!quote) return false
-        const lotValue = Format.mul(String(quote.lot), rayOne)
+        if (!quote || !Format.isDigits(String(quote.start_discount_ray))) return false
+        const keep = Format.subtract(rayOne, String(quote.start_discount_ray))
+        const lotValue = Format.mul(String(quote.lot), keep)
         const targetValue = Format.mul(String(quote.amount_to_raise), String(quote.price_ray))
         return lotValue.length > 0 && targetValue.length > 0 && Format.cmp(lotValue, targetValue) < 0
     }
+    readonly property string penalty: quote ? Format.subtract(String(quote.amount_to_raise), String(quote.debt_principal)) : ""
 
     signal laneDone()
 
@@ -110,6 +119,66 @@ InsetCard {
         }
     }
 
+    // One cap (board v4): "N left of CAP" once this target is reserved, and a track with what is reserved already (textTertiary)
+    // followed by what this target takes (accentOrange). Amounts are stable, as the engine counts them.
+    component CapBar: ColumnLayout {
+        id: cap
+        property string label: ""
+        property string capValue: ""
+        property string reserved: ""
+        property string target: ""
+        readonly property string room: Format.subtract(capValue, reserved)
+        readonly property string takes: Format.cmp(target, room) > 0 ? room : target
+        readonly property string leftAfter: Format.subtract(room, target)
+        readonly property real reservedRatio: Format.ratio(reserved, capValue)
+        readonly property real takesRatio: Format.ratio(takes, capValue)
+
+        Layout.fillWidth: true
+        spacing: Theme.spacing.tiny
+
+        RowLayout {
+            Layout.fillWidth: true
+            LogosText {
+                Layout.minimumWidth: implicitWidth
+                text: cap.label
+                font.pixelSize: Theme.typography.secondaryText
+                color: Theme.palette.textTertiary
+            }
+            LogosText {
+                objectName: "capText"
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignRight
+                elide: Text.ElideLeft
+                text: qsTr("%1 left of %2").arg(Format.amount(cap.leftAfter, 0)).arg(Format.amount(cap.capValue, 0))
+                font.pixelSize: Theme.typography.secondaryText
+                font.features: { "tnum": 1 }
+                color: Theme.palette.textSecondary
+            }
+        }
+        Rectangle {
+            objectName: "capTrack"
+            Layout.fillWidth: true
+            Layout.preferredHeight: 4
+            radius: 2
+            color: Theme.palette.backgroundButton
+            Rectangle {
+                objectName: "capReserved"
+                width: parent.width * cap.reservedRatio
+                height: parent.height
+                radius: 2
+                color: Theme.palette.textTertiary
+            }
+            Rectangle {
+                objectName: "capThis"
+                x: parent.width * cap.reservedRatio
+                width: parent.width * cap.takesRatio
+                height: parent.height
+                radius: 2
+                color: Theme.palette.accentOrange
+            }
+        }
+    }
+
     component Divider: Rectangle {
         Layout.fillWidth: true
         Layout.preferredHeight: 1
@@ -154,6 +223,8 @@ InsetCard {
                 facts: [
                     { label: qsTr("Auction"), value: Format.shortId(String(quote.auction)) },
                     { label: qsTr("Debt to cover"), value: String(quote.debt_principal), decimals: 0, unit: qsTr("stable") },
+                    { label: qsTr("Penalty"), value: Format.subtract(String(quote.amount_to_raise), String(quote.debt_principal)),
+                      decimals: 0, unit: qsTr("stable") },
                     { label: qsTr("Auction target"), value: String(quote.amount_to_raise), decimals: 0, unit: qsTr("stable"),
                       strong: true },
                     { label: qsTr("Collateral seized"), value: String(quote.seized), decimals: 0, unit: qsTr("collateral") },
@@ -218,11 +289,11 @@ InsetCard {
             color: Theme.palette.text
         }
         LogosText {
-            objectName: "liqAuction"
-            visible: !!root.quote
-            text: root.quote ? qsTr("auction %1").arg(Format.shortId(String(root.quote.auction))) : ""
+            objectName: "liqBlock"
+            visible: !!root.quote && root.block >= 0
+            text: qsTr("at block %1").arg(root.block)
             font.pixelSize: Theme.typography.secondaryText
-            font.family: Theme.typography.mono
+            font.features: { "tnum": 1 }
             color: Theme.palette.textTertiary
         }
     }
@@ -236,6 +307,12 @@ InsetCard {
             objectName: "liqDebt"
             label: qsTr("Debt to cover")
             value: root.quote ? String(root.quote.debt_principal) : ""
+            unit: qsTr("stable")
+        }
+        QuoteLine {
+            objectName: "liqPenalty"
+            label: qsTr("Penalty")
+            value: root.penalty
             unit: qsTr("stable")
         }
         QuoteLine {
@@ -286,6 +363,29 @@ InsetCard {
         }
     }
 
+    Divider { visible: !!root.quote }
+
+    // ---- Capacity -----------------------------------------------------------------------------------
+    ColumnLayout {
+        Layout.fillWidth: true
+        visible: !!root.quote
+        spacing: Theme.spacing.small
+        CapBar {
+            objectName: "liqTypeCap"
+            label: qsTr("Type cap")
+            capValue: root.quote ? String(root.quote.type_cap) : ""
+            reserved: root.quote ? String(root.quote.type_reserved) : ""
+            target: root.quote ? String(root.quote.amount_to_raise) : ""
+        }
+        CapBar {
+            objectName: "liqGlobalCap"
+            label: qsTr("Global cap")
+            capValue: root.quote ? String(root.quote.global_cap) : ""
+            reserved: root.quote ? String(root.quote.global_reserved) : ""
+            target: root.quote ? String(root.quote.amount_to_raise) : ""
+        }
+    }
+
     LogosText {
         objectName: "liqEndShort"
         Layout.fillWidth: true
@@ -293,7 +393,8 @@ InsetCard {
         wrapMode: Text.WordWrap
         textFormat: Text.StyledText
         text: "<b>" + qsTr("Will end short.") + "</b> "
-              + qsTr("At the quote price the lot is worth less than the auction target, so the auction cannot raise all of it.")
+              + qsTr("Even at its starting discount of %1% the lot is worth less than the auction target, so the auction cannot raise all of it.")
+                    .arg(root.quote ? Format.rayPercent(String(root.quote.start_discount_ray), 1) : "")
         font.pixelSize: Theme.typography.secondaryText
         color: Theme.palette.warning
     }
@@ -301,7 +402,8 @@ InsetCard {
     LogosNotice {
         objectName: "riskFeedNotice"
         Layout.fillWidth: true
-        severity: LogosNotice.Warning
+        // Board v4: a stale feed is a Warning, a price outside the range an Error.
+        severity: root.feedOutOfRange && !root.feedStale ? LogosNotice.Error : LogosNotice.Warning
         shown: root.hasPosition && (root.paused || root.oracleUnknown)
         title: {
             if (root.feedStale) {
@@ -382,6 +484,7 @@ InsetCard {
 
     TxLane {
         id: lane
+        namePrefix: "risk"
         Layout.fillWidth: true
         visible: txId.length > 0
         backend: root.backend
@@ -392,6 +495,7 @@ InsetCard {
 
     TxDialog {
         id: dialog
+        namePrefix: "risk"
         onConfirmed: d.submit()
     }
 }

@@ -155,6 +155,26 @@ TestCase {
         compare(callsOf("view", "position")[0].req.id, "P12000")
     }
 
+    function test_position_without_cr_sorts_last() {
+        atRiskReply = { items: [
+            row({ position: "PNULL", cr_bps: null, liquidatable: false }),
+            row({ position: "P15000", cr_bps: 15000 }),
+            row({ position: "P12000", cr_bps: 12000 })
+        ], scanned_to: 3, skipped: [] }
+        const p = createPage()
+        compare(rowNames(findChild(p, "riskList")), ["riskItem_P12000", "riskItem_P15000", "riskItem_PNULL"])
+        compare(findChild(findChild(p, "riskItem_PNULL"), "riskItemCr").text, "CR —")
+    }
+
+    // cr_bps is a u64: beyond an int's range the gauge still clamps instead of wrapping.
+    function test_huge_cr_clamps_the_gauge() {
+        healthy()
+        positionReply.cr_bps = 5000000000
+        const p = ready()
+        compare(findChild(p, "crGauge").markerRatio, 1)
+        compare(findChild(p, "crValue").text, "50,000,000.0%")
+    }
+
     function test_row_shows_cr_badge_and_amounts() {
         const p = createPage()
         const r = findChild(p, "riskItem_" + atRiskReply.items[0].position)
@@ -187,12 +207,29 @@ TestCase {
         compare(findChild(findChild(p, "factRedemption"), "factValue").text, "0.5")
         compare(findChild(findChild(p, "factMarket"), "factValue").text, "0.5")
         compare(findChild(findChild(p, "factRange"), "factValue").text, "0.25–1")
+        // nominal_debt × redemption_ray: 600,000 × 0.5.
+        compare(findChild(findChild(p, "factDebtValue"), "factValue").text, "300,000")
+    }
+
+    // Floored to whole units, as every amount is shown: 600,001 × 0.5 = 300,000.5 -> 300,000.
+    function test_debt_value_floors() {
+        positionReply.nominal_debt = "600001"
+        const p = ready()
+        compare(findChild(findChild(p, "factDebtValue"), "factValue").text, "300,000")
+    }
+
+    function test_debt_value_needs_the_quote() {
+        healthy()
+        const p = ready()
+        compare(findChild(findChild(p, "factDebtValue"), "factValue").text, "—")
     }
 
     function test_quote_card_rows() {
         const p = ready()
         compare(findChild(p, "liqDebt").value, "600000")
         compare(findChild(findChild(p, "liqDebt"), "liqRowValue").text, "600,000")
+        // R33: amount_to_raise − debt_principal (liquidation.rs:79).
+        compare(findChild(findChild(p, "liqPenalty"), "liqRowValue").text, "60,000")
         compare(findChild(findChild(p, "liqTarget"), "liqRowValue").text, "660,000")
         compare(findChild(findChild(p, "liqSeized"), "liqRowValue").text, "500,000")
         compare(findChild(findChild(p, "liqLot"), "liqRowValue").text, "499,975")
@@ -222,6 +259,52 @@ TestCase {
         p.refresh()
         tryVerify(function() { return findChild(p, "liqEndShort").visible })
         verify(findChild(p, "liqEndShort").text.indexOf("<b>Will end short.</b>") === 0)
+        verify(findChild(p, "liqEndShort").text.indexOf("starting discount of 2.0%") >= 0)
+    }
+
+    // lot × (RAY − start_discount_ray) against target × price_ray: equal is not short, one more unit is.
+    function test_end_short_boundary_uses_the_start_discount() {
+        positionReply.quote.lot = "500000"
+        positionReply.quote.start_discount_ray = "20000000000000000000000000"
+        positionReply.quote.price_ray = "1000000000000000000000000000"
+        // 500,000 at a 2% discount raises 490,000: exactly the target.
+        positionReply.quote.amount_to_raise = "490000"
+        const p = ready()
+        verify(!findChild(p, "liqEndShort").visible, "raising exactly the target is not short")
+        positionReply.quote.amount_to_raise = "490001"
+        p.refresh()
+        tryVerify(function() { return findChild(p, "liqEndShort").visible })
+        // Without the discount the same lot (worth 500,000) would cover 490,001: the discount decides.
+        positionReply.quote.start_discount_ray = "0"
+        p.refresh()
+        tryVerify(function() { return !findChild(p, "liqEndShort").visible })
+    }
+
+    function test_quote_header_names_the_overview_block() {
+        overviewReply.block = 872
+        const p = ready()
+        compare(findChild(p, "liqBlock").text, "at block 872")
+        verify(findChild(p, "liqBlock").visible)
+    }
+
+    // Board v4 capacity: "N left of CAP", N = cap − reserved − target, bars reserved / cap and target / cap.
+    function test_cap_bars_from_the_quote() {
+        const p = ready()
+        const type = findChild(p, "liqTypeCap")
+        compare(findChild(type, "capText").text, "3,680,000 left of 5,000,000")
+        fuzzyCompare(type.reservedRatio, 660000 / 5000000, 1e-9)
+        fuzzyCompare(type.takesRatio, 660000 / 5000000, 1e-9)
+        const global = findChild(p, "liqGlobalCap")
+        compare(findChild(global, "capText").text, "8,680,000 left of 10,000,000")
+        fuzzyCompare(global.reservedRatio, 660000 / 10000000, 1e-9)
+    }
+
+    function test_cap_bar_floors_left_after_at_zero() {
+        positionReply.quote.type_reserved = "4500000"
+        const p = ready()
+        const type = findChild(p, "liqTypeCap")
+        compare(findChild(type, "capText").text, "0 left of 5,000,000")
+        fuzzyCompare(type.takesRatio, 500000 / 5000000, 1e-9)
     }
 
     // ---- States -------------------------------------------------------------------------------
@@ -264,7 +347,7 @@ TestCase {
         verify(!button.enabled)
         const notice = findChild(p, "riskFeedNotice")
         verify(notice.shown)
-        compare(notice.severity, LogosNotice.Warning)
+        compare(notice.severity, LogosNotice.Error)
         compare(notice.title, "Price feed out of range")
         compare(notice.message,
                 "Market 2 is outside 0.25–1 collateral per stable. Liquidations and bids stay paused until it is back in range.")
@@ -339,10 +422,10 @@ TestCase {
         button.clicked()
         compare(callsOf("view", "quote_liquidation").length, 1)
         compare(callsOf("view", "quote_liquidation")[0].req.position, positionReply.position)
-        const dialog = findChild(p, "txDialog")
+        const dialog = findChild(p, "riskTxDialog")
         tryCompare(dialog, "opened", true)
         compare(dialog.request.action, "liquidate")
-        findChild(dialog, "txConfirm").clicked()
+        findChild(dialog, "riskTxConfirm").clicked()
         const submits = callsOf("submit")
         compare(submits.length, 1)
         compare(JSON.stringify(submits[0].req), JSON.stringify({
@@ -351,9 +434,17 @@ TestCase {
             keeper: "keeper",
             keeper_holding: "keeper-coll"
         }))
-        const lane = findChild(p, "txLane")
+        const lane = findChild(p, "riskTxLane")
         tryCompare(lane, "state", "waiting")
         verify(!button.visible)
+    }
+
+    function test_tx_names_are_scoped_to_the_risk_page() {
+        const p = ready()
+        for (const name of ["riskTxDialog", "riskTxConfirm", "riskTxCancel", "riskTxLane", "riskTxRequote"])
+            verify(findChild(p, name) !== null, name)
+        for (const plain of ["txDialog", "txConfirm", "txCancel", "txLane", "txRequote"])
+            compare(findChild(p, plain), null, plain)
     }
 
     function test_refused_submit_shows_notice_not_node_trouble() {
@@ -362,9 +453,9 @@ TestCase {
         const button = findChild(p, "liquidateSubmit")
         tryVerify(function() { return button.enabled })
         button.clicked()
-        const dialog = findChild(p, "txDialog")
+        const dialog = findChild(p, "riskTxDialog")
         tryCompare(dialog, "opened", true)
-        findChild(dialog, "txConfirm").clicked()
+        findChild(dialog, "riskTxConfirm").clicked()
         const notice = findChild(p, "liquidateNotice")
         tryCompare(notice, "shown", true)
         compare(notice.severity, LogosNotice.Error)
@@ -375,13 +466,13 @@ TestCase {
         const button = findChild(p, "liquidateSubmit")
         tryVerify(function() { return button.enabled })
         button.clicked()
-        const dialog = findChild(p, "txDialog")
+        const dialog = findChild(p, "riskTxDialog")
         tryCompare(dialog, "opened", true)
-        findChild(dialog, "txConfirm").clicked()
+        findChild(dialog, "riskTxConfirm").clicked()
         const before = callsOf("view", "at_risk").length
         const overviews = callsOf("view", "overview").length
         statusReply = { txId: "tx1", state: "included", step: 0, steps: 1 }
-        const lane = findChild(p, "txLane")
+        const lane = findChild(p, "riskTxLane")
         lane.poll()
         compare(lane.state, "done")
         tryVerify(function() { return callsOf("view", "at_risk").length === before + 1 })

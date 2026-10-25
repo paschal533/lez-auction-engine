@@ -84,7 +84,8 @@ pub fn bid(ctx: &Ctx, req: &Value) -> Result<Value, FfiError> {
     }))
 }
 
-/// A liquidation quote as `auction-cli quote-liquidation` shows it, every field of the SDK's view.
+/// A liquidation quote as `auction-cli quote-liquidation` shows it, every field of the SDK's view
+/// (plus the auction's starting discount and the caps the target is checked against).
 #[must_use]
 pub fn liquidation_json(q: &LiquidationQuoteView) -> Value {
     json!({
@@ -106,6 +107,11 @@ pub fn liquidation_json(q: &LiquidationQuoteView) -> Value {
         "keeper_reward": dec(q.quote.keeper_reward),
         "lot": dec(q.quote.lot),
         "seized": dec(q.quote.seized),
+        "start_discount_ray": dec(q.start_discount_ray),
+        "type_cap": dec(q.caps.type_cap),
+        "type_reserved": dec(q.caps.type_reserved),
+        "global_cap": dec(q.caps.global_cap),
+        "global_reserved": dec(q.caps.global_reserved),
     })
 }
 

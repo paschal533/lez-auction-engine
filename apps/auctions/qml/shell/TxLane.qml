@@ -21,7 +21,16 @@ import "../common/Format.js" as Format
 // wallet label from `accounts`. It never follows the active account.
 ColumnLayout {
     id: root
-    objectName: "txLane"
+    objectName: root.scoped("txLane")
+
+    // Ruling R34: a screen that hosts its own lane next to another one's prefixes every objectName
+    // ("risk" -> riskTxLane, riskTxRequote, ...), so the e2e runner finds each by a unique name. Empty
+    // keeps the plain names (txLane, txRequote, ...).
+    property string namePrefix: ""
+
+    function scoped(base) {
+        return namePrefix.length > 0 ? namePrefix + base.charAt(0).toUpperCase() + base.substring(1) : base
+    }
 
     property var backend: null
     property string txId: ""
@@ -311,7 +320,7 @@ ColumnLayout {
         spacing: Theme.spacing.small
 
         LogosText {
-            objectName: "txLaneTitle"
+            objectName: root.scoped("txLaneTitle")
             Layout.fillWidth: true
             text: d.title
             wrapMode: Text.WordWrap
@@ -322,7 +331,7 @@ ColumnLayout {
                  : Theme.palette.text
         }
         LogosText {
-            objectName: "txLaneCaption"
+            objectName: root.scoped("txLaneCaption")
             visible: text.length > 0
             text: d.caption
             font.pixelSize: Theme.typography.secondaryText
@@ -333,7 +342,7 @@ ColumnLayout {
 
     LogosStageLane {
         id: lane
-        objectName: "txStages"
+        objectName: root.scoped("txStages")
         Layout.fillWidth: true
         currentIndex: root.state === "" ? -1 : d.laneIndex
         busy: root.state === "waiting" || root.state === "unknown"
@@ -343,7 +352,7 @@ ColumnLayout {
     }
 
     LogosText {
-        objectName: "txLaneBody"
+        objectName: root.scoped("txLaneBody")
         Layout.fillWidth: true
         text: d.body
         wrapMode: Text.WordWrap
@@ -352,7 +361,7 @@ ColumnLayout {
     }
 
     LogosText {
-        objectName: "txLaneSigner"
+        objectName: root.scoped("txLaneSigner")
         Layout.fillWidth: true
         visible: root.signer.length > 0
         text: qsTr("Signed as %1").arg(root.signer)
@@ -362,7 +371,7 @@ ColumnLayout {
 
     LogosButton {
         id: requoteButton
-        objectName: "txRequote"
+        objectName: root.scoped("txRequote")
         visible: root.state === "dropped"
         text: qsTr("Re-quote")
         Layout.preferredHeight: 40

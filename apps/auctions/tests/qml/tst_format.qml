@@ -129,4 +129,10 @@ TestCase {
         compare(Format.mul("007", "006"), "42")
         compare(Format.mul("1.5", "2"), "", "not digits: no product")
     }
+
+    // Debt value: nominal_debt × redemption_ray / RAY, floored to whole units.
+    function test_mul_then_fixed_floors_a_ray_product() {
+        compare(Format.fixed(Format.mul("600001", "500000000000000000000000000"), Format.RAY_DECIMALS, 0), "300,000")
+        compare(Format.fixed(Format.mul("15900", "752000000000000000000000"), Format.RAY_DECIMALS, 3), "11.956")
+    }
 }

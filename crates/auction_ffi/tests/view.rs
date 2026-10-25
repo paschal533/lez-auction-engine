@@ -363,6 +363,40 @@ fn quote_liquidation_view_quotes_the_unsafe_position() {
     assert_eq!(v["price_ray"], R.to_string());
 }
 
+/// The screen's "Will end short" and cap bars read these: the schedule's starting discount (the
+/// collateral params' discount at elapsed 0) and the capacity the target is checked against.
+#[test]
+fn quote_liquidation_view_carries_the_start_discount_and_the_caps() {
+    let w = world("localnet");
+    let fx = standard::standard();
+    let v = ok(
+        &w,
+        json!({ "view": "quote_liquidation", "position": fx.unsafe_position.to_string() }),
+    );
+    let ver = w.ctx.verified().expect("verified");
+    let q = quote::quote_liquidation(w.chain, &ver, &fx.unsafe_position, T0).expect("quote");
+    let coll = Reader::new(w.chain, ver.engine.program)
+        .coll_config(&ver.coll_config_id())
+        .expect("coll config");
+    let params = coll.collateral_params().expect("params");
+    assert_eq!(
+        v["start_discount_ray"],
+        params.schedule.discount_ray(0).to_string()
+    );
+    assert_eq!(v["start_discount_ray"], q.start_discount_ray.to_string());
+    assert_eq!(v["type_cap"], coll.type_cap.to_string());
+    assert_eq!(v["type_reserved"], coll.type_reserved.to_string());
+    assert_eq!(v["global_cap"], q.caps.global_cap.to_string());
+    assert_eq!(v["global_reserved"], q.caps.global_reserved.to_string());
+    // The position view's quote is the same JSON.
+    let p = ok(
+        &w,
+        json!({ "view": "position", "id": fx.unsafe_position.to_string() }),
+    );
+    assert_eq!(p["quote"]["start_discount_ray"], v["start_discount_ray"]);
+    assert_eq!(p["quote"]["type_cap"], v["type_cap"]);
+}
+
 #[test]
 fn quote_take_surplus_view_equals_the_sdk_quote() {
     let w = world("localnet");
@@ -503,6 +537,11 @@ fn prices_and_amounts_are_decimal_strings() {
         "/keeper_reward",
         "/lot",
         "/seized",
+        "/start_discount_ray",
+        "/type_cap",
+        "/type_reserved",
+        "/global_cap",
+        "/global_reserved",
     ];
     // (request, u128 fields as JSON pointers; "*" maps over an array)
     let cases: Vec<(Value, Vec<String>)> = vec![

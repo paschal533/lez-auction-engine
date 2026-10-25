@@ -21,7 +21,16 @@ import "../common/Format.js" as Format
 // Esc cancels (rejected()); Confirm emits confirmed() and closes.
 LogosDialog {
     id: root
-    objectName: "txDialog"
+    objectName: root.scoped("txDialog")
+
+    // Ruling R34: a screen that hosts its own dialog next to another one's prefixes every objectName
+    // ("risk" -> riskTxDialog, riskTxConfirm, ...), so the e2e runner finds each by a unique name. Empty
+    // keeps the plain names (txDialog, txConfirm, ...).
+    property string namePrefix: ""
+
+    function scoped(base) {
+        return namePrefix.length > 0 ? namePrefix + base.charAt(0).toUpperCase() + base.substring(1) : base
+    }
 
     property var request: ({})
     property var quote: ({})
@@ -83,7 +92,7 @@ LogosDialog {
             spacing: Theme.spacing.small
 
             LogosText {
-                objectName: "txTitle"
+                objectName: root.scoped("txTitle")
                 Layout.fillWidth: true
                 text: root.titleText
                 font.pixelSize: Theme.typography.primaryText
@@ -92,7 +101,7 @@ LogosDialog {
                 elide: Text.ElideRight
             }
             LogosBadge {
-                objectName: "txMode"
+                objectName: root.scoped("txMode")
                 text: qsTr("Public")
                 color: Theme.palette.textSecondary
             }
@@ -120,7 +129,7 @@ LogosDialog {
 
             RowLayout {
                 id: swap
-                objectName: "txSwap"
+                objectName: root.scoped("txSwap")
                 Layout.fillWidth: true
                 visible: root.hasTrade
                 spacing: Theme.spacing.medium
@@ -137,7 +146,7 @@ LogosDialog {
                     RowLayout {
                         spacing: Theme.spacing.tiny
                         LogosText {
-                            objectName: "txPayAmount"
+                            objectName: root.scoped("txPayAmount")
                             text: root.amountText(root.req.pay)
                             font.pixelSize: Theme.typography.panelTitleText
                             font.weight: Theme.typography.weightBold
@@ -180,7 +189,7 @@ LogosDialog {
                     RowLayout {
                         spacing: Theme.spacing.tiny
                         LogosText {
-                            objectName: "txGetAmount"
+                            objectName: root.scoped("txGetAmount")
                             text: "≈ " + root.amountText(root.req.get)
                             font.pixelSize: Theme.typography.panelTitleText
                             font.weight: Theme.typography.weightBold
@@ -214,7 +223,7 @@ LogosDialog {
 
             QuoteRows {
                 id: facts
-                objectName: "txFacts"
+                objectName: root.scoped("txFacts")
                 Layout.fillWidth: true
                 rows: root.req.facts || []
             }
@@ -287,7 +296,7 @@ LogosDialog {
                         color: Theme.palette.textTertiary
                     }
                     LogosText {
-                        objectName: "txPrivate"
+                        objectName: root.scoped("txPrivate")
                         Layout.fillWidth: true
                         text: qsTr("Nothing. Private bids are later work (M4).")
                         wrapMode: Text.WordWrap
@@ -303,7 +312,7 @@ LogosDialog {
     rightActions: [
         LogosButton {
             id: cancelButton
-            objectName: "txCancel"
+            objectName: root.scoped("txCancel")
             text: qsTr("Cancel")
             width: Math.max(96, implicitWidth)
             height: 40
@@ -312,7 +321,7 @@ LogosDialog {
         },
         LogosButton {
             id: confirmButton
-            objectName: "txConfirm"
+            objectName: root.scoped("txConfirm")
             text: root.req.confirmLabel || qsTr("Confirm")
             width: Math.max(96, implicitWidth)
             height: 40

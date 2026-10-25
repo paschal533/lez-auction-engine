@@ -11,9 +11,10 @@ import "../common/Format.js" as Format
 // The panel of the At-risk screen (board v4): the selected position's CR as the hero with the 100–250 % gauge,
 // the facts (collateral, debt with the stability fee, redemption price, market price with freshness, allowed
 // range), a short "When you liquidate" sequence, and the quote card. CR is the host's min-CR ratio at the
-// redemption price R (R17), never an oracle CR. The board's "debt value" (debt × R) is not a view field and is
-// left out. Auctions have no end time (R30): the sequence says the auction settles once the target is raised
-// or the lot is sold, nothing about time.
+// redemption price R (R17), never an oracle CR. Debt value is nominal_debt × redemption_ray / RAY, floored to
+// whole units as amounts are shown (R33); it needs the quote's R, so a position without a quote shows "—".
+// Auctions have no end time (R30): the sequence says the auction settles once the target is raised or the lot
+// is sold, nothing about time.
 Rectangle {
     id: root
     objectName: "positionDetail"
@@ -22,6 +23,8 @@ Rectangle {
     // The `position` view.
     property var position: null
     property var oracle: null
+    // overview.block for the quote header, -1 while unknown.
+    property int block: -1
     property var accounts: []
     property string activeAccount: ""
 
@@ -29,6 +32,10 @@ Rectangle {
     readonly property string positionId: hasPosition ? String(position.position) : ""
     readonly property bool hasCr: hasPosition && position.cr_bps !== null && position.cr_bps !== undefined
     readonly property var quote: hasPosition && position.quote ? position.quote : null
+    // Collateral units: debt (stable) × R (collateral per stable), floored like every amount on screen.
+    readonly property string debtValue: quote
+        ? Format.fixed(Format.mul(String(position.nominal_debt), String(quote.redemption_ray)), Format.RAY_DECIMALS, 0)
+        : ""
 
     signal laneDone()
 
@@ -139,6 +146,7 @@ Rectangle {
                         }
                         CrGauge {
                             Layout.fillWidth: true
+                            // u64 bps: a real, so a huge CR cannot wrap an int (the gauge clamps it).
                             crBps: root.hasCr ? Number(root.position.cr_bps) : -1
                             minCrBps: root.hasPosition ? Number(root.position.min_cr_bps) : 0
                             liquidatable: root.hasPosition && !!root.position.liquidatable
@@ -172,6 +180,13 @@ Rectangle {
                             unit: qsTr("stable")
                         }
                         Fact {
+                            objectName: "factDebtValue"
+                            Layout.fillWidth: true
+                            label: qsTr("Debt value")
+                            value: root.debtValue.length > 0 ? root.debtValue : "—"
+                            unit: root.debtValue.length > 0 ? qsTr("collateral at R") : ""
+                        }
+                        Fact {
                             objectName: "factRedemption"
                             Layout.fillWidth: true
                             label: qsTr("Redemption price")
@@ -196,7 +211,6 @@ Rectangle {
                             label: qsTr("Allowed range")
                             value: root.oracle ? Format.rayPrice(String(root.oracle.range_lo_ray)) + "–"
                                                  + Format.rayPrice(String(root.oracle.range_hi_ray)) : "—"
-                            unit: qsTr("½–2 × redemption")
                         }
                     }
 
@@ -243,6 +257,7 @@ Rectangle {
                     backend: root.backend
                     position: root.position
                     oracle: root.oracle
+                    block: root.block
                     accounts: root.accounts
                     activeAccount: root.activeAccount
                     onLaneDone: root.laneDone()

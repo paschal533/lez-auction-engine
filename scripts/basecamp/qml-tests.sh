@@ -32,6 +32,8 @@ def resolve(ref):
 builder = resolve(n[d['root']]['inputs']['logos-module-builder'])
 print(n[resolve(n[builder]['inputs']['nixpkgs'])]['locked']['rev'])")"
 
+# The Qt builds below may download or build; never start them with C: below host.sh's floor.
+scripts/basecamp/host.sh check >&2
 qt_decl="$(nix build "github:NixOS/nixpkgs/${nixpkgs_rev}#qt6.qtdeclarative" --no-link --print-out-paths | head -1)"
 qt_svg="$(nix build "github:NixOS/nixpkgs/${nixpkgs_rev}#qt6.qtsvg" --no-link --print-out-paths | head -1)"
 design_src="$(nix flake prefetch "github:logos-co/logos-design-system/${DESIGN_SYSTEM_REV}" --json \

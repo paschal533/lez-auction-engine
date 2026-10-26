@@ -13,7 +13,8 @@
 # Exit 4 also when PROFILE_DIR/modules/lez_core/manifest.json exists but has no readable version (fails closed).
 # Overrides: BASECAMP_OUT_DIR (result links, default ~/lez-target/basecamp; run-app.sh honours it too), MIN_C_GB,
 # RUN_APP.
-# Runs inside WSL; from Git Bash it re-runs itself through wsl.
+# Runs inside WSL; from Git Bash it re-runs itself through wsl. Environment overrides are not forwarded across
+# that re-exec, so with STUB_LOG or RUN_APP set (scripts/tests/install-lgx.sh) it refuses instead.
 set -euo pipefail
 
 BASECAMP_REV="e09962f5998792afd3bfed8c69c3b8f07f5825a5"
@@ -23,6 +24,10 @@ LEZ_CORE_REV="acf0cd501b262c4c15969e3735e85318297b85bf"
 LEZ_CORE_VERSION="0.4.1"
 
 if ! grep -qi microsoft /proc/version 2>/dev/null && [[ ! -d /mnt/c ]] && command -v wsl >/dev/null 2>&1; then
+  if [[ -n "${STUB_LOG:-}" || -n "${RUN_APP:-}" ]]; then
+    echo "install-lgx: STUB_LOG or RUN_APP is set, and the WSL re-exec would drop it; run inside WSL" >&2
+    exit 2
+  fi
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
   win="$(cd "$here" && pwd -W)"
   wsl_here="/mnt/$(echo "${win:0:1}" | tr 'A-Z' 'a-z')${win:2}"
@@ -78,10 +83,12 @@ require_pinned_lez_core() {
 }
 require_pinned_lez_core
 
-# One flake output to a result link under $out; prints the link.
+# One flake output to a result link under $out, left in $built. C: is checked before each build; build runs at
+# the top level (not in a command substitution, where set -e is off), so a refused check stops the script.
 build() { # <flake ref> <link name>
+  "$repo/scripts/basecamp/host.sh" check
   nix build "$1" --max-jobs 1 --cores 2 --out-link "$out/$2" >&2
-  echo "$out/$2"
+  built="$out/$2"
 }
 # The one .lgx file a package output holds.
 lgx_in() {
@@ -91,12 +98,16 @@ lgx_in() {
   echo "$f"
 }
 
-"$repo/scripts/basecamp/host.sh" check
-lgpm="$(build "github:logos-co/logos-package-manager/${PACKAGE_MANAGER_REV}#cli" lgpm)/bin/lgpm"
-lez_core_lgx="$(lgx_in "$(build "github:logos-blockchain/logos-execution-zone-module?rev=${LEZ_CORE_REV}#lgx" lez_core-lgx)")"
-engine_lgx="$(lgx_in "$(build "$repo/modules/auction_engine#lgx" auction_engine-lgx)")"
-auctions_lgx="$(lgx_in "$(build "$repo/apps/auctions#lgx" auctions-lgx)")"
-basecamp_bin="$(build "github:logos-co/logos-basecamp/${BASECAMP_REV}#app" app-full)/bin/LogosBasecamp"
+build "github:logos-co/logos-package-manager/${PACKAGE_MANAGER_REV}#cli" lgpm
+lgpm="$built/bin/lgpm"
+build "github:logos-blockchain/logos-execution-zone-module?rev=${LEZ_CORE_REV}#lgx" lez_core-lgx
+lez_core_lgx="$(lgx_in "$built")"
+build "$repo/modules/auction_engine#lgx" auction_engine-lgx
+engine_lgx="$(lgx_in "$built")"
+build "$repo/apps/auctions#lgx" auctions-lgx
+auctions_lgx="$(lgx_in "$built")"
+build "github:logos-co/logos-basecamp/${BASECAMP_REV}#app" app-full
+basecamp_bin="$built/bin/LogosBasecamp"
 "$repo/scripts/basecamp/host.sh" check
 
 # Core modules first (the UI plugin depends on both), then the UI plugin. The packages are unsigned dev builds.

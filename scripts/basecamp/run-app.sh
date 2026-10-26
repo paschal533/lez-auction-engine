@@ -14,7 +14,8 @@
 # Overrides: AUCTION_ENGINE_ROOT, AUCTIONS_ROOT (install roots; default: nix build of modules/auction_engine
 # and apps/auctions #install), LOGOS_QT_MCP, NODE, DEMO_RUN_DIR (default ~/lez-target/demo),
 # BASECAMP_OUT_DIR (result links, default ~/lez-target/basecamp; host.sh reads it too).
-# Runs inside WSL; from Git Bash it re-runs itself through wsl.
+# Runs inside WSL; from Git Bash it re-runs itself through wsl. Environment overrides are not forwarded across
+# that re-exec: set them inside WSL (e.g. wsl -d Ubuntu-20.04 -- env AUCTIONS_ROOT=... scripts/basecamp/run-app.sh).
 set -euo pipefail
 
 BASECAMP_REV="e09962f5998792afd3bfed8c69c3b8f07f5825a5"

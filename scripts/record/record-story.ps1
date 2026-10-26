@@ -95,18 +95,27 @@ function Stop-Ffmpeg($p) {
   try { $p.StandardInput.Write('q'); $p.StandardInput.Flush() } catch { }
   if (-not $p.WaitForExit(20000)) { try { $p.Kill() } catch { } }
 }
-# TERM to run-app.sh (its exit trap stops Basecamp and the sequencer); after 60 s, kill what is left.
+# TERM to this run's run-app.sh (its exit trap stops Basecamp and the sequencer); after 60 s, kill what is left
+# of its process tree (Basecamp and its module hosts are its children) and its sequencer. Only the pid the run
+# recorded is signalled: other Basecamp sessions in the distro are left alone.
 function Stop-Run($p) {
   if ($null -eq $p -or $p.HasExited) { return }
   Write-Warning 'record-story: stopping the run'
-  Invoke-Native { wsl.exe -d $Distro -- pkill -TERM -f 'scripts/basecamp/run-app.sh' } | Out-Null
+  $runPid = (Get-Content -ErrorAction SilentlyContinue $runPidFile | Select-Object -First 1)
+  if ("$runPid" -match '^\d+$') {
+    Invoke-Native { wsl.exe -d $Distro -- kill -TERM $runPid } | Out-Null
+  }
   if ($p.WaitForExit(60000)) { return }
   try { $p.Kill() } catch { }
   $stopSh = Join-Path $env:TEMP "record-story-stop-$PID.sh"
   @"
 cd '$(To-Wsl $repo)'
-pkill -9 -f 'scripts/basecamp/run-app.sh|scripts/demo.sh' || true
-pkill -TERM -f 'LogosBasecamp|logos_host' || true; sleep 2; pkill -9 -f 'LogosBasecamp|logos_host' || true
+pid="`$(cat '$(To-Wsl $runPidFile)' 2>/dev/null || true)"
+tree() { local c; for c in `$(pgrep -P "`$1"); do tree "`$c"; done; echo "`$1"; }
+if [[ "`$pid" =~ ^[0-9]+`$ ]] && kill -0 "`$pid" 2>/dev/null; then
+  pids="`$(tree "`$pid")"
+  kill -TERM `$pids 2>/dev/null || true; sleep 2; kill -9 `$pids 2>/dev/null || true
+fi
 (. scripts/lib/localnet.sh && ln_stop_sequencer) || true
 "@ -replace "`r", '' | Set-Content -NoNewline -Encoding ascii $stopSh
   Invoke-Native { wsl.exe -d $Distro -- bash -l (To-Wsl $stopSh) } | Out-Null
@@ -138,10 +147,14 @@ $lowest = $free
 $skew = Measure-Skew
 Write-Host ("record-story: WSL clock - Windows clock = {0:N0} ms (round trip {1} ms)" -f $skew.skew, $skew.rtt)
 
-# The run, as a script file: inline bash through wsl.exe loses quoting.
+# The run, as a script file: inline bash through wsl.exe loses quoting. It records its pid (run-app.sh's, after
+# the exec) for Stop-Run.
 $runSh = Join-Path $env:TEMP "record-story-run-$PID.sh"
+$runPidFile = Join-Path $env:TEMP "record-story-run-$PID.pid"
+Remove-Item -ErrorAction SilentlyContinue $runPidFile
 @"
 set -euo pipefail
+echo `$`$ > '$(To-Wsl $runPidFile)'
 cd '$(To-Wsl $repo)'
 export STORY_PACE_MS=$PaceMs STORY_TIMELINE='$(To-Wsl $timeline)' $WslEnv
 exec scripts/basecamp/run-app.sh --setup --test apps/auctions/tests/story.mjs
@@ -198,7 +211,7 @@ try {
   try { if ($errTask) { Set-Content -Encoding utf8 $ffLog $errTask.Result } } catch { }
   try { if ($h -ne [IntPtr]::Zero) { [RecWin]::SetWindowPos($h, [IntPtr](-2), 0, 0, 0, 0, 0x0003) | Out-Null } } catch { }
   try { Stop-Run $run } catch { }
-  Remove-Item -ErrorAction SilentlyContinue $runSh
+  Remove-Item -ErrorAction SilentlyContinue $runSh, $runPidFile
 }
 $run.WaitForExit()
 $runStatus = $run.ExitCode

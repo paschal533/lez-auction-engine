@@ -4,6 +4,12 @@
 # the pinned 0.4.1 (design call 3), and hands the launch to run-app.sh --profile. Stubs `nix`, `df` and lgpm
 # (the stub nix writes an lgpm script into the lgpm out link); RUN_APP points at a stub run-app.sh.
 set -uo pipefail
+# install-lgx.sh's own re-exec condition: from Git Bash it would re-run itself in WSL without these stubs and
+# build and install for real.
+if ! grep -qi microsoft /proc/version 2>/dev/null && [[ ! -d /mnt/c ]] && command -v wsl >/dev/null 2>&1; then
+  echo "run inside WSL: install-lgx.sh re-execs into WSL and drops the stubs" >&2
+  exit 2
+fi
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -121,6 +127,13 @@ run_case unreadable_version_refused 4 "no readable version" -- "$m" --install-on
 
 # If lgpm leaves a different lez_core in place, the install is refused before launching.
 run_case installed_version_checked 4 "lez_core 0.5.0" STUB_LEZ_VERSION=0.5.0 -- "$tmp/fresh" --setup
+
+# C: is checked before every build: here it runs out after the second, so the third is never started.
+stub df 'n=$(cat "$STUB_LOG/df.n" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$STUB_LOG/df.n"
+echo Avail; if (( n <= 2 )); then echo 104857600; else echo 2097152; fi'
+run_case disk_checked_before_each_build 2 "refusing: C: has 2 GB free" -- "$tmp/shrinking" --install-only
+expect_log two_builds_then_refused nix.log "github:logos-co/logos-package-manager/30b3a3f8a4f05d99e6b377fb40e02018c101882b#cli
+github:logos-blockchain/logos-execution-zone-module?rev=acf0cd501b262c4c15969e3735e85318297b85bf#lgx"
 
 stub df "echo Avail; echo $kib_2g"
 run_case low_disk 2 "refusing: C: has 2 GB free" -- "$tmp/low" --install-only

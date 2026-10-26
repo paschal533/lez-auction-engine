@@ -2,8 +2,9 @@
 # Host toolchain for the Auctions app (Plan 4 Task 1): Basecamp standalone + the lez_core wallet module.
 #   scripts/basecamp/host.sh check   exit 2 if C: has less than MIN_C_GB (default 10) GB free
 #   scripts/basecamp/host.sh build   check, nix build Basecamp and lez_core, check again
-#   scripts/basecamp/host.sh paths   print BASECAMP_BIN= and LEZ_CORE_ROOT= lines
-# Runs inside WSL; from Git Bash it re-runs itself through wsl.
+#   scripts/basecamp/host.sh paths   print BASECAMP_BIN= and LEZ_CORE_ROOT= lines, shell-quoted (run-app.sh evals them)
+# Runs inside WSL; from Git Bash it re-runs itself through wsl. Of the environment overrides only MIN_C_GB is
+# forwarded across that re-exec (BASECAMP_OUT_DIR is not): set them inside WSL.
 set -euo pipefail
 
 BASECAMP_REV="e09962f5998792afd3bfed8c69c3b8f07f5825a5"
@@ -50,8 +51,8 @@ case "$cmd" in
     build_one "$LEZ_CORE_FLAKE" "$OUT_DIR/lez_core"
     ;;
   paths)
-    echo "BASECAMP_BIN=$OUT_DIR/app/bin/LogosBasecamp"
-    echo "LEZ_CORE_ROOT=$OUT_DIR/lez_core"
+    printf 'BASECAMP_BIN=%q\n' "$OUT_DIR/app/bin/LogosBasecamp"
+    printf 'LEZ_CORE_ROOT=%q\n' "$OUT_DIR/lez_core"
     ;;
   *) echo "usage: $0 check|build|paths" >&2; exit 64 ;;
 esac

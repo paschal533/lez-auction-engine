@@ -41,11 +41,14 @@ Item {
     readonly property string quotedRay: hasPrice ? typedRay : (oracle ? String(oracle.price_ray) : "")
     readonly property var quote: d.quote
     readonly property var positions: quote ? Format.list(quote.positions) : []
-    // The host's min CR in bps (min_cr_ray / 1e23, floored), the line CR is judged against.
+    // The host's min CR in bps, the line CR is judged against: min_cr_ray / 1e23 rounded up, as the SDK's
+    // min_cr_bps (mul_div_ceil(min_cr_ray, 10000, RAY)).
     readonly property int minCrBps: {
-        if (!host || !host.min_cr_ray) return 0
-        const s = String(host.min_cr_ray)
-        return s.length > 23 ? Number(s.substring(0, s.length - 23)) : 0
+        if (!host || !host.min_cr_ray || !Format.isDigits(String(host.min_cr_ray))) return 0
+        const s = Format.stripZeros(String(host.min_cr_ray))
+        const whole = s.length > 23 ? Number(s.substring(0, s.length - 23)) : 0
+        const rest = s.length > 23 ? s.substring(s.length - 23) : s
+        return /[1-9]/.test(rest) ? whole + 1 : whole
     }
     readonly property int liquidatableNow: positions.filter(function(p) { return p.cr_bps_now < minCrBps }).length
     readonly property int newlyLiquidatable: positions.filter(function(p) {

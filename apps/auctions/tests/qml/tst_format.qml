@@ -177,4 +177,16 @@ TestCase {
         compare(Format.list({ error: "x" }).length, 0)
         compare(Format.list("abc").length, 0)
     }
+
+    // A share in whole percent, floored in exact string maths (a double floors 191400/660000 to 28).
+    function test_percent_floor_is_exact() {
+        compare(Format.percentFloor("191400", "660000"), 29)
+        compare(Format.percentFloor("0", "660000"), 0)
+        compare(Format.percentFloor("659999", "660000"), 99)
+        compare(Format.percentFloor("660000", "660000"), 100)
+        compare(Format.percentFloor("700000", "660000"), 100)
+        compare(Format.percentFloor("340282366920938463463374607431768211455", "340282366920938463463374607431768211455"), 100)
+        compare(Format.percentFloor("1", "0"), 0)
+        compare(Format.percentFloor("x", "10"), 0)
+    }
 }

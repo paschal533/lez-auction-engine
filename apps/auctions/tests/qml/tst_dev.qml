@@ -316,4 +316,18 @@ TestCase {
         compare(p.selected, "transfer")
         verify(findChild(p, "devTransferSubmit").visible)
     }
+
+    // ---- Final review ---------------------------------------------------------------------------
+
+    // The SDK's min_cr_bps rounds up (mul_div_ceil(min_cr_ray, 10000, RAY)): 150 % and one ray-wei is 15,001.
+    function test_min_cr_rounds_up_like_the_sdk() {
+        overviewReply.host.min_cr_ray = "1500000000000000000000000001"
+        const p = readyPage("price")
+        const detail = findChild(p, "oraclePriceDetail")
+        verify(detail !== null)
+        tryCompare(detail, "minCrBps", 15001)
+        overviewReply.host.min_cr_ray = "2000000000000000000000000000"
+        const exact = readyPage("price")
+        tryCompare(findChild(exact, "oraclePriceDetail"), "minCrBps", 20000)
+    }
 }

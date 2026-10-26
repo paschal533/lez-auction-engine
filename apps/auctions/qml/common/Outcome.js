@@ -14,3 +14,12 @@ function endedHow(a) {
     if (Format.cmp(String(a.sold), String(a.lot)) >= 0) return qsTr("Sold out")
     return qsTr("Settled")
 }
+
+// A confirmation names the account that signs (captured when it opened). If the header's account changed
+// while it was open, nothing is sent: returns the `{error, kind}` notice, or null when it is unchanged.
+function signerChanged(opened, now) {
+    if (opened === now) return null
+    return { error: qsTr("the signing account changed from %1 to %2 while the confirmation was open; nothing was sent")
+                    .arg(opened || qsTr("none")).arg(now || qsTr("none")),
+             kind: "account_changed" }
+}

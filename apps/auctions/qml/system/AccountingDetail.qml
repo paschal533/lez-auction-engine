@@ -186,34 +186,39 @@ Item {
             })
         }
 
+        // The signer is read when the action starts (as Debt and Surplus do): the dialog and the submit name it.
         function caller() { return { caller: root.page.activeAccount } }
         function from() { return root.page.signer ? String(root.page.signer.id) : "" }
 
         function observeFeed() {
+            const caller = d.caller()
+            const from = d.from()
             root.page.act({
                 title: qsTr("Observe price feed"),
                 read: { view: "overview" },
                 dialog: function(o) {
                     return {
                         action: "observe_feed",
-                        from: d.from(),
-                        facts: [{ label: qsTr("Caller"), value: root.page.activeAccount }],
+                        from: from,
+                        facts: [{ label: qsTr("Caller"), value: caller.caller }],
                         note: qsTr("Records whether the price feed is valid now on the collateral's pause clock. It changes no price."),
                         confirmLabel: qsTr("Observe feed")
                     }
                 },
-                submit: function() { return Object.assign({ action: "observe_feed" }, d.caller()) }
+                submit: function() { return Object.assign({ action: "observe_feed" }, caller) }
             })
         }
 
         function checkSolvency() {
+            const caller = d.caller()
+            const from = d.from()
             root.page.act({
                 title: qsTr("Check solvency"),
                 read: { view: "overview" },
                 dialog: function(o) {
                     return {
                         action: "check_solvency",
-                        from: d.from(),
+                        from: from,
                         facts: [
                             { label: qsTr("Unbacked debt"), value: String(o.accounting.unbacked_debt), decimals: 0, unit: qsTr("stable") },
                             { label: qsTr("Freeze threshold"), value: String(o.accounting.freeze_threshold), decimals: 0, unit: qsTr("stable") }
@@ -222,11 +227,13 @@ Item {
                         confirmLabel: qsTr("Check solvency")
                     }
                 },
-                submit: function() { return Object.assign({ action: "check_solvency" }, d.caller()) }
+                submit: function() { return Object.assign({ action: "check_solvency" }, caller) }
             })
         }
 
         function settleDebt() {
+            const caller = d.caller()
+            const from = d.from()
             root.page.act({
                 title: qsTr("Settle debt"),
                 read: { view: "quote_settle_debt" },
@@ -237,7 +244,7 @@ Item {
                 dialog: function(q) {
                     return {
                         action: "settle_debt",
-                        from: d.from(),
+                        from: from,
                         facts: [
                             { label: qsTr("Settles"), value: String(q.amount), decimals: 0, unit: qsTr("stable"), strong: true },
                             { label: qsTr("Unbacked after"), value: String(q.unbacked_after), decimals: 0, unit: qsTr("stable") },
@@ -247,7 +254,7 @@ Item {
                         confirmLabel: qsTr("Settle debt")
                     }
                 },
-                submit: function() { return Object.assign({ action: "settle_debt" }, d.caller()) }
+                submit: function() { return Object.assign({ action: "settle_debt" }, caller) }
             })
         }
     }

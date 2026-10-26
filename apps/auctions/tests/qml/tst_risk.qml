@@ -25,6 +25,9 @@ TestCase {
     property var rescanQueue: []
     property var calls: []
     property var listCountAtRescan: []
+    // With deferSubmit the stub holds submit replies; the test answers them through `deferredSubmits`.
+    property bool deferSubmit: false
+    property var deferredSubmits: []
     property var page: null
 
     QtObject {
@@ -59,7 +62,9 @@ TestCase {
             case "rescan":
                 ok(testCase.rescanQueue.length > 0 ? testCase.rescanQueue.shift() : Fixtures.load("scan_done"))
                 return
-            case "submit": ok(testCase.submitReply); return
+            case "submit":
+                if (testCase.deferSubmit) { testCase.deferredSubmits.push(ok); return }
+                ok(testCase.submitReply); return
             case "txStatus": ok(testCase.statusReply); return
             }
         }
@@ -86,6 +91,8 @@ TestCase {
         rescanQueue = []
         calls = []
         listCountAtRescan = []
+        deferSubmit = false
+        deferredSubmits = []
         page = null
     }
 
@@ -497,5 +504,44 @@ TestCase {
         compare(listCountAtRescan[1], 0, "the restarted page emptied the list before paging on")
         compare(list.count, 0)
         compare(findChild(p, "riskScanned").text, "Scanned to block 5")
+    }
+
+    // ---- Final review ---------------------------------------------------------------------------
+
+    function openLiquidateDialog(p) {
+        const button = findChild(p, "liquidateSubmit")
+        tryVerify(function() { return button.enabled })
+        button.clicked()
+        const dialog = findChild(p, "riskTxDialog")
+        tryCompare(dialog, "opened", true)
+        return dialog
+    }
+
+    // The dialog opened for keeper; the header now says caller: Confirm sends nothing and says why.
+    function test_confirm_after_an_account_switch_sends_nothing() {
+        const p = ready()
+        const dialog = openLiquidateDialog(p)
+        p.activeAccount = "caller"
+        findChild(dialog, "riskTxConfirm").clicked()
+        compare(callsOf("submit").length, 0)
+        const notice = findChild(p, "liquidateNotice")
+        tryCompare(notice, "shown", true)
+        compare(notice.severity, LogosNotice.Error)
+        verify(notice.message.indexOf("keeper") >= 0 && notice.message.indexOf("caller") >= 0, notice.message)
+        verify(!findChild(p, "riskTxLane").visible)
+    }
+
+    function test_liquidate_button_is_disabled_from_confirm_until_the_reply() {
+        deferSubmit = true
+        const p = ready()
+        const dialog = openLiquidateDialog(p)
+        const button = findChild(p, "liquidateSubmit")
+        findChild(dialog, "riskTxConfirm").clicked()
+        compare(callsOf("submit").length, 1)
+        verify(!button.enabled, "no second liquidation while the first is unanswered")
+        dialog.confirmed()
+        compare(callsOf("submit").length, 1)
+        deferredSubmits[0]({ error: "refusing before signing: x", kind: "refused" })
+        tryVerify(function() { return button.enabled })
     }
 }

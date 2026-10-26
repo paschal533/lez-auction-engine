@@ -484,4 +484,21 @@ TestCase {
         for (const plain of ["txDialog", "txConfirm", "txLane"])
             compare(findChild(p, plain), null, plain)
     }
+
+    // ---- Final review ---------------------------------------------------------------------------
+
+    // The Accounting dialog opened for caller; the header now says keeper: Confirm sends nothing.
+    function test_confirm_after_an_account_switch_sends_nothing() {
+        const p = createPage("accounting")
+        const dialog = openDialog(p, "observeFeed")
+        compare(dialog.request.facts[0].value, "caller")
+        p.activeAccount = "keeper"
+        confirm(p)
+        compare(callsOf("submit").length, 0)
+        const notice = findChild(p, "systemActionNotice")
+        tryCompare(notice, "shown", true)
+        compare(notice.severity, LogosNotice.Error)
+        verify(notice.message.indexOf("Observe price feed: ") === 0, notice.message)
+        verify(notice.message.indexOf("caller") >= 0 && notice.message.indexOf("keeper") >= 0, notice.message)
+    }
 }

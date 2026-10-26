@@ -6,6 +6,7 @@ import Logos.Controls
 
 import "../common"
 import "../shell"
+import "../common/Outcome.js" as Outcome
 
 // The System tab (board v5): Accounting / Surplus auction / Debt auction / Host on the left, the selected
 // one's panel on the right. Every figure is a field of `view overview` (accounting, host) or of a quote view;
@@ -73,6 +74,9 @@ Item {
         property bool reading: false
         // A submit sent and not yet answered: a second Confirm or act() must not send another transaction.
         property bool submitting: false
+        // The active account when the pending action started: the details build their dialog and submit for it.
+        property string pendingAccount: ""
+        property string pendingFrom: ""
         property var actionNotice: null
         property string actionPrefix: ""
 
@@ -118,6 +122,8 @@ Item {
             if (lane.state === "done" || lane.state === "dropped")
                 lane.txId = ""
             pending = spec
+            pendingAccount = root.activeAccount
+            pendingFrom = root.signer ? String(root.signer.id) : ""
             reading = true
             logos.watch(root.backend.view(spec.read), function(reply) {
                 if (pending !== spec) return
@@ -147,7 +153,14 @@ Item {
             const spec = pending
             if (!root.backend || !spec || submitting)
                 return
+            // The dialog named the account the action started with; another one now would sign instead.
+            const changed = Outcome.signerChanged(pendingAccount, root.activeAccount)
+            if (changed) {
+                setActionNotice(spec.title, changed)
+                return
+            }
             submitting = true
+            const from = pendingFrom
             logos.watch(root.backend.submit(spec.submit(dialog.quote)), function(reply) {
                 submitting = false
                 const bad = failure(reply)
@@ -157,7 +170,7 @@ Item {
                 }
                 laneTitle.text = dialog.titleText
                 lane.submitReply = reply
-                lane.request = { from: root.signer ? String(root.signer.id) : "" }
+                lane.request = { from: from }
                 lane.txId = String(reply.txId)
             }, function(err) {
                 submitting = false

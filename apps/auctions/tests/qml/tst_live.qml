@@ -34,6 +34,9 @@ TestCase {
     // With deferLive the stub holds `view live` replies; the test answers them through `deferredLive`.
     property bool deferLive: false
     property var deferredLive: []
+    // With deferSubmit the stub holds submit replies; the test answers them through `deferredSubmits`.
+    property bool deferSubmit: false
+    property var deferredSubmits: []
     property var page: null
 
     function initTestCase() {
@@ -75,7 +78,9 @@ TestCase {
                 if (testCase.deferRescan) { testCase.deferred.push(ok); return }
                 ok(testCase.rescanQueue.length > 0 ? testCase.rescanQueue.shift() : Fixtures.load("scan_done"))
                 return
-            case "submit": ok(testCase.submitReply); return
+            case "submit":
+                if (testCase.deferSubmit) { testCase.deferredSubmits.push(ok); return }
+                ok(testCase.submitReply); return
             case "txStatus": ok(testCase.statusReply); return
             }
         }
@@ -106,6 +111,8 @@ TestCase {
         deferred = []
         deferLive = false
         deferredLive = []
+        deferSubmit = false
+        deferredSubmits = []
         page = null
     }
 
@@ -601,5 +608,78 @@ TestCase {
         tryCompare(notice, "shown", true)
         compare(notice.message, "Live auctions: the node did not answer")
         compare(findChild(page, "liveList").count, 0)
+    }
+
+    // ---- Final review ---------------------------------------------------------------------------
+
+    function openBidDialog(p) {
+        tryCompare(findChild(p, "auctionDetail"), "auctionId", auctionReply.id)
+        findChild(p, "bidAmount").text = "100000"
+        const submit = findChild(p, "bidSubmit")
+        tryVerify(function() { return submit.enabled })
+        submit.clicked()
+        const dialog = findChild(p, "txDialog")
+        tryCompare(dialog, "opened", true)
+        return dialog
+    }
+
+    // The dialog opened for owner; the header now says bidder: Confirm sends nothing and says why.
+    function test_confirm_after_an_account_switch_sends_nothing() {
+        const p = createPage()
+        const dialog = openBidDialog(p)
+        p.activeAccount = "bidder"
+        findChild(dialog, "txConfirm").clicked()
+        compare(callsOf("submit").length, 0)
+        const notice = findChild(p, "bidNotice")
+        tryCompare(notice, "shown", true)
+        compare(notice.severity, LogosNotice.Error)
+        verify(notice.message.indexOf("owner") >= 0 && notice.message.indexOf("bidder") >= 0, notice.message)
+        verify(notice.message.indexOf("nothing was sent") >= 0, notice.message)
+        verify(!findChild(p, "txLane").visible)
+    }
+
+    function test_bid_button_is_disabled_from_confirm_until_the_reply() {
+        deferSubmit = true
+        const p = createPage()
+        const dialog = openBidDialog(p)
+        const submit = findChild(p, "bidSubmit")
+        findChild(dialog, "txConfirm").clicked()
+        compare(callsOf("submit").length, 1)
+        verify(!submit.enabled, "no second bid while the first is unanswered")
+        dialog.confirmed()
+        compare(callsOf("submit").length, 1)
+        deferredSubmits[0]({ error: "the host refused: auction is settled", kind: "refused" })
+        tryVerify(function() { return submit.enabled })
+    }
+
+    // R43: the schedule (and its points) may arrive as array-likes; the explainer reads the same figures.
+    function test_explainer_reads_an_array_like_schedule() {
+        const plain = createPage()
+        tryCompare(findChild(plain, "auctionDetail"), "auctionId", auctionReply.id)
+        const explainer = findChild(plain, "liveExplainer")
+        tryVerify(function() { return explainer.text.length > 0 })
+        const expected = explainer.text
+        const m = /starts at ([\d.]+)% and climbs to ([\d.]+)%/.exec(expected)
+        verify(m !== null && m[1] !== m[2], expected)
+        plain.destroy()
+        wait(0)
+
+        const keyed = {}
+        const schedule = auctionReply.schedule
+        for (let i = 0; i < schedule.length; i++)
+            keyed[String(i)] = { "0": schedule[i][0], "1": schedule[i][1] }
+        auctionReply.schedule = keyed
+        const p = createPage()
+        tryCompare(findChild(p, "auctionDetail"), "auctionId", auctionReply.id)
+        tryCompare(findChild(p, "liveExplainer"), "text", expected)
+    }
+
+    // 191,400 of 660,000 is exactly 29 %; a double gives 28.999… and floored to 28.
+    function test_percent_raised_is_exact() {
+        liveReply.items = [item({ raised: "191400", target: "660000" })]
+        const p = createPage()
+        const row = findChild(p, "liveItem_" + liveReply.items[0].id)
+        verify(row !== null)
+        compare(findChild(row, "liveItemRaised").text, "29% raised")
     }
 }

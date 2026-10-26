@@ -145,6 +145,26 @@ function ratio(part, whole) {
     return Math.max(0, Math.min(1, r))
 }
 
+// percentFloor("191400", "660000") -> 29: floor(part × 100 / whole) in exact string maths (a double gives 28
+// here), clamped to [0, 100]; 0 for input that is not digits or a zero whole.
+function percentFloor(part, whole) {
+    var a = stripZeros(String(part))
+    var b = stripZeros(String(whole))
+    if (!isDigits(a) || !isDigits(b) || b === "0")
+        return 0
+    var scaled = mul(a, "100")
+    var lo = 0
+    var hi = 100
+    while (lo < hi) {
+        var mid = Math.ceil((lo + hi) / 2)
+        if (cmp(mul(b, String(mid)), scaled) <= 0)
+            lo = mid
+        else
+            hi = mid - 1
+    }
+    return lo
+}
+
 // percentToBps("0.5") -> 50; anything that is not 0–99.99 with at most two decimals -> -1.
 function percentToBps(text) {
     var m = /^(\d{1,2})(?:\.(\d{1,2}))?$/.exec(String(text))

@@ -150,7 +150,7 @@ ColumnLayout {
                     }
                     LogosText {
                         objectName: "liveItemRaised"
-                        text: qsTr("%1% raised").arg(Math.floor(100 * Format.ratio(row.modelData.raised, row.modelData.target)))
+                        text: qsTr("%1% raised").arg(Format.percentFloor(row.modelData.raised, row.modelData.target))
                         font.pixelSize: Theme.typography.secondaryText
                         font.features: { "tnum": 1 }
                         color: Theme.palette.textSecondary

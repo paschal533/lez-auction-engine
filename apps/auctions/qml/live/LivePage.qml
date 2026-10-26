@@ -205,11 +205,13 @@ Item {
                 wrapMode: Text.WordWrap
                 text: {
                     const a = d.auction
-                    if (!a || !a.schedule || a.schedule.length === 0) return ""
-                    const first = a.schedule[0][1]
+                    // The schedule and its [t, ray] points may arrive as array-likes (R43).
+                    const schedule = a ? Format.list(a.schedule).map(Format.list) : []
+                    if (schedule.length === 0) return ""
+                    const first = schedule[0][1]
                     let max = first
-                    for (let i = 0; i < a.schedule.length; i++)
-                        if (Format.cmp(String(a.schedule[i][1]), String(max)) > 0) max = a.schedule[i][1]
+                    for (let i = 0; i < schedule.length; i++)
+                        if (Format.cmp(String(schedule[i][1]), String(max)) > 0) max = schedule[i][1]
                     const minutes = Math.round((Number(a.max_at_ms) - Number(a.started_at_ms)) / 60000)
                     return qsTr("The discount starts at %1% and climbs to %2% over %3 min, then holds there with no time limit.")
                         .arg(Format.rayPercent(String(first), 1)).arg(Format.rayPercent(String(max), 1)).arg(minutes)

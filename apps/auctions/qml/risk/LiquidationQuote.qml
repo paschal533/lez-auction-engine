@@ -7,6 +7,7 @@ import Logos.Controls
 import "../common"
 import "../shell"
 import "../common/Format.js" as Format
+import "../common/Outcome.js" as Outcome
 
 // The quote card of the At-risk screen (board v4, right column). Every figure is a field of the `position`
 // view's liquidation quote (the SDK's LiquidationQuoteView, what `auction-cli quote-liquidation` prints) or a
@@ -23,6 +24,8 @@ import "../common/Format.js" as Format
 // a failed quote or submit) show in `liquidateNotice`, never as node trouble unless their kind is `chain`.
 // Liquidating: a fresh quote_liquidation → TxDialog → submit (the active account is the keeper; the reward
 // goes to its `<label>-coll` holding) → TxLane in place of the button. laneDone() fires when it is done.
+// The keeper is the account the dialog opened for: if the header's account changed meanwhile, Confirm sends
+// nothing and says so. The button stays disabled from Confirm until the submit replies.
 InsetCard {
     id: root
     objectName: "liquidationQuote"
@@ -57,7 +60,8 @@ InsetCard {
     readonly property bool paused: feedStale || feedOutOfRange || adminPaused
     readonly property bool laneBusy: lane.visible && lane.state === "waiting"
     readonly property bool canLiquidate: hasPosition && !!quote && !!position.liquidatable && !paused
-                                         && !oracleUnknown && d.keeper !== null && !d.quoting && !laneBusy
+                                         && !oracleUnknown && d.keeper !== null && !d.quoting && !d.submitting
+                                         && !laneBusy
     readonly property string rayOne: "1000000000000000000000000000"
     // At the starting discount d the lot raises at most lot / price × (1 - d); short when that is below the
     // target, i.e. lot × (RAY - d) < target × price (both sides scaled by RAY × price).
@@ -190,6 +194,11 @@ InsetCard {
 
         property string positionId: ""
         property bool quoting: false
+        // From Confirm until the submit replies.
+        property bool submitting: false
+        // The keeper the open dialog was made for (label and id).
+        property string keeperLabel: ""
+        property string keeperId: ""
         // The last failed quote or submit, {error, kind}.
         property var notice: null
 
@@ -210,8 +219,8 @@ InsetCard {
             return {
                 action: "liquidate",
                 position: String(quote.position),
-                keeper: root.activeAccount,
-                keeper_holding: root.activeAccount + "-coll"
+                keeper: keeperLabel,
+                keeper_holding: keeperLabel + "-coll"
             }
         }
 
@@ -219,7 +228,7 @@ InsetCard {
             return {
                 action: "liquidate",
                 subtitle: qsTr("Position %1").arg(Format.shortId(String(quote.position))),
-                from: keeper ? String(keeper.id) : "",
+                from: keeperId,
                 facts: [
                     { label: qsTr("Auction"), value: Format.shortId(String(quote.auction)) },
                     { label: qsTr("Debt to cover"), value: String(quote.debt_principal), decimals: 0, unit: qsTr("stable") },
@@ -231,7 +240,7 @@ InsetCard {
                     { label: qsTr("Your reward"), value: String(quote.keeper_reward), decimals: 0, unit: qsTr("collateral") },
                     { label: qsTr("Goes to auction"), value: String(quote.lot), decimals: 0, unit: qsTr("collateral") }
                 ],
-                note: qsTr("The reward goes to %1-coll. The auction appears under Live auctions after a rescan.").arg(root.activeAccount),
+                note: qsTr("The reward goes to %1-coll. The auction appears under Live auctions after a rescan.").arg(keeperLabel),
                 confirmLabel: qsTr("Liquidate"),
                 noun: qsTr("liquidation")
             }
@@ -252,6 +261,8 @@ InsetCard {
                     notice = quote && quote.error ? quote : { error: qsTr("The engine sent no quote."), kind: "bad_reply" }
                     return
                 }
+                keeperLabel = root.activeAccount
+                keeperId = keeper ? String(keeper.id) : ""
                 dialog.quote = quote
                 dialog.request = dialogRequest(quote)
                 dialog.open()
@@ -263,17 +274,26 @@ InsetCard {
 
         function submit() {
             const quote = dialog.quote
-            if (!root.backend || !quote)
+            if (!root.backend || !quote || submitting)
                 return
+            const changed = Outcome.signerChanged(keeperLabel, root.activeAccount)
+            if (changed) {
+                notice = changed
+                return
+            }
+            submitting = true
+            const from = keeperId
             logos.watch(root.backend.submit(submitRequest(quote)), function(reply) {
+                submitting = false
                 if (!reply || reply.error) {
                     notice = reply && reply.error ? reply : { error: qsTr("The engine sent no reply."), kind: "bad_reply" }
                     return
                 }
                 lane.submitReply = reply
-                lane.request = { from: keeper ? String(keeper.id) : "" }
+                lane.request = { from: from }
                 lane.txId = String(reply.txId)
             }, function(err) {
+                submitting = false
                 notice = { error: String(err), kind: "ipc" }
             })
         }
@@ -454,7 +474,7 @@ InsetCard {
         text: root.oracleUnknown ? qsTr("Oracle unknown")
               : root.paused ? qsTr("Liquidations paused")
               : d.keeper === null ? qsTr("Pick the signing account")
-              : d.quoting ? qsTr("Quoting…") : qsTr("Liquidate & start auction")
+              : d.quoting ? qsTr("Quoting…") : d.submitting ? qsTr("Sending…") : qsTr("Liquidate & start auction")
         onClicked: d.liquidate()
         // Primary buttons carry a black label (contrast on the orange fill), 14 px bold as on the board.
         Component.onCompleted: {

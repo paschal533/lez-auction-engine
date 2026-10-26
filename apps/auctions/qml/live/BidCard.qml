@@ -8,6 +8,7 @@ import Logos.Controls
 import "../common"
 import "../shell"
 import "../common/Format.js" as Format
+import "../common/Outcome.js" as Outcome
 
 // The bid card of the Live screen (board v3 right column, states strip): oracle price with a Fresh/Stale badge
 // and freshness bar; "You pay" (`bidAmount`) with "Max to finish" (`bidMax`, fills what is left to raise);
@@ -18,7 +19,9 @@ import "../common/Format.js" as Format
 // "Use N" (`bidUseMax`); an active account without a `<label>-stable` holding cannot pay (`bidHoldingHint`).
 // Placing a bid: a fresh quote_bid → TxDialog (its facts name the instruction, bid or bid_with_settlement)
 // → submit → TxLane in place of the button. Failures of the quote or the submit (`refused` included) show in
-// `bidNotice`, never as node trouble. laneDone() fires when the lane reaches done.
+// `bidNotice`, never as node trouble. laneDone() fires when the lane reaches done. The bid is signed by the
+// account the dialog opened for: if the header's account changed meanwhile, Confirm sends nothing and says so.
+// The button stays disabled from Confirm until the submit replies.
 InsetCard {
     id: root
     objectName: "bidCard"
@@ -47,7 +50,7 @@ InsetCard {
     // stable holding, and `holding` names it when it exists.
     readonly property bool hasStableHolding: d.bidder !== null && d.bidder.holding === activeAccount + "-stable"
     readonly property bool canBid: hasAuction && !blocked && amountValid && !overMax && !d.quoting
-                                   && !laneBusy && hasStableHolding && d.slippageValid
+                                   && !d.submitting && !laneBusy && hasStableHolding && d.slippageValid
     property alias slippageBps: d.slippageBps
 
     signal laneDone()
@@ -80,6 +83,11 @@ InsetCard {
         property var preview: null
         property int previewGeneration: 0
         property bool quoting: false
+        // From Confirm until the submit replies.
+        property bool submitting: false
+        // The signing account the open dialog was made for (label and id).
+        property string signerLabel: ""
+        property string signerId: ""
         // The last failed quote or submit, {error, kind}.
         property var notice: null
         property bool editingSlippage: false
@@ -118,8 +126,8 @@ InsetCard {
                 action: "bid",
                 auction: String(quote.auction),
                 coin_in_max: String(quote.coin_in_max),
-                bidder_stable: root.activeAccount + "-stable",
-                bidder_collateral: root.activeAccount + "-coll",
+                bidder_stable: signerLabel + "-stable",
+                bidder_collateral: signerLabel + "-coll",
                 slippage_bps: slippageBps,
                 min_out: String(quote.min_out)
             }
@@ -130,7 +138,7 @@ InsetCard {
             return {
                 action: "bid",
                 subtitle: qsTr("Auction %1").arg(Format.shortId(String(quote.auction))),
-                from: bidder ? String(bidder.id) : "",
+                from: signerId,
                 pay: { amount: String(quote.charged), decimals: 0, unit: qsTr("stable") },
                 get: { amount: String(quote.collateral_out), decimals: 0, unit: qsTr("collateral"),
                        note: qsTr("at least %1 · %2 slippage").arg(Format.amount(String(quote.min_out), 0))
@@ -171,6 +179,8 @@ InsetCard {
                     notice = quote && quote.error ? quote : { error: qsTr("The engine sent no quote."), kind: "bad_reply" }
                     return
                 }
+                signerLabel = root.activeAccount
+                signerId = bidder ? String(bidder.id) : ""
                 dialog.quote = quote
                 dialog.request = dialogRequest(quote)
                 dialog.open()
@@ -182,17 +192,26 @@ InsetCard {
 
         function submit() {
             const quote = dialog.quote
-            if (!root.backend || !quote)
+            if (!root.backend || !quote || submitting)
                 return
+            const changed = Outcome.signerChanged(signerLabel, root.activeAccount)
+            if (changed) {
+                notice = changed
+                return
+            }
+            submitting = true
+            const from = signerId
             logos.watch(root.backend.submit(submitRequest(quote)), function(reply) {
+                submitting = false
                 if (!reply || reply.error) {
                     notice = reply && reply.error ? reply : { error: qsTr("The engine sent no reply."), kind: "bad_reply" }
                     return
                 }
                 lane.submitReply = reply
-                lane.request = { from: bidder ? String(bidder.id) : "" }
+                lane.request = { from: from }
                 lane.txId = String(reply.txId)
             }, function(err) {
+                submitting = false
                 notice = { error: String(err), kind: "ipc" }
             })
         }
@@ -555,7 +574,7 @@ InsetCard {
               : root.blocked ? qsTr("Bidding paused")
               : d.bidder === null ? qsTr("Pick the signing account")
               : !root.hasStableHolding ? qsTr("No stable holding")
-              : d.quoting ? qsTr("Quoting…") : qsTr("Place bid")
+              : d.quoting ? qsTr("Quoting…") : d.submitting ? qsTr("Sending…") : qsTr("Place bid")
         onClicked: d.placeBid()
         // Primary buttons carry a black label (contrast on the orange fill), 14 px bold as on the board.
         Component.onCompleted: {

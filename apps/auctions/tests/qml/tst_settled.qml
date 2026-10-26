@@ -33,6 +33,9 @@ TestCase {
     property var rescanQueue: []
     property var calls: []
     property var listCountAtRescan: []
+    // With deferSubmit the stub holds submit replies; the test answers them through `deferredSubmits`.
+    property bool deferSubmit: false
+    property var deferredSubmits: []
     property var page: null
 
     // Theme keeps its settings in QSettings, which needs an application identity (Main.qml).
@@ -79,7 +82,9 @@ TestCase {
             case "rescan":
                 ok(testCase.rescanQueue.length > 0 ? testCase.rescanQueue.shift() : Fixtures.load("scan_done"))
                 return
-            case "submit": ok(testCase.submitReply); return
+            case "submit":
+                if (testCase.deferSubmit) { testCase.deferredSubmits.push(ok); return }
+                ok(testCase.submitReply); return
             case "txStatus": ok(testCase.statusReply); return
             }
         }
@@ -103,6 +108,8 @@ TestCase {
         rescanQueue = []
         calls = []
         listCountAtRescan = []
+        deferSubmit = false
+        deferredSubmits = []
         page = null
         backendStub.activeAccount = "keeper"
     }
@@ -475,5 +482,35 @@ TestCase {
         compare(listCountAtRescan[1], 0, "the restarted page emptied the list before paging on")
         compare(list.count, 0)
         compare(findChild(p, "settledScanned").text, "Scanned to block 5")
+    }
+
+    // ---- Final review ---------------------------------------------------------------------------
+
+    // The dialog opened for owner2 (the owner); the header now says keeper: Confirm sends nothing.
+    function test_confirm_after_an_account_switch_sends_nothing() {
+        const p = ready("owner2")
+        const dialog = openDialog(p)
+        p.activeAccount = "keeper"
+        findChild(dialog, "settledTxConfirm").clicked()
+        compare(callsOf("submit").length, 0)
+        const notice = findChild(p, "claimNotice")
+        tryCompare(notice, "shown", true)
+        compare(notice.severity, LogosNotice.Error)
+        verify(notice.message.indexOf("owner2") >= 0 && notice.message.indexOf("keeper") >= 0, notice.message)
+        verify(!findChild(p, "settledTxLane").visible)
+    }
+
+    function test_claim_button_is_disabled_from_confirm_until_the_reply() {
+        deferSubmit = true
+        const p = ready("owner2")
+        const dialog = openDialog(p)
+        const button = findChild(p, "claimSubmit")
+        findChild(dialog, "settledTxConfirm").clicked()
+        compare(callsOf("submit").length, 1)
+        verify(!button.enabled, "no second claim while the first is unanswered")
+        dialog.confirmed()
+        compare(callsOf("submit").length, 1)
+        deferredSubmits[0]({ error: "the engine would reject this: NothingToClaim (code 40)", kind: "refused" })
+        tryVerify(function() { return button.enabled })
     }
 }

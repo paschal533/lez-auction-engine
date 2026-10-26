@@ -7,6 +7,7 @@ import Logos.Controls
 import "../common"
 import "../shell"
 import "../common/Format.js" as Format
+import "../common/Outcome.js" as Outcome
 
 // The claim card of the Settled screen (board v5, right column). What is left to claim is the view's
 // leftover − claimed (auction_core claim_leftover pays leftover_claimable − leftover_claimed). States, in order:
@@ -18,7 +19,9 @@ import "../common/Format.js" as Format
 //   nothing left over (`claimNothing`).
 // Claiming: a fresh `auction` view (the claim's quote; it must still show something to claim) → TxDialog →
 // submit {action: claim_leftover, owner, owner_holding: <label>-coll, auction} → TxLane in place of the button.
-// A failed read or submit (a host refusal is kind "refused") shows in `claimNotice`.
+// A failed read or submit (a host refusal is kind "refused") shows in `claimNotice`. The owner is the account
+// the dialog opened for: if the header's account changed meanwhile, Confirm sends nothing and says so. The
+// button stays disabled from Confirm until the submit replies.
 InsetCard {
     id: root
     objectName: "claimCard"
@@ -38,7 +41,7 @@ InsetCard {
     readonly property bool nothingLeft: hasAuction && !claimable && !claimed && !endedShort
     readonly property bool isOwner: d.signer !== null && hasAuction && String(d.signer.id) === String(auction.owner)
     readonly property bool laneBusy: lane.visible && lane.state === "waiting"
-    readonly property bool canClaim: claimable && isOwner && !d.reading && !laneBusy
+    readonly property bool canClaim: claimable && isOwner && !d.reading && !d.submitting && !laneBusy
 
     signal laneDone()
     signal systemRequested(string section)
@@ -84,6 +87,11 @@ InsetCard {
         id: d
 
         property bool reading: false
+        // From Confirm until the submit replies.
+        property bool submitting: false
+        // The owner the open dialog was made for (label and id).
+        property string ownerLabel: ""
+        property string ownerId: ""
         // The last failed read or submit, {error, kind}.
         property var notice: null
 
@@ -109,15 +117,15 @@ InsetCard {
             return {
                 action: "claim_leftover",
                 subtitle: qsTr("Auction %1").arg(Format.shortId(String(a.id))),
-                from: signer ? String(signer.id) : "",
+                from: ownerId,
                 facts: [
                     { label: qsTr("Lot"), value: String(a.lot), decimals: 0, unit: qsTr("collateral") },
                     { label: qsTr("Sold to bidders"), value: String(a.sold), decimals: 0, unit: qsTr("collateral") },
                     { label: qsTr("You receive"), value: amount, decimals: 0, unit: qsTr("collateral"), strong: true },
-                    { label: qsTr("To"), value: root.activeAccount + "-coll" }
+                    { label: qsTr("To"), value: ownerLabel + "-coll" }
                 ],
                 note: qsTr("The leftover collateral of position %1 goes to %2-coll.")
-                          .arg(Format.shortId(String(a.position))).arg(root.activeAccount),
+                          .arg(Format.shortId(String(a.position))).arg(ownerLabel),
                 confirmLabel: qsTr("Claim leftover"),
                 noun: qsTr("claim")
             }
@@ -143,6 +151,8 @@ InsetCard {
                 const amount = Format.subtract(String(reply.leftover), String(reply.claimed))
                 if (Format.cmp(amount, "0") <= 0 || String(reply.owner) !== String(signer ? signer.id : ""))
                     return
+                ownerLabel = root.activeAccount
+                ownerId = String(signer.id)
                 dialog.quote = reply
                 dialog.request = dialogRequest(reply, amount)
                 dialog.open()
@@ -154,23 +164,32 @@ InsetCard {
 
         function submit() {
             const a = dialog.quote
-            if (!root.backend || !a)
+            if (!root.backend || !a || submitting)
                 return
+            const changed = Outcome.signerChanged(ownerLabel, root.activeAccount)
+            if (changed) {
+                notice = changed
+                return
+            }
             const req = {
                 action: "claim_leftover",
-                owner: root.activeAccount,
-                owner_holding: root.activeAccount + "-coll",
+                owner: ownerLabel,
+                owner_holding: ownerLabel + "-coll",
                 auction: String(a.id)
             }
+            submitting = true
+            const from = ownerId
             logos.watch(root.backend.submit(req), function(reply) {
+                submitting = false
                 if (!reply || reply.error) {
                     notice = reply && reply.error ? reply : { error: qsTr("The engine sent no reply."), kind: "bad_reply" }
                     return
                 }
                 lane.submitReply = reply
-                lane.request = { from: signer ? String(signer.id) : "" }
+                lane.request = { from: from }
                 lane.txId = String(reply.txId)
             }, function(err) {
+                submitting = false
                 notice = { error: String(err), kind: "ipc" }
             })
         }
@@ -322,7 +341,7 @@ InsetCard {
         radius: Theme.spacing.radiusLarge
         variant: LogosButton.Variant.Primary
         enabled: root.canClaim
-        text: d.reading ? qsTr("Reading…") : qsTr("Claim leftover")
+        text: d.reading ? qsTr("Reading…") : d.submitting ? qsTr("Sending…") : qsTr("Claim leftover")
         onClicked: d.claim()
         // Primary buttons carry a black label (contrast on the orange fill), 14 px bold as on the board.
         Component.onCompleted: {

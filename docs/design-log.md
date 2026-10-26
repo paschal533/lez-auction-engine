@@ -1217,7 +1217,7 @@ The fallback (C) was not needed. In Task 6 a token transfer sent through `lez_co
 - Two clients talk to the node: `lez_core`'s and the FFI's. Both use the same wallet home (`LEE_WALLET_HOME_DIR`, the `storage.json` the SDK reads).
 - The RPC endpoint is trusted, as for the CLI (sdk.md, "Program-id verification"). The FFI takes the URL from the deployment file, not from `lez_core.get_sequencer_addr`.
 - The app shares the CLI's lock directory (`AUCTIONS_STATE_DIR`). The CLI and the app therefore see each other's in-flight transactions.
-- A transport failure during the send is an unknown outcome, and the lock is kept (ADR-042).
+- A transport failure during the send is an unknown outcome, and the lock is kept (ADR-042). So is a `success:false` from `lez_core`: it may come after the request reached the sequencer (a proxy 502, a response timeout), so a retry could act twice (R53). Only failures before the send starts (our own prepare, argument building, `tx_begin`) are `not_sent` or `dropped`.
 
 **Evidence**
 - The skeleton end-to-end through `lez_core`: `apps/auctions/tests/skeleton.mjs`, commit b8623c3, written up in `docs/architecture/basecamp-app.md`.
@@ -1261,7 +1261,7 @@ The Plan 4 spec leaves one choice to the builder: an event or polling for confir
 **Evidence**
 - SDK tests: `poll_once_is_pending_until_the_nonce_moves`, `poll_once_reports_dropped_after_the_window`, `track_begin_twice_for_one_signer_is_in_flight`, `track_end_with_unknown_outcome_keeps_the_lock`.
 - FFI tests: `tx_poll_reports_included`, `tx_poll_reports_dropped_after_the_window`, `tx_end_included_releases_the_lock_and_unknown_keeps_it`, `tracking_outside_the_lock_dir_is_refused`, `a_failed_tx_begin_leaves_no_lock_file`.
-- Module tests: `tx_status_submits_the_next_step_after_inclusion`, `a_dropped_middle_step_stops_the_sequence`, `oracle_publish_runs_three_steps_in_order`, `a_transport_failure_of_the_send_keeps_the_lock_as_unknown`.
+- Module tests: `tx_status_submits_the_next_step_after_inclusion`, `a_dropped_middle_step_stops_the_sequence`, `oracle_publish_runs_three_steps_in_order`, `a_transport_failure_of_the_send_keeps_the_lock_as_unknown`, `a_failed_send_keeps_the_lock_as_unknown`, `a_chain_error_from_tx_poll_keeps_the_transaction_and_its_lock`, `a_transaction_in_flight_is_polled_under_the_ctx_it_was_sent_with`.
 - QML tests (`tst_txflow.qml`): `test_lane_shows_unknown_not_dropped`, `test_lane_sends_one_txstatus_at_a_time`, `test_lane_polls_every_two_seconds`.
 - Live: the story's 172 steps spent 283 s (standalone) and 284 s (installed) in lane waits, and no lane dropped.
 - Commits 3127f06, a4c0a7f, 4de8cf5, e7c2aea, d3581f1, 1ba11e1, 8b21389.

@@ -146,8 +146,9 @@ When the Nix caches are unreachable, pass the already-built roots through, for e
 
 The cut logic has unit tests: `python -I -m unittest discover -s scripts/tests -p test_cut_idle.py`.
 
-The committed scripts produce exact timings. The shipped take was recorded before the last timing fixes: its cards
-and cuts sit about 2 s late, and its end was trimmed by hand.
+The shipped take was recorded before the last timing fixes: its cards and cuts sit about 2 s late, and its end was
+trimmed by hand. The committed scripts fix both (unit-tested and checked on a synthetic clip; not yet used for a
+live recording).
 
 ## Public legacy testnet
 

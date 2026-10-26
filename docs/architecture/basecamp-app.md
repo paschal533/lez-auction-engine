@@ -1,6 +1,6 @@
 # Basecamp app
 
-The Auctions app puts the engine in Basecamp. It is built from three parts, all in this repository, and each has its own `flake.nix` on `logos-module-builder` `de169fd` (the pin Basecamp master uses).
+The Auctions app puts the engine in Basecamp. It is built from three parts, all in this repository. `modules/auction_engine` and `apps/auctions` each have a `flake.nix` on `logos-module-builder` `de169fd` (the pin Basecamp master uses); `crates/auction_ffi` is built by the root `flake.nix` (crane).
 
 | Part | What it is | Talks to |
 |---|---|---|
@@ -130,7 +130,7 @@ Notes:
 - The packages are unsigned dev builds. lgpm warns `Package is unsigned` and installs them.
 - With `--profile`, `run-app.sh` keeps its default path otherwise unchanged. Without it, it still runs standalone mode with a fresh temporary user dir.
 
-**Unsupported: a profile with a newer lez_core (design call 3).** The app is built against lez_core 0.4.1 (LEZ v0.2.4, 4-argument send, enum-index instructions). Basecamp's catalogue can offer a newer `lez_core` (0.5.x, LEZ v0.3.1). A profile that already has one, or that is upgraded to one from the Package Manager, is unsupported. `install-lgx.sh` refuses such a profile with exit 4, before and after installing. It also refuses a profile whose lez_core manifest has no readable version (it fails closed) (`install-lgx: PROFILE has lez_core 0.5.x; the Auctions app needs lez_core 0.4.1 …`). Use a fresh `PROFILE_DIR`, and do not accept a lez_core upgrade in a profile that runs the Auctions app. Nothing in the app works around a newer lez_core.
+**Unsupported: a profile with a newer lez_core (design call 3).** The app is built against lez_core 0.4.1 (LEZ v0.2.4, 4-argument send, enum-index instructions). Basecamp's catalogue can offer a newer `lez_core` (0.5.x, LEZ v0.3.1). A profile that already has one, or that is upgraded to one from the Package Manager, is unsupported. `install-lgx.sh` refuses such a profile with exit 4, before and after installing (`install-lgx: PROFILE has lez_core 0.5.x; the Auctions app needs lez_core 0.4.1 …`). It also refuses a profile whose lez_core manifest has no readable version (it fails closed). Use a fresh `PROFILE_DIR`, and do not accept a lez_core upgrade in a profile that runs the Auctions app. Nothing in the app works around a newer lez_core.
 
 `scripts/tests/install-lgx.sh` covers the script with stubbed `nix`, `lgpm` and `df`: the pinned refs, core-before-UI order, `--install-only`, the hand-over to `run-app.sh --profile`, the newer-lez_core refusals and the low-disk refusal.
 
@@ -168,6 +168,6 @@ Wall time: 1261 s for the whole command. The story itself took 329 s for 172 ste
 
 ## Recording
 
-A scripted screen recording of the story (`STORY_PACE_MS=1500`, idle lane waits cut, title cards for F1–F5, the shortfall and the freeze) is at `C:\Users\user\Videos\rfp014-demo\basecamp.mp4`: 333.0 s, 9,021,687 bytes, SHA-256 `2b686a8621ba691df02aa1e24f0fb67094b0691c4ecf6191c362a649cba2389f`. It was made with `scripts/record/record-story.ps1` at aeb1320 in one unattended run (172/172 steps, every checked figure equal to `auction-cli`). The video is not committed.
+A scripted screen recording of the story (`STORY_PACE_MS=1500`, idle lane waits cut, title cards for F1–F5, the shortfall and the freeze) is at `C:\Users\user\Videos\rfp014-demo\basecamp.mp4`: 333.0 s, 9,021,687 bytes, SHA-256 `2b686a8621ba691df02aa1e24f0fb67094b0691c4ecf6191c362a649cba2389f`. It was made with the round-1 version of `record-story.ps1` (committed as aeb1320; `--window-gone` was added to it after the take) in one unattended run (172/172 steps, every checked figure equal to `auction-cli`). The video is not committed.
 
-Two limits of this take: the last seconds were trimmed by hand to drop a frame of the desktop behind the closing window, and the title cards and idle cuts run about 2 s late because that build of `cut-idle.py` treated the capture as starting with the story. Both are fixed in the committed scripts (59e7cfa: `--window-gone` and the real capture offset); a re-record gives exact timings.
+Two limits of this take: the last seconds were trimmed by hand to drop about 2.7 s of the desktop (a VS Code terminal) behind the closing window, and the title cards and idle cuts run about 2 s late because that build of `cut-idle.py` treated the capture as starting with the story. The committed scripts fix both (aeb1320: `--window-gone`; 59e7cfa: the real capture offset) (unit-tested and checked on a synthetic clip; not yet used for a live recording).

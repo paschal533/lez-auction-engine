@@ -32,9 +32,10 @@ constexpr const char* DEFAULT_WALLET_SUBDIR = "/.lee/wallet";
 constexpr int DEFAULT_RESCAN_PAGE_BLOCKS = 100;
 // auction_sdk ConfirmSettings::default().drop_after_blocks; the ctx may override it (auction_ffi ctx.rs).
 constexpr int DEFAULT_DROP_AFTER_BLOCKS = 5;
-// What became of a step whose begin or send failed (R27). `not_sent`: no lock was taken and nothing reached
-// the node; `dropped`: the lock was released, nothing reached the node; `unknown`: the send's fate is not
-// known, the lock is kept.
+// What became of a step whose begin or send failed (R27, R53). `not_sent`: no lock was taken and nothing reached
+// the node; `dropped`: the lock was released before the send was started, nothing reached the node; `unknown`:
+// the send was started and its fate is not known (lez_core failed, did not answer or answered without a hash:
+// the request may have reached the sequencer), the lock is kept for the staleness rule.
 constexpr const char* OUTCOME_NOT_SENT = "not_sent";
 constexpr const char* OUTCOME_DROPPED = "dropped";
 constexpr const char* OUTCOME_UNKNOWN = "unknown";
@@ -194,9 +195,9 @@ LogosMap AuctionEngineImpl::configure(const LogosMap& ctx) {
     });
 }
 
-int AuctionEngineImpl::dropAfterBlocks() const {
-    const auto it = m_ctx.find("drop_after_blocks");
-    if (it == m_ctx.end() || !it->is_number_integer() || it->get<int>() < 1) return DEFAULT_DROP_AFTER_BLOCKS;
+int AuctionEngineImpl::dropAfterBlocks(const json& ctx) {
+    const auto it = ctx.find("drop_after_blocks");
+    if (it == ctx.end() || !it->is_number_integer() || it->get<int>() < 1) return DEFAULT_DROP_AFTER_BLOCKS;
     return it->get<int>();
 }
 
@@ -237,11 +238,13 @@ LogosMap AuctionEngineImpl::blockHeight() {
     });
 }
 
-/// Checks the step, takes its primary-signer lock (tx_begin), then sends it through lez_core. On return without
-/// an error `tracking` and `hash` are set and the lock is held. Every error carries `outcome`: `not_sent` when
-/// no lock was taken (bad step, tx_begin failed), else what the lock was ended with: `dropped` (released,
-/// nothing reached the node) or `unknown` (kept, the send's fate is not known).
-LogosMap AuctionEngineImpl::beginAndSend(const Budget& budget,
+/// Checks the step, takes its primary-signer lock (tx_begin) under `ctx`, then sends it through lez_core. On
+/// return without an error `tracking` and `hash` are set and the lock is held. Every error carries `outcome`:
+/// `not_sent` when no lock was taken (bad step, tx_begin failed), else what the lock was ended with: `dropped`
+/// (released: the send was never started) or `unknown` (kept: the send was started and its fate is not known,
+/// Ruling R53).
+LogosMap AuctionEngineImpl::beginAndSend(const json& ctx,
+                                         const Budget& budget,
                                          const json& step,
                                          json& tracking,
                                          std::string& hash) {
@@ -253,14 +256,14 @@ LogosMap AuctionEngineImpl::beginAndSend(const Budget& budget,
     } catch (const std::invalid_argument& e) {
         return withOutcome(errorMap(KIND_BAD_PLAN, e.what()), OUTCOME_NOT_SENT);
     }
-    const FfiResult begun = budgetedCall(auction_ffi_tx_begin, {{"signer", step.at("signers").at(0)}}, m_ctx,
-                                         budget, auction_engine::TX_READ_OVERRUN_MS);
+    const FfiResult begun = budgetedCall(auction_ffi_tx_begin, {{"signer", step.at("signers").at(0)}}, ctx, budget,
+                                         auction_engine::TX_READ_OVERRUN_MS);
     if (!begun.ok) return withOutcome(errorOf(begun), OUTCOME_NOT_SENT);
     tracking = begun.value;
 
     if (!budget.hasAtLeast(auction_engine::MIN_SEND_START_MS)) {
         return withOutcome(errorMap(KIND_BUDGET, "not enough of the call's time budget is left to send the transaction"
-                                         + endTracking(m_ctx, tracking, OUTCOME_DROPPED)),
+                                         + endTracking(ctx, tracking, OUTCOME_DROPPED)),
                            OUTCOME_DROPPED);
     }
 
@@ -269,25 +272,28 @@ LogosMap AuctionEngineImpl::beginAndSend(const Budget& budget,
         args.accountIds, args.signers, args.instruction, args.programIdHex, &callError);
     if (!callError.ok()) {
         return withOutcome(errorMap(KIND_SEND, "lez_core did not answer the send: it may or may not have reached the node"
-                                         + endTracking(m_ctx, tracking, OUTCOME_UNKNOWN)),
+                                         + endTracking(ctx, tracking, OUTCOME_UNKNOWN)),
                            OUTCOME_UNKNOWN);
     }
     const json sent = json::parse(raw, nullptr, false);
     if (!sent.is_object() || !sent.contains("success") || !sent.at("success").is_boolean()) {
         return withOutcome(errorMap(KIND_SEND, "lez_core sent an unreadable reply: the send may or may not have reached the node"
-                                         + endTracking(m_ctx, tracking, OUTCOME_UNKNOWN)),
+                                         + endTracking(ctx, tracking, OUTCOME_UNKNOWN)),
                            OUTCOME_UNKNOWN);
     }
     if (!sent.at("success").get<bool>()) {
+        // lez_core's failure may come after the request left (a proxy 502, a response timeout): a retry could act
+        // twice, so the lock is kept until the staleness rule (nonce moved, or drop_after_blocks) frees it.
         const std::string why = textOf(sent, "error");
-        return withOutcome(errorMap(KIND_SEND, (why.empty() ? std::string("lez_core refused the transaction") : why)
-                                         + endTracking(m_ctx, tracking, OUTCOME_DROPPED)),
-                           OUTCOME_DROPPED);
+        return withOutcome(errorMap(KIND_SEND, (why.empty() ? std::string("lez_core reported the send failed") : why)
+                                         + ": the send may or may not have reached the node"
+                                         + endTracking(ctx, tracking, OUTCOME_UNKNOWN)),
+                           OUTCOME_UNKNOWN);
     }
     hash = textOf(sent, "tx_hash");
     if (hash.empty()) {
         return withOutcome(errorMap(KIND_SEND, "lez_core reported success without a transaction hash: the send may have reached the node"
-                                         + endTracking(m_ctx, tracking, OUTCOME_UNKNOWN)),
+                                         + endTracking(ctx, tracking, OUTCOME_UNKNOWN)),
                            OUTCOME_UNKNOWN);
     }
     return json::object();
@@ -305,7 +311,7 @@ LogosMap AuctionEngineImpl::submit(const LogosMap& req) {
 
         json tracking;
         std::string hash;
-        const LogosMap sent = beginAndSend(budget, steps.at(0), tracking, hash);
+        const LogosMap sent = beginAndSend(m_ctx, budget, steps.at(0), tracking, hash);
         if (sent.contains("error")) {
             LogosMap failed = sent;
             markSequenceEnd(failed, 0, steps.size(), textOf(sent, "outcome"));
@@ -313,7 +319,8 @@ LogosMap AuctionEngineImpl::submit(const LogosMap& req) {
         }
 
         const std::string txId = "tx" + std::to_string(++m_lastTxNumber);
-        m_pending[txId] = {{"steps", steps}, {"step", 0}, {"tracking", tracking}, {"hash", hash}};
+        // The entry keeps the ctx it was sent under: a configure while it is in flight must not poll another chain.
+        m_pending[txId] = {{"steps", steps}, {"step", 0}, {"tracking", tracking}, {"hash", hash}, {"ctx", m_ctx}};
         return {{"txId", txId},
                 {"hash", hash},
                 {"what", textOf(steps.at(0), "what")},
@@ -331,10 +338,11 @@ LogosMap AuctionEngineImpl::txStatus(const LogosMap& req) {
             return errorMap(KIND_UNKNOWN_TX, "no transaction in flight with id \"" + txId + "\"");
         }
         json& entry = found->second;
+        const json ctx = entry.at("ctx");
         const Budget budget;
 
-        const FfiResult polled = budgetedCall(auction_ffi_tx_poll, {{"tracking", entry.at("tracking")}}, m_ctx,
-                                              budget, auction_engine::TX_READ_OVERRUN_MS);
+        const FfiResult polled = budgetedCall(auction_ffi_tx_poll, {{"tracking", entry.at("tracking")}}, ctx, budget,
+                                              auction_engine::TX_READ_OVERRUN_MS);
         if (!polled.ok) return errorOf(polled);
 
         const int step = entry.at("step").get<int>();
@@ -345,16 +353,16 @@ LogosMap AuctionEngineImpl::txStatus(const LogosMap& req) {
         if (state == "pending") {
             status["state"] = "pending";
             status["blocks_waited"] = polled.value.value("blocks_waited", 0);
-            status["drop_after_blocks"] = dropAfterBlocks();
+            status["drop_after_blocks"] = dropAfterBlocks(ctx);
             return status;
         }
         if (state == "dropped") {
             // The sequence stops at the dropped step: the steps after it are discarded, never begun.
             status["state"] = "dropped";
             status["height"] = polled.value.value("height", 0);
-            status["drop_after_blocks"] = dropAfterBlocks();
+            status["drop_after_blocks"] = dropAfterBlocks(ctx);
             markSequenceEnd(status, step, stepCount, OUTCOME_DROPPED);
-            const std::string note = endTracking(m_ctx, entry.at("tracking"), "dropped");
+            const std::string note = endTracking(ctx, entry.at("tracking"), "dropped");
             m_pending.erase(found);
             if (!note.empty()) status["note"] = note;
             return status;
@@ -364,7 +372,7 @@ LogosMap AuctionEngineImpl::txStatus(const LogosMap& req) {
         }
 
         const std::string nonceAfter = textOf(polled.value, "nonce_after");
-        const std::string note = endTracking(m_ctx, entry.at("tracking"), "included");
+        const std::string note = endTracking(ctx, entry.at("tracking"), "included");
         if (static_cast<std::size_t>(step) + 1 >= stepCount) {
             m_pending.erase(found);
             status["state"] = "included";
@@ -376,7 +384,7 @@ LogosMap AuctionEngineImpl::txStatus(const LogosMap& req) {
         json tracking;
         std::string hash;
         const LogosMap sent =
-            beginAndSend(budget, entry.at("steps").at(static_cast<std::size_t>(step) + 1), tracking, hash);
+            beginAndSend(ctx, budget, entry.at("steps").at(static_cast<std::size_t>(step) + 1), tracking, hash);
         if (sent.contains("error")) {
             // Step `step` is on chain, the next one is not sent and nothing is waited on: the sequence ends here.
             LogosMap failed = sent;

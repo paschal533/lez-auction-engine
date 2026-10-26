@@ -27,23 +27,49 @@ LOGOS_TEST(submit_sends_one_step_and_returns_the_hash) {
     LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_begin")["signer"].get<std::string>(), SIGNER_A);
 }
 
-LOGOS_TEST(a_failed_send_releases_the_lock) {
-    Harness h;
-    h.prepared(1);
+namespace {
+
+// R53: lez_core's success:false may come after the request reached the sequencer (a proxy 502, a response
+// timeout), so it is never reported as dropped and the lock is not released.
+LogosMap failedSend(Harness& h) {
     h.context.mockModule("lez_core", SEND)
         .returns(json{{"success", false},
                       {"tx_hash", ""},
                       {"secrets", json::array()},
                       {"error", "wallet FFI error 7"}}
                      .dump());
+    return h.submit();
+}
 
-    const LogosMap r = h.submit();
+}  // namespace
+
+LOGOS_TEST(a_failed_send_reports_lez_cores_error_and_does_not_release_the_lock) {
+    Harness h;
+    h.prepared(1);
+
+    const LogosMap r = failedSend(h);
 
     LOGOS_ASSERT_TRUE(r.contains("error"));
     LOGOS_ASSERT_CONTAINS(r["error"].get<std::string>(), "wallet FFI error 7");
+    LOGOS_ASSERT_CONTAINS(r["error"].get<std::string>(), "may or may not have reached the node");
     LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_end"), 1);
-    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_end")["outcome"].get<std::string>(),
-                    std::string("dropped"));
+    LOGOS_ASSERT_TRUE(h.lastRequest("auction_ffi_tx_end")["outcome"].get<std::string>() != "dropped");
+}
+
+LOGOS_TEST(a_failed_send_keeps_the_lock_as_unknown) {
+    Harness h;
+    h.prepared(1);
+
+    const LogosMap r = failedSend(h);
+
+    LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("send"));
+    LOGOS_ASSERT_EQ(r["outcome"].get<std::string>(), std::string("unknown"));
+    LOGOS_ASSERT_EQ(r["step"].get<int>(), 0);
+    LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 0);
+    LOGOS_ASSERT_FALSE(r.contains("txId"));
+    // tx_end "unknown" keeps the lock file for the staleness rule (nonce moved, or drop_after_blocks).
+    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_end")["outcome"].get<std::string>(), std::string("unknown"));
+    LOGOS_ASSERT_EQ(h.context.moduleCallCount("lez_core", SEND), 1);
 }
 
 LOGOS_TEST(tx_status_submits_the_next_step_after_inclusion) {
@@ -537,12 +563,12 @@ LOGOS_TEST(every_sequence_end_reports_included_and_discarded_steps_the_same_way)
             .returns(json{{"success", false}, {"tx_hash", ""}, {"error", "refused"}}.dump());
         const LogosMap r = h.module.submit({{"action", "oracle_publish"}, {"price", "1000"}});
         LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("send"));
-        LOGOS_ASSERT_EQ(r["outcome"].get<std::string>(), std::string("dropped"));
+        LOGOS_ASSERT_EQ(r["outcome"].get<std::string>(), std::string("unknown"));
         LOGOS_ASSERT_EQ(r["step"].get<int>(), 0);
         LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 0);
         LOGOS_ASSERT_EQ(r["discardedSteps"].get<int>(), 2);
         LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_end"), 1);
-        LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_end")["outcome"].get<std::string>(), std::string("dropped"));
+        LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_end")["outcome"].get<std::string>(), std::string("unknown"));
     }
     // Begin failure of step 1 (txStatus after step 0 is included): one on chain, one discarded.
     {
@@ -571,14 +597,14 @@ LOGOS_TEST(every_sequence_end_reports_included_and_discarded_steps_the_same_way)
             .returns(json{{"success", false}, {"tx_hash", ""}, {"error", "refused"}}.dump());
         const LogosMap r = h.module.txStatus({{"txId", first["txId"]}});
         LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("send"));
-        LOGOS_ASSERT_EQ(r["outcome"].get<std::string>(), std::string("dropped"));
+        LOGOS_ASSERT_EQ(r["outcome"].get<std::string>(), std::string("unknown"));
         LOGOS_ASSERT_EQ(r["step"].get<int>(), 1);
         LOGOS_ASSERT_EQ(r["includedSteps"].get<int>(), 1);
         LOGOS_ASSERT_EQ(r["discardedSteps"].get<int>(), 1);
         const std::vector<json> ended = h.requests("auction_ffi_tx_end");
         LOGOS_ASSERT_EQ(static_cast<int>(ended.size()), 2);
         LOGOS_ASSERT_EQ(ended[0]["outcome"].get<std::string>(), std::string("included"));
-        LOGOS_ASSERT_EQ(ended[1]["outcome"].get<std::string>(), std::string("dropped"));
+        LOGOS_ASSERT_EQ(ended[1]["outcome"].get<std::string>(), std::string("unknown"));
     }
     // A send of step 1 whose fate is not known (unreadable lez_core reply): unknown, the lock is kept.
     {
@@ -626,3 +652,44 @@ LOGOS_TEST(tx_status_echoes_drop_after_blocks_from_the_ctx) {
     const LogosMap first = h.submit();
     LOGOS_ASSERT_EQ(h.module.txStatus({{"txId", first["txId"]}})["drop_after_blocks"].get<int>(), 8);
 }
+
+// ---- final review ----
+
+LOGOS_TEST(a_chain_error_from_tx_poll_keeps_the_transaction_and_its_lock) {
+    Harness h;
+    h.prepared(1);
+    const LogosMap first = h.submit();
+    h.ffi("auction_ffi_tx_poll", failed("chain", "getAccountsNonces: request timeout"));
+
+    const LogosMap r = h.module.txStatus({{"txId", first["txId"]}});
+
+    LOGOS_ASSERT_EQ(r["kind"].get<std::string>(), std::string("chain"));
+    LOGOS_ASSERT_FALSE(r.contains("outcome"));
+    LOGOS_ASSERT_EQ(h.calls("auction_ffi_tx_end"), 0);
+    // The entry is kept: the next poll reads the chain again.
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "pending"}, {"blocks_waited", 1}}));
+    LOGOS_ASSERT_EQ(h.module.txStatus({{"txId", first["txId"]}})["state"].get<std::string>(),
+                    std::string("pending"));
+}
+
+LOGOS_TEST(a_transaction_in_flight_is_polled_under_the_ctx_it_was_sent_with) {
+    Harness h;
+    h.prepared(2);
+    const LogosMap first = h.submit();
+    h.ffi("auction_ffi_view", ok({{"network", "testnet-legacy"}, {"dev", false}, {"config", "cfg2"}}));
+    h.module.configure({{"deployment", "/d/other.json"}, {"state_dir", "/other-state"}});
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "included"}, {"nonce_after", "1"}}));
+
+    LOGOS_ASSERT_EQ(h.module.txStatus({{"txId", first["txId"]}})["state"].get<std::string>(), std::string("next"));
+
+    for (const char* name : {"auction_ffi_tx_poll", "auction_ffi_tx_end", "auction_ffi_tx_begin"}) {
+        const json ctx = h.lastRequest(name)["ctx"];
+        LOGOS_ASSERT_EQ(ctx["deployment"].get<std::string>(), std::string("/d/deployment.json"));
+        LOGOS_ASSERT_EQ(ctx["state_dir"].get<std::string>(), std::string("/state"));
+    }
+    // A new submit plans under the new ctx.
+    h.submit();
+    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_prepare")["ctx"]["deployment"].get<std::string>(),
+                    std::string("/d/other.json"));
+}
+

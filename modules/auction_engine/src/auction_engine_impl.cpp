@@ -27,7 +27,7 @@ constexpr const char* KIND_WALLET = "wallet";
 constexpr const char* KIND_CHAIN = "chain";
 constexpr const char* DEFAULT_WALLET_SUBDIR = "/.lee/wallet";
 // One rescan page: one getBlockRange batch (ScanSettings::default().batch in auction_sdk) plus the head and
-// anchor reads, so a page needs few reads of the 4 s a view call gets after the read overrun (budget.h).
+// anchor reads, so a page needs few reads of the ~14 s a view call gets (budget.h).
 // auction_ffi caps a page at 500 blocks; a caller may ask for any size up to that.
 constexpr int DEFAULT_RESCAN_PAGE_BLOCKS = 100;
 // auction_sdk ConfirmSettings::default().drop_after_blocks; the ctx may override it (auction_ffi ctx.rs).
@@ -109,15 +109,15 @@ FfiResult callFfi(FfiOp op, const json& request, ValueShape shape = ValueShape::
 }
 
 /// A call under the module budget: refused with less than MIN_FFI_START_MS left, else the context carries
-/// what is left, less the call kind's read overrun, as `budget_ms`.
+/// what is left, less `keepMs` (what the module keeps for the reply and later steps), as `budget_ms`.
 FfiResult budgetedCall(FfiOp op, json request, const json& ctx, const Budget& budget,
-                       std::int64_t readOverrunMs, ValueShape shape = ValueShape::Object) {
+                       std::int64_t keepMs, ValueShape shape = ValueShape::Object) {
     if (!budget.hasAtLeast(auction_engine::MIN_FFI_START_MS)) {
         return failure(KIND_BUDGET, "the call's time budget ran out before the next step could start");
     }
     request["ctx"] = ctx;
     request["ctx"]["budget_ms"] =
-        std::max(auction_engine::MIN_FFI_BUDGET_MS, budget.remainingMs() - readOverrunMs);
+        std::max(auction_engine::MIN_FFI_BUDGET_MS, budget.remainingMs() - keepMs);
     return callFfi(op, request, shape);
 }
 
@@ -146,8 +146,7 @@ LogosMap guarded(Body body) {
 json viewCall(const json& ctx, const json& req, ValueShape shape = ValueShape::Object) {
     if (ctx.is_null()) return errorMap(KIND_NOT_CONFIGURED, "configure the module first");
     const Budget budget;
-    const FfiResult r =
-        budgetedCall(auction_ffi_view, req, ctx, budget, auction_engine::VIEW_READ_OVERRUN_MS, shape);
+    const FfiResult r = budgetedCall(auction_ffi_view, req, ctx, budget, auction_engine::FFI_REPLY_MS, shape);
     return r.ok ? r.value : errorOf(r);
 }
 
@@ -186,7 +185,7 @@ LogosMap AuctionEngineImpl::configure(const LogosMap& ctx) {
         stored.erase("budget_ms");
         const Budget budget;
         const FfiResult view = budgetedCall(auction_ffi_view, {{"view", "deployment"}}, stored, budget,
-                                            auction_engine::VIEW_READ_OVERRUN_MS);
+                                            auction_engine::FFI_REPLY_MS);
         if (!view.ok) return errorOf(view);
         m_ctx = stored;
         return {{"network", view.value.value("network", json())},
@@ -257,7 +256,7 @@ LogosMap AuctionEngineImpl::beginAndSend(const json& ctx,
         return withOutcome(errorMap(KIND_BAD_PLAN, e.what()), OUTCOME_NOT_SENT);
     }
     const FfiResult begun = budgetedCall(auction_ffi_tx_begin, {{"signer", step.at("signers").at(0)}}, ctx, budget,
-                                         auction_engine::TX_READ_OVERRUN_MS);
+                                         auction_engine::FFI_REPLY_MS + auction_engine::MIN_SEND_START_MS);
     if (!begun.ok) return withOutcome(errorOf(begun), OUTCOME_NOT_SENT);
     tracking = begun.value;
 
@@ -304,7 +303,7 @@ LogosMap AuctionEngineImpl::submit(const LogosMap& req) {
         if (m_ctx.is_null()) return errorMap(KIND_NOT_CONFIGURED, "configure the module first");
         const Budget budget;
         const FfiResult plan = budgetedCall(auction_ffi_prepare, req, m_ctx, budget,
-                                            auction_engine::VIEW_READ_OVERRUN_MS);
+                                            auction_engine::FFI_REPLY_MS + auction_engine::BEGIN_AND_SEND_MS);
         if (!plan.ok) return errorOf(plan);
         const json steps = plan.value.value("steps", json::array());
         if (!steps.is_array() || steps.empty()) return errorMap(KIND_BAD_PLAN, "the plan has no steps");
@@ -342,7 +341,7 @@ LogosMap AuctionEngineImpl::txStatus(const LogosMap& req) {
         const Budget budget;
 
         const FfiResult polled = budgetedCall(auction_ffi_tx_poll, {{"tracking", entry.at("tracking")}}, ctx, budget,
-                                              auction_engine::TX_READ_OVERRUN_MS);
+                                              auction_engine::FFI_REPLY_MS + auction_engine::BEGIN_AND_SEND_MS);
         if (!polled.ok) return errorOf(polled);
 
         const int step = entry.at("step").get<int>();

@@ -1206,8 +1206,8 @@ The Plan 4 spec ("How it is built") makes the FFI "brain only": no chain I/O and
 (B), the designer's call 1:
 - **Reads.** The FFI opens `RpcChain::connect_with_timeout(deployment.sequencer_url, 5 s)`. Views and plans use `ReadRetry { attempts: 2, first_delay: 1 s }`; the transaction ops use `ReadRetry::NONE`.
 - **Time limits.**
-  - A `Deadline` decorator gives every FFI call a 12 s budget (R8). The deadline stops new reads from starting; a read already in flight can run past it by up to its own request timeout (R13).
-  - A module method that makes several FFI calls shares one 15 s budget (`budget_ms`, R10). The `lez_core` send starts only if at least 3 s remain.
+  - Every FFI call has a deadline: 12 s by default (R8), or `ctx.budget_ms`, clamped to at most 15 s. Against the node, `RpcChain::with_deadline` caps each read try's timeout at the time left, makes a retry only if its pause ends before the deadline, and starts no read after it (R54, replacing R13's overrun). A call therefore ends within its budget plus the time to build its reply.
+  - A module method that makes several FFI calls shares one 15 s budget (`budget_ms`, R10). Each FFI call gets what is left less what the module keeps for later steps (`budget.h`): 1 s to return the reply, and 6 s before a step's `tx_begin` and send. A view gets about 14 s for all its reads; `prepare` and `tx_poll` about 8 s. The `lez_core` send starts only if at least 3 s remain.
   - Scans are paged: `scan_page` reads at most `max_blocks` per call (default 100, at most 500).
 - **Plans and signing.** The FFI returns plans as `{program_id hex, accounts [{id hex, signer}], instruction_words}`. The module turns them into `lez_core` arguments (`toLezArgs`, words as little-endian bytes) and sends. Keys never reach the FFI.
 
@@ -1222,7 +1222,7 @@ The fallback (C) was not needed. In Task 6 a token transfer sent through `lez_co
 **Evidence**
 - The skeleton end-to-end through `lez_core`: `apps/auctions/tests/skeleton.mjs`, commit b8623c3, written up in `docs/architecture/basecamp-app.md`.
 - The whole story, standalone and installed as `.lgx`: 17e7911, f4f46e1, f7d7b2a.
-- FFI tests: `view_against_a_closed_port_fails_within_12_s`, `tx_poll_stops_starting_reads_once_the_call_budget_is_spent`, `tx_begin_stops_starting_reads_once_the_call_budget_is_spent`, `budget_ms_shortens_the_call_deadline`, `scan_view_takes_one_page_and_saves_the_cursor`.
+- FFI tests: `view_against_a_closed_port_fails_within_12_s`, `tx_poll_stops_starting_reads_once_the_call_budget_is_spent`, `tx_begin_stops_starting_reads_once_the_call_budget_is_spent`, `budget_ms_shortens_the_call_deadline`, `scan_view_takes_one_page_and_saves_the_cursor`; the deadline tests `an_overview_of_twenty_slow_reads_finishes_inside_the_view_budget` and `a_stalled_read_near_the_deadline_ends_at_the_deadline` (`crates/auction_ffi/tests/deadline.rs`). Module tests: `a_view_gets_about_fourteen_seconds_for_all_its_reads`, `tx_status_polls_with_what_is_left_less_a_begin_and_send`.
 - Module tests (LOGOS_CMOCK): `each_ffi_call_gets_what_is_left_of_the_module_budget`, `the_send_is_not_started_with_less_than_three_seconds_left_and_the_lock_is_released`, `open_wallet_treats_already_open_as_success`, `rescan_is_one_page`.
 - Commits a4c0a7f, 33cbf7b, 168e7cb, 4de8cf5, 7c66352, b8623c3.
 

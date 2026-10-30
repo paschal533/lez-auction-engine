@@ -23,8 +23,11 @@ inline const std::string SIGNER_B = "SignerBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
 inline const std::string SIGNER_C = "SignerCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
 inline const std::string SEND = "send_generic_public_transaction";
 constexpr std::int64_t MODULE_BUDGET_MS = 15000;
-constexpr std::int64_t VIEW_OVERRUN_MS = 11000;  // view / prepare: a 5 s read, a 1 s pause, another 5 s read
-constexpr std::int64_t TX_OVERRUN_MS = 5000;     // tx_begin / tx_poll: one 5 s read
+// What each call kind is handed with the whole budget left (Ruling R54): auction_ffi cuts its reads off at the
+// deadline, so the module keeps only time for the reply (1 s) and, before a tx_begin and send, for those (6 s).
+constexpr std::int64_t VIEW_BUDGET_MS = 14000;
+constexpr std::int64_t PREPARE_BUDGET_MS = 8000;  // also tx_poll: a tx_begin and a send may follow
+constexpr std::int64_t TX_BEGIN_KEEP_MS = 4000;   // the reply and the 3 s the send needs to start
 
 inline std::string ok(const json& value) {
     return json{{"ok", true}, {"value", value}}.dump();

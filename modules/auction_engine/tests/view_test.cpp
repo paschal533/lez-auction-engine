@@ -12,10 +12,10 @@ namespace {
 const std::string ACCOUNT_OWNER = "8y1Fz1QvQmTq2o2Wn6r8bZyJxGkTnQpC7bL4dS3aHk9";
 const std::string ACCOUNT_TAKER = "3QmN7pWv5cL9rT2yK8dF4hJ6sB1xZ0aE7gU3iO5nP2q";
 
-/// The context the module adds to every FFI call: the configured one plus the view budget (R13).
+/// The context the module adds to every FFI call: the configured one plus the view budget (R13, R54).
 json viewCtx() {
     json ctx = configuredCtx();
-    ctx["budget_ms"] = MODULE_BUDGET_MS - VIEW_OVERRUN_MS;
+    ctx["budget_ms"] = VIEW_BUDGET_MS;
     return ctx;
 }
 

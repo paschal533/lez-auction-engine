@@ -14,11 +14,13 @@ namespace auction_engine {
 constexpr std::int64_t MODULE_CALL_BUDGET_MS = 15000;
 constexpr std::int64_t MIN_FFI_START_MS = 1000;
 constexpr std::int64_t MIN_SEND_START_MS = 3000;
-// auction_ffi's deadline only stops reads from starting (Ruling R13); one read started just before it can run
-// on. The module therefore hands each call its remaining budget minus the longest such overrun: a view or
-// prepare read is 5 s, a 1 s pause and 5 s again (VIEW_RETRY in ctx.rs); a tx_begin / tx_poll read is one 5 s try.
-constexpr std::int64_t VIEW_READ_OVERRUN_MS = 11000;
-constexpr std::int64_t TX_READ_OVERRUN_MS = 5000;
+// auction_ffi cuts every read off at the deadline it is handed (ctx.rs, Ruling R54): no read starts, waits
+// or runs past it. So the module hands each call what is left of the budget less only what it keeps for later:
+// FFI_REPLY_MS for the call to build and return its reply, and before a step's tx_begin and lez_core send,
+// BEGIN_AND_SEND_MS for them. A view gets about 14 s for all its reads; submit's prepare and txStatus's poll
+// about 8 s (they may be followed by a tx_begin and a send in the same call).
+constexpr std::int64_t FFI_REPLY_MS = 1000;
+constexpr std::int64_t BEGIN_AND_SEND_MS = 6000;
 constexpr std::int64_t MIN_FFI_BUDGET_MS = 1;
 
 using ClockFn = std::int64_t (*)();

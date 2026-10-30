@@ -218,11 +218,10 @@ LOGOS_TEST(each_ffi_call_gets_what_is_left_of_the_module_budget) {
     const LogosMap r = h.submit();
 
     LOGOS_ASSERT_TRUE(r.contains("hash"));
-    // The FFI deadline stops reads from starting only (R13): the module leaves room for one read to run on.
-    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_prepare")["ctx"]["budget_ms"].get<std::int64_t>(),
-                    MODULE_BUDGET_MS - VIEW_OVERRUN_MS);
+    // auction_ffi cuts its reads off at the deadline (R54): the module keeps time only for what follows.
+    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_prepare")["ctx"]["budget_ms"].get<std::int64_t>(), PREPARE_BUDGET_MS);
     LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_begin")["ctx"]["budget_ms"].get<std::int64_t>(),
-                    MODULE_BUDGET_MS - 4000 - TX_OVERRUN_MS);
+                    MODULE_BUDGET_MS - 4000 - TX_BEGIN_KEEP_MS);
 }
 
 LOGOS_TEST(no_ffi_call_starts_with_less_than_a_second_left) {
@@ -287,8 +286,7 @@ LOGOS_TEST(a_new_module_call_starts_with_a_full_budget) {
     mock_ffi::state().costMs["auction_ffi_prepare"] = 0;
 
     LOGOS_ASSERT_TRUE(h.submit().contains("hash"));
-    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_prepare")["ctx"]["budget_ms"].get<std::int64_t>(),
-                    MODULE_BUDGET_MS - VIEW_OVERRUN_MS);
+    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_prepare")["ctx"]["budget_ms"].get<std::int64_t>(), PREPARE_BUDGET_MS);
 }
 
 LOGOS_TEST(a_budget_ms_in_the_configured_context_never_reaches_the_ffi) {
@@ -298,8 +296,7 @@ LOGOS_TEST(a_budget_ms_in_the_configured_context_never_reaches_the_ffi) {
     h.module.configure({{"deployment", "/d/deployment.json"}, {"state_dir", "/state"}, {"budget_ms", 1}});
 
     LOGOS_ASSERT_TRUE(h.submit().contains("hash"));
-    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_prepare")["ctx"]["budget_ms"].get<std::int64_t>(),
-                    MODULE_BUDGET_MS - VIEW_OVERRUN_MS);
+    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_prepare")["ctx"]["budget_ms"].get<std::int64_t>(), PREPARE_BUDGET_MS);
 }
 
 // ---- review round 1 ----
@@ -693,3 +690,23 @@ LOGOS_TEST(a_transaction_in_flight_is_polled_under_the_ctx_it_was_sent_with) {
                     std::string("/d/other.json"));
 }
 
+// R54: a view's reads share one ~14 s deadline (the old 4 s failed overview and live on a real node).
+LOGOS_TEST(a_view_gets_about_fourteen_seconds_for_all_its_reads) {
+    Harness h;
+    h.ffi("auction_ffi_view", ok({{"block", 1}}));
+
+    h.module.view({{"view", "overview"}});
+
+    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_view")["ctx"]["budget_ms"].get<std::int64_t>(), VIEW_BUDGET_MS);
+}
+
+LOGOS_TEST(tx_status_polls_with_what_is_left_less_a_begin_and_send) {
+    Harness h;
+    h.prepared(1);
+    h.ffi("auction_ffi_tx_poll", ok({{"state", "pending"}, {"blocks_waited", 1}}));
+    const LogosMap first = h.submit();
+
+    h.module.txStatus({{"txId", first["txId"]}});
+
+    LOGOS_ASSERT_EQ(h.lastRequest("auction_ffi_tx_poll")["ctx"]["budget_ms"].get<std::int64_t>(), PREPARE_BUDGET_MS);
+}

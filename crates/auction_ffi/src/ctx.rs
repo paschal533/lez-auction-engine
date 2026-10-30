@@ -19,15 +19,17 @@ use serde_json::Value;
 
 use crate::envelope::{parse, FfiError};
 
-/// IPC calls between modules time out after 20 s. Each FFI call has a budget of `CALL_BUDGET`: a read
-/// that would START after it ran out is refused (`chain` error), and one read takes at most
-/// `READ_TIMEOUT` for transaction ops (no retry) or about 11 s for views (5 s, 1 s pause, 5 s). Worst
-/// case per call: the budget plus one read, 17 s for transaction ops.
+/// IPC calls between modules time out after 20 s. Each FFI call has a deadline, `CALL_BUDGET` from
+/// its start unless `ctx.budget_ms` sets it. Against the node (`RpcChain::with_deadline`) every read
+/// try has `READ_TIMEOUT` capped at the time left, a retry is made only if its pause ends before the
+/// deadline, and no read starts after it (`chain` error). So a call ends within its budget plus the
+/// time to build its reply: at most 12 s by default, 15 s with the largest `budget_ms`.
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 pub const CALL_BUDGET: Duration = Duration::from_secs(12);
-/// Bounds of the optional `ctx.budget_ms`: the module passes what is left of its own 15 s budget.
+/// Bounds of the optional `ctx.budget_ms`: the module passes what is left of its own 15 s budget
+/// (`MODULE_CALL_BUDGET_MS` in modules/auction_engine/src/budget.h), less what it keeps for later steps.
 const MIN_BUDGET_MS: u64 = 1;
-const MAX_BUDGET_MS: u64 = 12_000;
+const MAX_BUDGET_MS: u64 = 15_000;
 /// Views and `prepare`: one retry after 1 s.
 const VIEW_RETRY: ReadRetry = ReadRetry {
     attempts: 2,
@@ -54,7 +56,7 @@ pub struct CtxJson {
     /// Blocks after which an unapplied transaction counts as dropped (default 5, at least 1).
     #[serde(default)]
     pub drop_after_blocks: Option<u64>,
-    /// Deadline of this call in milliseconds, clamped to [1, 12000]; default `CALL_BUDGET`.
+    /// Deadline of this call in milliseconds, clamped to [1, 15000]; default `CALL_BUDGET`.
     #[serde(default)]
     pub budget_ms: Option<u64>,
 }
@@ -63,6 +65,15 @@ impl CtxJson {
     /// The `"ctx"` member of `req`.
     pub fn of(req: &Value) -> Result<Self, FfiError> {
         parse(req.get("ctx").unwrap_or(&Value::Null))
+    }
+
+    /// The call's deadline: `budget_ms` (clamped) from now, else `default` from now.
+    #[must_use]
+    pub fn deadline(&self, default: Duration) -> Instant {
+        let budget = self.budget_ms.map_or(default, |ms| {
+            Duration::from_millis(ms.clamp(MIN_BUDGET_MS, MAX_BUDGET_MS))
+        });
+        Instant::now() + budget
     }
 
     /// The CLI's confirmation defaults, with `drop_after_blocks` from the context.
@@ -94,10 +105,12 @@ impl Ctx {
     }
 
     fn open_with(json: &CtxJson, retry: ReadRetry) -> Result<Self, FfiError> {
+        let deadline = json.deadline(CALL_BUDGET);
         let deployment = Deployment::load(&json.deployment)?;
         let chain = RpcChain::connect_with_timeout(&deployment.sequencer_url, READ_TIMEOUT)?
-            .with_read_retry(retry);
-        Self::assemble(Box::new(chain), deployment, json, CALL_BUDGET)
+            .with_read_retry(retry)
+            .with_deadline(deadline);
+        Self::assemble(Box::new(chain), deployment, json, deadline)
     }
 
     /// `open` over any chain, for tests.
@@ -107,7 +120,7 @@ impl Ctx {
         deployment: Deployment,
         json: &CtxJson,
     ) -> Result<Self, FfiError> {
-        Self::assemble(chain, deployment, json, CALL_BUDGET)
+        Self::assemble(chain, deployment, json, json.deadline(CALL_BUDGET))
     }
 
     /// `with_chain` with another per-call budget, so tests need not wait 12 s.
@@ -118,21 +131,18 @@ impl Ctx {
         json: &CtxJson,
         budget: Duration,
     ) -> Result<Self, FfiError> {
-        Self::assemble(chain, deployment, json, budget)
+        Self::assemble(chain, deployment, json, json.deadline(budget))
     }
 
     fn assemble(
         chain: Box<dyn Chain>,
         deployment: Deployment,
         json: &CtxJson,
-        budget: Duration,
+        deadline: Instant,
     ) -> Result<Self, FfiError> {
-        let budget = json.budget_ms.map_or(budget, |ms| {
-            Duration::from_millis(ms.clamp(MIN_BUDGET_MS, MAX_BUDGET_MS))
-        });
         let chain: Box<dyn Chain> = Box::new(Deadline {
             inner: chain,
-            deadline: Instant::now() + budget,
+            deadline,
         });
         let config = json
             .config
@@ -202,7 +212,8 @@ impl Ctx {
     }
 }
 
-/// Refuses to start a read once the call's deadline has passed.
+/// Refuses to start a read once the call's deadline has passed (over any chain; `RpcChain` also cuts
+/// off a read that is still running at the deadline).
 struct Deadline {
     inner: Box<dyn Chain>,
     deadline: Instant,

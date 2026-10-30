@@ -9,7 +9,7 @@ The Auctions app puts the engine in Basecamp. It is built from three parts, all 
 | `apps/auctions` | `ui_qml` app: a C++ `.rep` backend that forwards to the core module, and QML on Logos.Theme and Logos.Controls (design system `88330d04`, ADR-054). Screens: Live, At-risk, Settled, System, Dev tools. Every interactive item has an `objectName`. | `auction_engine` through QtRO |
 
 Rules that hold across the three parts:
-- **No call blocks.** IPC calls time out at 20 s. Each FFI call has a 12 s deadline, each module call a 15 s budget, and scans are paged (ADR-052).
+- **No call blocks.** IPC calls time out at 20 s. Each module call has a 15 s budget; each FFI call gets a deadline from it (12 s by default) that no read starts, waits or runs past; and scans are paged (ADR-052).
 - **Confirmation is polled.** `submit` returns a `txId` at once, and the app polls `txStatus` every 2 s. ADR-042's nonce rule and per-signer lock files hold (ADR-053).
 - **Same numbers as the CLI.** Quotes, plans and facts come from `auction_sdk::ops` and `auction_sdk::views`, the functions the CLI prints from. The FFI parity tests and the story's UI = CLI checks pin this.
 

@@ -33,8 +33,8 @@ const SCHEDULE_SAMPLES: usize = 48;
 
 /// Largest `scan` page: 5 `getBlockRange` reads of `ScanSettings::default().batch` (100) blocks,
 /// plus the head, anchor and rewind reads. Each read has `READ_TIMEOUT` (5 s), so a healthy node
-/// answers a page well inside the 12 s call budget; a slow one is cut off by the deadline (no read
-/// starts after it), never by the 20 s IPC timeout. Private: cbindgen would export a `pub const`.
+/// answers a page well inside the call budget; a slow one is cut off by the deadline (no read starts
+/// or runs past it, ctx.rs), never by the 20 s IPC timeout. Private: cbindgen would export a `pub const`.
 const MAX_SCAN_PAGE_BLOCKS: u64 = 500;
 
 /// Every view name `dispatch` answers.

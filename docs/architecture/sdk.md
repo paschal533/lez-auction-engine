@@ -165,7 +165,7 @@ The FFI is a thin JSON layer over the SDK for the Basecamp core module ([basecam
 - **`view`.** The views and quotes call `views::*` and `quote::*`.
 - **`prepare`.** It maps each action to `ops::prepare_*` (ADR-055).
 - **`tx_begin`, `tx_poll`, `tx_end`.** These are `track_begin`, `poll_once` and `track_end` (ADR-053).
-- **`ctx`.** It loads the deployment file and verifies the config (I4), as the CLI does. It reads through `RpcChain::connect_with_timeout(url, 5 s)` under a 12 s per-call deadline (ADR-052).
+- **`ctx`.** It loads the deployment file and verifies the config (I4), as the CLI does. It reads through `RpcChain::connect_with_timeout(url, 5 s)` under a per-call deadline (12 s by default, `ctx.budget_ms` up to 15 s) that also caps each read's timeout and retry pause (ADR-052).
 - **Refusals.** Dev-only actions are refused off `localnet` and `testnet-legacy` (`ctx.require_dev`, kind `mismatch`). A lock path outside `<state_dir>/locks` is refused (R7).
 - **Safety.** `unsafe` appears only in the extern shims of `lib.rs`. Every call runs in `catch_unwind`.
 

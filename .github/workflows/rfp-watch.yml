@@ -1,0 +1,21 @@
+# Twice a day: has RFP-014 reopened, or has an auction/liquidation λPrize appeared? On a change, opens
+# one issue labelled rfp-watch (GitHub emails the owner). See scripts/rfp-watch.py.
+name: rfp-watch
+on:
+  schedule:
+    - cron: "7 6,18 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: rfp-watch
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/rfp-watch.py --alert
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -2,8 +2,7 @@
 //! literal → UTF-8 zero-padded to 32 bytes, account → 32-byte id, u64 → little-endian zero-padded,
 //! several seeds → SHA-256 of the concatenation.
 
-use auction_engine_params::seeds::combine_seeds;
-pub use auction_engine_params::seeds::{seed_from_str, u64_seed};
+pub use auction_engine_params::seeds::{combine_seeds, seed_from_str, u64_seed};
 use lee_core::{
     account::AccountId,
     program::{PdaSeed, ProgramId},

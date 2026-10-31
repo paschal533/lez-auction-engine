@@ -1,6 +1,6 @@
 # LEZ Auction Engine
 
-A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a proof of concept for RFP-014. It runs the auctions behind an over-collateralised stablecoin: collateral auctions for liquidated positions (descending discount, partial fills, keeper reward, no expiry), a surplus auction that sells protocol-buffer coin for a protocol token, and a debt auction that mints protocol tokens against unbacked debt. All decision logic lives in `auction_core`, a pure, `no_std`, dependency-free Rust crate that does not know about LEZ; the on-chain programs, SDK, CLI and GUI are thin layers over it (planned in Plans 2 to 4). The work targets LEZ v0.2.4 and SPEL `1ef0500f` ("Track B", ADR-001).
+A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a proof of concept for RFP-014. It runs the auctions behind an over-collateralised stablecoin: collateral auctions for liquidated positions (descending discount, partial fills, keeper reward, no expiry), a surplus auction that sells protocol-buffer coin for a protocol token, and a debt auction that mints protocol tokens against unbacked debt. All decision logic lives in `auction_core`, a pure, `no_std`, dependency-free Rust crate that does not know about LEZ; the on-chain programs, SDK, CLI and GUI are layers over it (Plans 2 to 4). The work targets LEZ v0.2.4 and SPEL `1ef0500f` ("Track B", ADR-001).
 
 ## Status
 
@@ -10,11 +10,11 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 - Real proofs (ADR-045): the local full suite passed at po2 19 (42 proofs, all verified). On `main`, the hosted `real-proof-push` job proved `settle_debt` (543 s, receipt verified) and the `RISC0_DEV_MODE=0` e2e demo passed; the self-hosted tier is off; `prove_ppe_observe_feed` never completed a run.
 - Reproducible guests (ADR-047): Docker builds, committed binaries and a manifest of ImageIDs, rebuilt and compared in CI.
 - [CYCLES.md](CYCLES.md): cycle baseline, transaction sizes and the 10 % regression gate (ADR-048).
-- [REQUIREMENTS.md](REQUIREMENTS.md): every hard requirement mapped to evidence, with a checker; rows without hosted evidence yet are marked PoC (partial).
+- [REQUIREMENTS.md](REQUIREMENTS.md): every hard requirement mapped to evidence, with a checker; rows whose evidence is a CI job that has not run on a hosted runner yet are marked PoC (partial).
 - [DEMO.md](DEMO.md): one-command demo, run locally in both sequencer modes (dev mode 1 and 0); the e2e workflow passed on a hosted runner (`RISC0_DEV_MODE=0`).
 - Red-team pass: [docs/security/redteam-2026-10.md](docs/security/redteam-2026-10.md), 0 Critical, 0 High, 0 Medium (6 Low and 6 Info, all off-chain).
-- [SUBMISSION.md](SUBMISSION.md): the submission index with linked hashes; the demo recording, upstream filings and hosted runs are pending.
-- Next: Plan 4 (FFI, module, thin GUI).
+- [SUBMISSION.md](SUBMISSION.md): the submission index with linked hashes; the terminal demo recording, upstream filings and the Plan 4 hosted runs are pending.
+- Plan 4 (FFI, core module, Auctions app in Basecamp): built on `feat/plan-4`, not yet pushed or merged.
 
 **Plan 3a complete: engine hardening, SDK and CLI.** See `docs/superpowers/plans/2026-10-09-plan-3a-engine-hardening-sdk-cli.md`.
 
@@ -27,7 +27,7 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 - Stablecoin hooks: the vendored stablecoin (lez-programs `64c01210`) gains `set_liquidation_engine`, `liquidate_position` and `engine_freeze_new_debt`, exported as a patch series for upstream (ADR-025) and guarded by Variant C, caller program id plus the bound engine-authority PDA (ADR-026, [hooks](docs/architecture/hooks.md)).
 - Engine: the `auction_engine` program, 17 instructions over `auction_core` (liquidation, bids, settlement, F5 surplus and F4 debt auctions, `check_solvency`), with config-seeded PDAs, optional-account slots, sweep rules, the measured chained-call budget and a second host instance (ADR-027 to ADR-036, [programs](docs/architecture/programs.md)). Threat model and security review: [THREAT_MODEL.md](THREAT_MODEL.md), [per-instruction checklist](docs/architecture/security-checklist.md).
 - Tests: handler unit tests (`auction_engine_program`), and `engine_integration_tests`, which runs the real token, stablecoin and engine guests in-process (hooks, config, liquidation, bids, settlement, system auctions, solvency, security and laundering attacks, account invariants, chain budgets, two instances). Run them with the WSL command under "Build and test the programs" below (`scripts/wsl-cargo.sh test -p engine_integration_tests`).
-- Next: Plan 3 (SDK, CLI, CI and real proofs), then Plan 4 (thin GUI).
+- Next: Plan 3 (SDK, CLI, CI and real proofs), then Plan 4 (FFI, core module, Auctions app in Basecamp; built on `feat/plan-4`, not yet pushed or merged).
 
 **Plan 1 complete: core + spikes.**
 
@@ -47,6 +47,21 @@ a price move and the freeze path with checks. Prerequisites: Linux or WSL Ubuntu
 On the author's machine (WSL, repository on `/mnt/c`) run it as `scripts/wsl-env.sh scripts/demo.sh`. Flags, a
 recorded run and the exit codes are in [DEMO.md](DEMO.md). The same scenario on the public v0.2.4 legacy testnet:
 `scripts/testnet-legacy.sh` ([testnet-legacy.md](docs/architecture/testnet-legacy.md)).
+
+## Basecamp app
+
+`apps/auctions` (a `ui_qml` app) and `modules/auction_engine` (its core module) put the engine in Basecamp. They
+sign through the `lez_core` 0.4.1 wallet module (`acf0cd50`). To install them as `.lgx` packages into a clean
+Basecamp profile and run the whole demo as UI actions in the full Basecamp (WSL, Nix):
+
+```bash
+scripts/basecamp/install-lgx.sh /tmp/auctions-profile --setup --test apps/auctions/tests/story.mjs
+```
+
+Without `--test`, Basecamp stays open on a fresh localnet. `scripts/basecamp/run-app.sh` runs the app in
+Basecamp's standalone mode for development. A profile with a newer `lez_core` (0.5.x, from Basecamp's catalogue)
+is unsupported. Details, pins and recorded runs: [docs/architecture/basecamp-app.md](docs/architecture/basecamp-app.md);
+the GUI run in [DEMO.md](DEMO.md#gui-run-basecamp).
 
 ## Run the tests
 

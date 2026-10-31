@@ -1,0 +1,26 @@
+{
+  "name": "auctions",
+  "display_name": "Auctions",
+  "version": "0.1.0",
+  "type": "ui_qml",
+  "category": "auctions",
+  "description": "Liquidation auctions on the Logos Execution Zone: watch, bid, and run the demo from Basecamp.",
+  "author": "paschal533",
+  "main": "auctions_plugin",
+  "view": "qml/Main.qml",
+  "icon": "icons/auctions.png",
+  "dependencies": ["lez_core", "auction_engine"],
+  "nix": {
+    "packages": {
+      "build": ["pkg-config"],
+      "runtime": ["qt6.qtdeclarative", "zstd", "krb5", "abseil-cpp", "libbase58"]
+    },
+    "external_libraries": [],
+    "cmake": {
+      "find_packages": [],
+      "extra_sources": [],
+      "extra_include_dirs": [],
+      "extra_link_libraries": []
+    }
+  }
+}

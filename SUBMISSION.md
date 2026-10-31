@@ -2,8 +2,9 @@
 
 Repository: this repository, at the commit tagged `rfp014-poc`. The tag does not exist yet: the author creates
 it at submission (`git rev-parse rfp014-poc` then gives the full hash). `scripts/submission-hashes.sh`
-reproduces every hash below from that commit. Links to the files and commit are added once the `rfp014-poc`
-tag exists (added by the author once the `rfp014-poc` tag exists). The work is on `main` (Plan 3b merged by fast-forward on 2026-10-17).
+reproduces every hash below from that commit. The author adds links to the files and commit once the tag exists.
+The work is on `main` (Plan 3b merged by fast-forward on 2026-10-17).
+Plan 4 (the Basecamp app) is on the branch `feat/plan-4`, pushed but not merged to `main` yet.
 
 ## What is built
 - Engine, stablecoin hooks, F4 debt auction and F5 surplus auction with a mock protocol token
@@ -11,22 +12,45 @@ tag exists (added by the author once the `rfp014-poc` tag exists). The work is o
 - `auction_sdk` and `auction-cli` with their own enum-index encoders (`docs/architecture/sdk.md`, `cli/README.md`).
 - CI workflows: core, programs, IDL drift, hook patches, coverage, requirements; real-proof tiers (ADR-045);
   reproducible guests (ADR-047); fuzzing; and a localnet end-to-end workflow whose `RISC0_DEV_MODE=0` job runs
-  the demo (`docs/architecture/ci.md`). The core and guests workflows have run green on hosted runners (guests: runs 38558398627 at 0dec410 and
-  38982905129 at 863f0fb, the Docker rebuild equal to the committed manifest, which is the cross-machine
-  reproducibility evidence for ADR-047); the others are pending (see Honest notes).
+  the demo (`docs/architecture/ci.md`). The core, guests, real-proofs (push tier, `real-proof-push`) and e2e (`localnet-e2e`) workflows have run
+  green on hosted runners: on `main` at 5c77daa, `core` 39017229894, `guests` 39017229906, `real-proofs`
+  39017229866 and `e2e` 39017229879 (guests also 38558398627 at 0dec410 and 38982905129 at 863f0fb, the
+  Docker rebuild equal to the committed manifest, which is the cross-machine reproducibility evidence for
+  ADR-047). The scheduled jobs (`fuzz-nightly`, the self-hosted `real-proof-nightly`, the both-modes e2e run)
+  have not run yet (see Honest notes).
 - Requirements map: `REQUIREMENTS.md`. Threat model and red-team pass: `THREAT_MODEL.md`,
   `docs/security/redteam-2026-10.md`. Cycles: `CYCLES.md`. Real proofs: `docs/architecture/real-proofs.md`,
   `docs/evidence/real-proofs-2026-10.md`.
+- Basecamp app (Plan 4, `docs/architecture/basecamp-app.md`):
+  - `crates/auction_ffi`: a C ABI over the SDK with seven symbols and generic `view` / `prepare` (ADR-055).
+  - `modules/auction_engine`: a Basecamp core module. Reads stay in Rust; signing and submission go through
+    `lez_core` 0.4.1 (ADR-052); confirmation is a polled `txStatus` (ADR-053).
+  - `apps/auctions`: the Auctions app, with the Live, At-risk, Settled, System and Dev tools screens. It is
+    tested against design system `88330d04` (ADR-054).
+  - `apps/auctions/tests/story.mjs` drives the whole demo as 172 steps (101 UI actions and 71 waits). It passed in Basecamp `e09962f5`
+    in standalone mode (992 s) and installed as `.lgx` packages in a clean profile of the full Basecamp
+    (1261 s). Every ADR-051 figure equalled `auction-cli` on the same state: six are read from the screen,
+    and the protocol-token check compares the CLI balance before plus the on-screen quote with the CLI
+    balance after.
 
 ## Reproduce
 `DEMO.md`: `scripts/bootstrap-lez.sh` once, then `scripts/demo.sh` (about 16 minutes: 971 s measured, warm
 build, dev-mode sequencer; 973 s with `--sequencer-dev-mode 0`). Deviation from spec §1.1: the prerequisites
-are documented for Ubuntu (apt, rustup, rzup) instead of a Nix flake. It has been run on Ubuntu 24.04 under WSL
-only; no hosted-runner run has happened yet.
+are documented for Ubuntu (apt, rustup, rzup) instead of a Nix flake. It has been run on Ubuntu 24.04 under WSL.
+It ran on a hosted runner in `RISC0_DEV_MODE=0` (localnet-e2e, run 39017229879 at 5c77daa).
+
+GUI run (`DEMO.md`, "GUI run (Basecamp)"; WSL with Nix, at least 10 GB free on C:):
+`scripts/basecamp/install-lgx.sh /tmp/auctions-profile --setup --test apps/auctions/tests/story.mjs`.
 
 ## Demo recording
-Not recorded yet. To be recorded by the author (not AI-narrated); the link is added by the author at
-submission. No recording exists in this repository.
+Terminal demo: not recorded yet. The author records it (not AI-narrated) and adds the link at submission.
+No recording exists in this repository.
+
+Basecamp app: a scripted screen recording of the whole story is at
+`C:\Users\user\Videos\rfp014-demo\basecamp.mp4` (333.0 s, 9,021,687 bytes,
+SHA-256 `2b686a8621ba691df02aa1e24f0fb67094b0691c4ecf6191c362a649cba2389f`), made with `scripts/record/record-story.ps1`.
+The video is not committed. Its end was trimmed by hand and its cards run about 2 s late; see
+[docs/architecture/basecamp-app.md](docs/architecture/basecamp-app.md#recording).
 
 ## Hashes
 Generated by `scripts/submission-hashes.sh`; rerun it to verify.
@@ -50,13 +74,14 @@ Generated by `scripts/submission-hashes.sh`; rerun it to verify.
 - 0004-fix-stablecoin-round-the-proportional-seize-bound-do.patch: sha256 `a65c6e22d9b73b2126f33ab0f01ffcbaa3ddb1ce6af161081b5bb31852c6d41e`
 
 ## Evidence files
-- REQUIREMENTS.md: sha256 `cccd9a53f4b9af2aa8be39e57a4b34e1fc740384e356dffee701a4f7fa07e6bf`
+- REQUIREMENTS.md: sha256 `4446389b0711cee84f4639fee29335d1b2f56df99d1c33e4961902d23c9c03e8`
 - CYCLES.md: sha256 `66845470e5156378cfda0fda7e200d630b01c98a662a35b9bf27af17e8bbcbfc`
 - cycles/baseline.json: sha256 `2ba4bdff260fa849bb132a6a38835727fe5c2ba583d40540eeadc7940d15fdc8`
-- DEMO.md: sha256 `2e274c35f5ef969745a64aad331bb562a7d7ea82933259efe75b11b51c437736`
+- DEMO.md: sha256 `da9aee7fe3173748a794c3e70be91a6836a9fab969e9067f4e5bab348b4fd0f8`
 - THREAT_MODEL.md: sha256 `4dcbb6b06052e7d53ae5531f65c3882d277e9f4b3e442dd0d635bb5700895ee5`
 - docs/security/redteam-2026-10.md: sha256 `e7bdc5c9ed2243e53e29b8daae91b91a9862f7cbc8f868d9ae524dad4450bbdf`
 - docs/architecture/real-proofs.md: sha256 `83d726ab02158c282f38fc55099f8763f5f2b815b7cce3a2314f5823ac801c36`
+- docs/architecture/basecamp-app.md: sha256 `533d48d5bd3e456334ac9f7be8002cd61443c460d9590197f73b9d92aa3c9388`
 - docs/evidence/real-proofs-2026-10.md: sha256 `5b5c2851c9560081a21d95d7653d27acad502908cdc07a9ca7e14a802d5f7912`
 
 ## Honest notes
@@ -85,5 +110,22 @@ Generated by `scripts/submission-hashes.sh`; rerun it to verify.
   `docs/v03-port-plan.md`).
 - Upstream drafts, none filed, offered or posted: `docs/outreach/2026-10-13-*.md` (two issues, the hook pull
   request, a status note). The author decides what to send.
+- Basecamp app (Plan 4):
+  - CI: green on hosted runners on `feat/plan-4` at be82e74: `core` 41172947093 (core, programs, coverage, idl-drift, hook-patches, requirements) and `basecamp-module` 41172947166 (51 module tests, 182 QML tests). Not yet run on `main`, since the branch is not merged.
+  - The story e2e runs locally by design, not in CI (spec, designer's call 6).
+  - Known limits:
+    - "Publish anyway" (Dev tools, an out-of-range price) always ends in the engine's refusal. The engine checks
+      the price before anything is signed, so nothing is sent (R46). The board implies the collateral would
+      pause.
+    - Settle debt after F1–F3: nothing is unbacked, so the quote reads 0 and the button stays disabled. The CLI
+      script sends a no-op `settle-debt` at that point; the story checks the 0 instead (R44).
+    - The story's check "protocol tokens minted > 9800" compares the taker's protocol balance before (9800) and
+      after (13050) the debt take. The amount minted is 3250 (R45).
+    - The lez_core version guard (`install-lgx.sh`, exit 4 for anything but 0.4.1) checks the profile only at
+      install time. A newer catalogue `lez_core` (0.5.x) accepted later from Basecamp's Package Manager is
+      unsupported and not caught (design call 3).
+    - Lists from the backend reach QML as array-likes, not JS arrays; `Format.list` converts them at every list
+      boundary (R43). The QML tests' stubs pass real arrays, so apart from the live story only
+      `tst_format` and `tst_main` exercise the array-like path.
 - The hashes above are of the working tree when `scripts/submission-hashes.sh` was run; rerun the script after
   any later change to a hashed file.

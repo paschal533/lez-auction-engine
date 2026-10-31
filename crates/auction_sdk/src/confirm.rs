@@ -76,6 +76,18 @@ fn signer_nonce<C: Chain + ?Sized>(chain: &C, signer: &AccountId) -> SdkResult<u
         .ok_or_else(|| SdkError::Chain(format!("the node returned no nonce for {signer}")))
 }
 
+/// The one-step decision shared by `confirm` and `poll_once`, from a height read followed by a nonce
+/// read: the nonce moved -> Included; else the drop window ended -> Dropped; else no verdict yet.
+fn verdict(height: u64, nonce: u128, n0: u128, h0: u64, s: &ConfirmSettings) -> Option<Outcome> {
+    if nonce > n0 {
+        return Some(Outcome::Included { nonce_after: nonce });
+    }
+    if height >= h0.saturating_add(s.drop_after_blocks) {
+        return Some(Outcome::Dropped { height });
+    }
+    None
+}
+
 pub fn confirm<C: Chain + ?Sized>(
     chain: &C,
     signer: &AccountId,
@@ -110,11 +122,8 @@ pub fn confirm<C: Chain + ?Sized>(
             }
             Err(e) => return Err(e),
         };
-        if nonce > n0 {
-            return Ok(Outcome::Included { nonce_after: nonce });
-        }
-        if height >= h0.saturating_add(s.drop_after_blocks) {
-            return Ok(Outcome::Dropped { height });
+        if let Some(outcome) = verdict(height, nonce, n0, h0, s) {
+            return Ok(outcome);
         }
         sleep(s.poll_interval);
     }
@@ -364,10 +373,16 @@ impl Drop for InFlightLock {
         // briefly have two transactions in flight, and the loser fails on the nonce). A lock that
         // cannot be removed is recognised as resolved by the next `acquire`, so ignoring that error
         // loses nothing.
-        if let Ok(Some(Found::Record(r))) = read_lock(&self.path) {
-            if r.owner == self.owner {
-                let _ = fs::remove_file(&self.path);
-            }
+        remove_lock_if(&self.path, |r| r.owner == self.owner);
+    }
+}
+
+/// Removes the lock at `path` only when it holds a record for which `owned` is true; a missing,
+/// torn or foreign lock is left alone. A removal error is ignored (see `Drop for InFlightLock`).
+fn remove_lock_if(path: &Path, owned: impl Fn(&LockRecord) -> bool) {
+    if let Ok(Some(Found::Record(r))) = read_lock(path) {
+        if owned(&r) {
+            let _ = fs::remove_file(path);
         }
     }
 }
@@ -430,6 +445,106 @@ fn lock_with_current_baseline<C: Chain + ?Sized>(
             .to_string(),
         blocks: s.drop_after_blocks,
     })
+}
+
+/// A transaction tracked across separate calls (the FFI is stateless between them). The lock file at
+/// `lock_path` stays on disk from `track_begin` until `track_end`. Crosses the FFI as JSON: the signer
+/// as its base58 string, `nonce_before` as a decimal string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tracking {
+    #[serde(with = "signer_text")]
+    pub signer: AccountId,
+    #[serde(with = "u128_text")]
+    pub nonce_before: u128,
+    pub height_before: u64,
+    pub lock_path: PathBuf,
+    /// Identity of the lock this tracking took, so `track_end` never removes another process's lock.
+    pub owner: String,
+}
+
+mod signer_text {
+    use lee_core::account::AccountId;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &AccountId, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(v)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<AccountId, D::Error> {
+        String::deserialize(d)?
+            .parse::<AccountId>()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+mod u128_text {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &u128, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(v)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u128, D::Error> {
+        String::deserialize(d)?
+            .parse::<u128>()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Poll {
+    Pending { blocks_waited: u64 },
+    Done(Outcome),
+}
+
+/// Takes the signer's in-flight lock with a current baseline and leaves it on disk (the caller
+/// finishes with `track_end`). Fails with `InFlight` while another transaction of the signer is.
+pub fn track_begin<C: Chain + ?Sized>(
+    chain: &C,
+    signer: &AccountId,
+    lock_dir: &Path,
+    s: &ConfirmSettings,
+) -> SdkResult<Tracking> {
+    let (mut lock, nonces, h0) =
+        lock_with_current_baseline(chain, std::slice::from_ref(signer), lock_dir, s)?;
+    lock.set_keep_on_drop(true);
+    Ok(Tracking {
+        signer: *signer,
+        nonce_before: nonces[0].0,
+        height_before: h0,
+        lock_path: lock.path().to_path_buf(),
+        owner: lock.owner().to_owned(),
+    })
+}
+
+/// One confirmation step: reads the height, then the nonce (same order and rules as `confirm`).
+/// Read errors are returned as they are; the caller decides how many to tolerate.
+pub fn poll_once<C: Chain + ?Sized>(
+    chain: &C,
+    t: &Tracking,
+    s: &ConfirmSettings,
+) -> SdkResult<Poll> {
+    let height = chain.last_block_id()?;
+    let nonce = signer_nonce(chain, &t.signer)?;
+    Ok(
+        match verdict(height, nonce, t.nonce_before, t.height_before, s) {
+            Some(outcome) => Poll::Done(outcome),
+            None => Poll::Pending {
+                blocks_waited: height.saturating_sub(t.height_before),
+            },
+        },
+    )
+}
+
+/// Ends a tracking. A definite outcome (`Included` or `Dropped`) removes the lock, if it is still the
+/// one this tracking took; `None` (outcome unknown) keeps it for the chain-fact staleness rule.
+pub fn track_end(t: &Tracking, outcome: Option<&Outcome>) -> SdkResult<()> {
+    if outcome.is_some() {
+        remove_lock_if(&t.lock_path, |r| {
+            r.owner == t.owner && r.nonce == t.nonce_before && r.height == t.height_before
+        });
+    }
+    Ok(())
 }
 
 pub fn submit<C: Chain + ?Sized>(

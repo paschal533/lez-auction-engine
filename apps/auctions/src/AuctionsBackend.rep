@@ -1,0 +1,35 @@
+// QtRO view contract of the Auctions app. PROPs sync to every QML replica; SLOTs are the async
+// surface QML calls through logos.watch(...). u128 values cross as decimal strings.
+class AuctionsBackend
+{
+    // Network named by the deployment ("localnet", "testnet-legacy", ...); empty until configured.
+    PROP(QString network READONLY)
+    // True only on a dev network whose block 1 matches the deployment's genesis hash (Dev tools tab).
+    PROP(bool devNetwork READONLY)
+    PROP(bool walletOpen READONLY)
+    // Label of the account that signs; empty until one is chosen. Writable from QML: repc would clash
+    // with a setActiveAccount SLOT (the property setter has the same signature), and the generated
+    // replica setter, backend.setActiveAccount(label), gives the view the same call.
+    PROP(QString activeAccount READWRITE)
+    PROP(int blockHeight READONLY)
+    // False once a read fails with kind `chain` (node or RPC not answering); true again on the next good
+    // 5 s heartbeat (auction_engine blockHeight).
+    PROP(bool nodeReachable READONLY)
+    // The last error a slot or the startup sequence reported; empty when none.
+    PROP(QString lastError READONLY)
+
+    // Stores the request context on the engine; returns the deployment view or {error, kind}.
+    SLOT(QVariantMap configure(QString deployment, QString stateDir, QString walletHome))
+    // Plans and sends step 0 of a request; returns {txId, hash, what, step, steps, tracking} or {error, kind}.
+    SLOT(QVariantMap submit(QVariantMap request))
+    // Polls a submitted transaction; returns {state, ...} or {error, kind}.
+    SLOT(QVariantMap txStatus(QString txId))
+    // Reads a screen's data: any auction_engine view ({view, ...}); returns its JSON or {error, kind}.
+    SLOT(QVariantMap view(QVariantMap request))
+    // One page of the auction scan ({max_blocks?}); returns {scanned_to, head, done, restarted, note} or
+    // {error, kind}. The caller asks for the next page after this one answers, until done.
+    SLOT(QVariantMap rescan(QVariantMap request))
+    // The account picker rows {label, id, role, stable_balance, coll_balance, holding}; a failure is the
+    // only row, [{error, kind}].
+    SLOT(QVariantList accounts())
+}

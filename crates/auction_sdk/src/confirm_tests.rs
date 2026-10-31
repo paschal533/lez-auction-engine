@@ -715,3 +715,114 @@ fn poll_errors_beyond_the_limit_are_unconfirmed_and_keep_the_lock() {
     assert_eq!(fx.chain.sent().len(), 1, "never resent");
     assert!(dir.path().join(format!("{}.lock", id(k::CALLER))).exists());
 }
+
+/// A fixture chain whose tip the test moves by hand.
+struct AtHeight<'a>(&'a crate::testing::FixtureChain, std::cell::Cell<u64>);
+
+impl Chain for AtHeight<'_> {
+    fn account(&self, i: &AccountId) -> SdkResult<lee_core::account::Account> {
+        self.0.account(i)
+    }
+    fn nonces(&self, ids: &[AccountId]) -> SdkResult<Vec<lee_core::account::Nonce>> {
+        self.0.nonces(ids)
+    }
+    fn last_block_id(&self) -> SdkResult<u64> {
+        Ok(self.1.get())
+    }
+    fn blocks(&self, a: u64, b: u64) -> SdkResult<Vec<crate::chain::BlockSummary>> {
+        self.0.blocks(a, b)
+    }
+    fn send(&self, tx: &lee::PublicTransaction) -> SdkResult<[u8; 32]> {
+        self.0.send(tx)
+    }
+}
+
+#[test]
+fn poll_once_is_pending_until_the_nonce_moves() {
+    let fx = standard::standard();
+    let chain = AtHeight(&fx.chain, std::cell::Cell::new(10));
+    let dir = tempfile::tempdir().expect("tmp");
+    let t = track_begin(&chain, &id(k::CALLER), dir.path(), &fast()).expect("begin");
+    assert_eq!((t.nonce_before, t.height_before), (0, 10));
+    chain.1.set(11);
+    assert_eq!(
+        poll_once(&chain, &t, &fast()).expect("poll"),
+        Poll::Pending { blocks_waited: 1 }
+    );
+    fx.chain.set_nonce(id(k::CALLER), 1);
+    assert_eq!(
+        poll_once(&chain, &t, &fast()).expect("poll"),
+        Poll::Done(Outcome::Included { nonce_after: 1 })
+    );
+}
+
+#[test]
+fn poll_once_reports_dropped_after_the_window() {
+    let fx = standard::standard();
+    let chain = AtHeight(&fx.chain, std::cell::Cell::new(10));
+    let dir = tempfile::tempdir().expect("tmp");
+    let s = ConfirmSettings {
+        drop_after_blocks: 5,
+        ..fast()
+    };
+    let t = track_begin(&chain, &id(k::CALLER), dir.path(), &s).expect("begin");
+    chain.1.set(14);
+    assert_eq!(
+        poll_once(&chain, &t, &s).expect("poll"),
+        Poll::Pending { blocks_waited: 4 }
+    );
+    chain.1.set(16);
+    assert_eq!(
+        poll_once(&chain, &t, &s).expect("poll"),
+        Poll::Done(Outcome::Dropped { height: 16 })
+    );
+}
+
+#[test]
+fn track_begin_twice_for_one_signer_is_in_flight() {
+    let fx = standard::standard();
+    let dir = tempfile::tempdir().expect("tmp");
+    let first = track_begin(&fx.chain, &id(k::CALLER), dir.path(), &fast()).expect("first");
+    assert!(first.lock_path.exists(), "the lock outlives the call");
+    let e = track_begin(&fx.chain, &id(k::CALLER), dir.path(), &fast()).expect_err("in flight");
+    assert!(matches!(e, SdkError::InFlight { .. }));
+}
+
+#[test]
+fn track_end_with_unknown_outcome_keeps_the_lock() {
+    let fx = standard::standard();
+    let dir = tempfile::tempdir().expect("tmp");
+    let t = track_begin(&fx.chain, &id(k::CALLER), dir.path(), &fast()).expect("begin");
+    track_end(&t, None).expect("end");
+    assert!(t.lock_path.exists(), "unknown outcome keeps the lock");
+    track_end(&t, Some(&Outcome::Dropped { height: 99 })).expect("end");
+    assert!(!t.lock_path.exists(), "a definite outcome releases it");
+}
+
+#[test]
+fn track_end_leaves_a_lock_another_owner_took_over() {
+    let fx = standard::standard();
+    let dir = tempfile::tempdir().expect("tmp");
+    let t = track_begin(&fx.chain, &id(k::CALLER), dir.path(), &fast()).expect("begin");
+    let foreign = LockRecord {
+        nonce: t.nonce_before,
+        height: t.height_before,
+        owner: "someone-else".into(),
+    };
+    fs::write(&t.lock_path, serde_json::to_string(&foreign).expect("json")).expect("write");
+    track_end(&t, Some(&Outcome::Included { nonce_after: 1 })).expect("end");
+    assert_eq!(read_record(&t.lock_path), foreign, "not ours: untouched");
+}
+
+#[test]
+fn tracking_round_trips_as_json_with_decimal_strings() {
+    let fx = standard::standard();
+    let dir = tempfile::tempdir().expect("tmp");
+    let mut t = track_begin(&fx.chain, &id(k::CALLER), dir.path(), &fast()).expect("begin");
+    t.nonce_before = u128::MAX;
+    let json = serde_json::to_value(&t).expect("json");
+    assert_eq!(json["nonce_before"], u128::MAX.to_string());
+    assert_eq!(json["signer"], id(k::CALLER).to_string());
+    let back: Tracking = serde_json::from_value(json).expect("back");
+    assert_eq!(back, t);
+}

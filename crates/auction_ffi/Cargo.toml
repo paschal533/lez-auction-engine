@@ -1,0 +1,35 @@
+[package]
+name = "auction_ffi"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "C ABI of the auction engine for the Basecamp core module: JSON in, JSON out, never signs."
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# `Ctx::with_chain`, so tests can run against `auction_sdk::testing::FixtureChain` without a node.
+testing = ["auction_sdk/testing"]
+
+[dependencies]
+auction_sdk = { workspace = true, features = ["rpc"] }
+# `feed::redemption_price`, the R the `quote_price` view reports (the engine's own function).
+auction_engine_program = { workspace = true }
+lee_core = { workspace = true }
+lee = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = "0.4"
+
+[build-dependencies]
+cbindgen = { version = "0.28", default-features = false }
+
+[dev-dependencies]
+# Self dependency: turns `testing` on for this crate's own integration tests under a plain `cargo test -p auction_ffi`.
+auction_ffi = { path = ".", features = ["testing"] }
+# Parity tests format with the CLI's own printers (`output::bps`, `yes_no`).
+auction_cli = { workspace = true }
+tempfile = "3"

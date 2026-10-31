@@ -7,12 +7,19 @@
 //! Every request has an overall timeout (the HTTP client has no separate connect timeout, so it also
 //! bounds the connect). Idempotent reads are retried a bounded number of times with backoff on a
 //! transient failure (transport error, timeout, unparsable reply: [`ReadRetry`]); a definite
-//! JSON-RPC error is not retried, and `send` is never retried (a resend could act twice).
+//! JSON-RPC error is not retried, and `send` is never retried (a resend could act twice). An
+//! optional deadline ([`RpcChain::with_deadline`]) caps each read's timeout and retry pause at the
+//! time left: no read starts, waits or runs past it.
 //!
 //! `send` error mapping (see `docs/architecture/sdk.md`): only a definite rejection or a request that
 //! provably never left is a plain `SdkError::Chain`; every other failure is `SdkError::SendUncertain`.
 
-use std::{error::Error as StdError, future::Future, io, time::Duration};
+use std::{
+    error::Error as StdError,
+    future::Future,
+    io,
+    time::{Duration, Instant},
+};
 
 use common::{block::Block, transaction::LeeTransaction};
 use lee::PublicTransaction;
@@ -41,6 +48,8 @@ const MAX_TX_BYTES: usize = 1024 * 1024;
 const JSONRPC_INVALID_PARAMS: i32 = -32602;
 /// Longest server-provided text copied into an error message.
 const MAX_MESSAGE_CHARS: usize = 200;
+/// Why a read stopped at the deadline (`with_deadline`).
+const OUT_OF_TIME: &str = "the call's time budget ran out before the node answered";
 
 /// Bounded retry of idempotent reads: `attempts` tries in all, the pause before retry `n` being
 /// `first_delay * 2^(n-1)`. Never applied to `send`.
@@ -110,6 +119,7 @@ pub struct RpcChain {
     rt: tokio::runtime::Runtime,
     url: String,
     retry: ReadRetry,
+    deadline: Option<Instant>,
 }
 
 impl std::fmt::Debug for RpcChain {
@@ -143,6 +153,7 @@ impl RpcChain {
             rt,
             url: url.to_owned(),
             retry: ReadRetry::DEFAULT,
+            deadline: None,
         })
     }
 
@@ -152,17 +163,60 @@ impl RpcChain {
         Self { retry, ..self }
     }
 
-    /// One idempotent read, retried per `self.retry`. `make` builds a fresh request each try.
+    /// Sets the deadline of every later read: each try's timeout is capped at the time left, a retry
+    /// whose pause would end at or after it is not made, and no read starts once it has passed.
+    /// `send` only checks that the deadline has not passed (it is never retried).
+    #[must_use]
+    pub fn with_deadline(self, deadline: Instant) -> Self {
+        Self {
+            deadline: Some(deadline),
+            ..self
+        }
+    }
+
+    /// The time left before the deadline (`None`: no deadline).
+    fn time_left(&self) -> Option<Duration> {
+        self.deadline
+            .map(|d| d.saturating_duration_since(Instant::now()))
+    }
+
+    fn out_of_time(&self) -> bool {
+        self.time_left() == Some(Duration::ZERO)
+    }
+
+    /// One idempotent read, retried per `self.retry` within the deadline. `make` builds a fresh
+    /// request each try.
     fn call<T, F, Fut>(&self, what: &str, make: F) -> SdkResult<T>
     where
         F: Fn() -> Fut,
         Fut: Future<Output = Result<T, ClientError>>,
     {
         ensure_no_runtime()?;
+        if self.out_of_time() {
+            return Err(SdkError::Chain(format!(
+                "{what} at {}: {OUT_OF_TIME}",
+                self.url
+            )));
+        }
         let tries = std::cell::Cell::new(0u32);
-        retry_read(&self.retry, transient, &std::thread::sleep, || {
+        // A retry is made only if its pause ends before the deadline.
+        let retry_fits = |e: &ClientError| {
+            transient(e)
+                && self
+                    .time_left()
+                    .is_none_or(|left| self.retry.delay_before(tries.get()) < left)
+        };
+        retry_read(&self.retry, retry_fits, &std::thread::sleep, || {
             tries.set(tries.get() + 1);
-            self.rt.block_on(make())
+            match self.time_left() {
+                None => self.rt.block_on(make()),
+                Some(Duration::ZERO) => Err(ClientError::RequestTimeout),
+                Some(left) => self.rt.block_on(async {
+                    tokio::time::timeout(left, make())
+                        .await
+                        .unwrap_or(Err(ClientError::RequestTimeout))
+                }),
+            }
         })
         .map_err(|e| {
             let after = if tries.get() > 1 {
@@ -170,8 +224,13 @@ impl RpcChain {
             } else {
                 String::new()
             };
+            let cut = if self.out_of_time() {
+                format!(" ({OUT_OF_TIME})")
+            } else {
+                String::new()
+            };
             SdkError::Chain(format!(
-                "{what} at {}: {}{after}",
+                "{what} at {}: {}{after}{cut}",
                 self.url,
                 truncated(&e.to_string())
             ))
@@ -308,6 +367,12 @@ impl Chain for RpcChain {
     fn send(&self, tx: &PublicTransaction) -> SdkResult<[u8; 32]> {
         // Pre-send, so a definite error is correct.
         ensure_no_runtime()?;
+        if self.out_of_time() {
+            return Err(SdkError::Chain(format!(
+                "sendTransaction at {}: {OUT_OF_TIME}",
+                self.url
+            )));
+        }
         let wire = LeeTransaction::Public(tx.clone());
         let size = borsh::to_vec(&wire)
             .map_err(|e| SdkError::Encode(format!("transaction serialisation: {e}")))?

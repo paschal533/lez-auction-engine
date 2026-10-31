@@ -18,10 +18,12 @@ done
 echo '{}' > "$tmp/deps/lez/lez/sequencer/service/configs/debug/sequencer_config.json"
 echo '{}' > "$tmp/deps/lez/lez/wallet/configs/debug/wallet_config.json"
 stub() { printf '#!/bin/sh\n%s\n' "$2" > "$tmp/bin/$1"; chmod +x "$tmp/bin/$1"; }
+# DEMO_ARGS: extra scripts/demo.sh flags for the next case (default none).
 run_case() {
   local name="$1" want="$2" text="$3" out got
   shift 3
-  out="$(env "$@" "$repo/scripts/demo.sh" --preflight-only 2>&1)"
+  # shellcheck disable=SC2086
+  out="$(env "$@" "$repo/scripts/demo.sh" ${DEMO_ARGS:-} --preflight-only 2>&1)"
   got=$?
   if [[ "$got" != "$want" || "$out" != *"$text"* ]]; then
     echo "FAIL $name: exit $got (want $want), output: $out"
@@ -34,6 +36,10 @@ stub df "echo Avail; echo $kib_100g"
 stub ss 'exit 0'
 base=(PATH="$tmp/bin:$PATH" LEZ_DEPS="$tmp/deps" DEMO_RUN_DIR="$tmp/run")
 run_case clean 0 "preflight ok" "${base[@]}"
+# --setup-only (scripts/basecamp/run-app.sh) goes through the same preflight; a bad flag value is refused.
+DEMO_ARGS="--setup-only --sequencer-dev-mode 1" run_case setup_only 0 "preflight ok" "${base[@]}"
+DEMO_ARGS="--setup-only --sequencer-dev-mode 2" run_case setup_only_bad_mode 2 "takes 0 or 1" "${base[@]}"
+DEMO_ARGS="--setup" run_case unknown_flag_usage 2 "[--setup-only]" "${base[@]}"
 stub df "echo Avail; echo $kib_2g"
 run_case low_disk 3 "STOP" "${base[@]}"
 stub df "echo Avail; echo $kib_100g"

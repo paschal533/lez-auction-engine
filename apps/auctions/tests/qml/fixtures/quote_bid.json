@@ -1,0 +1,19 @@
+{
+  "auction": "7PyXEX3xzSS2Poxhg7NtWTkRGsNRnZJNFFQP8bHJb5Eo",
+  "charged": "100000",
+  "coin_in_max": "100000",
+  "collateral_left": "475000",
+  "collateral_out": "51963",
+  "debt_part": "100000",
+  "discount_ray": "37777777777777777777777777",
+  "ends_auction": false,
+  "instruction": "bid",
+  "min_out": "51703",
+  "now_ms": 1700000000000,
+  "penalty_part": "0",
+  "price_ray": "500000000000000000000000000",
+  "redemption_ray": "500000000000000000000000000",
+  "remaining_target": "660000",
+  "slippage_bps": 50,
+  "t_eff_ms": 600000
+}

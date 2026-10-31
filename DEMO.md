@@ -67,6 +67,89 @@ Parameters: `cli/params/demo-engine.json`, `cli/params/demo-collateral.json` (th
 `band_hi_bps` of 20_000, a debt lot and freeze threshold of 5_000; ADR-051). The same economics run in-process in
 `programs/integration_tests/tests/demo_scenario.rs`.
 
+## GUI run (Basecamp)
+
+The same scenario runs as UI actions in the Auctions app inside Basecamp. It needs Nix inside WSL and the
+prerequisites above, with at least 10 GB free on `C:`. Install the app as `.lgx` packages into a fresh profile
+and run the story in the full Basecamp:
+
+    scripts/basecamp/install-lgx.sh /tmp/auctions-profile --setup --test apps/auctions/tests/story.mjs
+
+This builds lez_core 0.4.1, `auction_engine` and `auctions` as `.lgx` packages and installs them with `lgpm`,
+core modules first. It then sets up a fresh localnet (`demo.sh --setup-only`), starts Basecamp with
+`--user-dir /tmp/auctions-profile`, opens Auctions from the sidebar and drives all 172 steps. The figures on
+screen are checked against the table above and against `auction-cli`.
+
+Options:
+- Leave out `--test …` to keep Basecamp and the sequencer running and click through by hand.
+- Use `--install-only` to stop after the install.
+- Use `scripts/basecamp/run-app.sh --setup --test apps/auctions/tests/story.mjs` for the standalone-mode
+  variant, used while developing the app.
+
+A profile with a lez_core newer than 0.4.1, for example one taken from Basecamp's catalogue, is unsupported
+(exit 4). Use a fresh profile and do not accept a lez_core upgrade there. Details and the recorded run (1261 s
+in total, 329 s for the story): [docs/architecture/basecamp-app.md](docs/architecture/basecamp-app.md).
+
+### Re-recording the GUI run (Windows host, WSLg)
+
+`scripts/record/record-story.ps1` records the standalone-mode story to an mp4. Run it from Windows PowerShell.
+You need on the Windows PATH:
+- ffmpeg 7 or later (the script passes its filter with `-/vf`), with libx264 and drawtext, e.g. the gyan.dev
+  build from winget;
+- Python 3.
+
+The WSL distribution is `-Distro`, default `Ubuntu-20.04`.
+
+    powershell -File scripts\record\record-story.ps1 -Out C:\Users\user\Videos\rfp014-demo\basecamp.mp4
+
+It runs `scripts/basecamp/run-app.sh --setup --test apps/auctions/tests/story.mjs` in WSL with
+`STORY_PACE_MS=1500`, so each step stays on screen long enough to read. When the Basecamp window appears, the
+script moves it to a second screen if there is one, keeps it on top, and captures its screen region with
+gdigrab at 30 fps. Capturing the WSLg window by title records black frames, so the region is captured instead.
+This has two consequences:
+- The Basecamp window must stay visible and uncovered for the whole run. Do not minimise or move it.
+- On a machine with one screen it records on the primary display, including any OS watermark there (such as
+  "Activate Windows").
+
+When the story ends, `scripts/record/cut-idle.py` reads `story-timeline.json`:
+- it cuts every transaction-lane wait longer than 3 s down to its first and last 1.5 s;
+- it trims everything before the first step, and everything more than 4 s after the last step or after the
+  Basecamp window was last seen, whichever comes first;
+- it draws the title cards from `scripts/record/title-cards.txt` (F1–F5, shortfall, freeze) at the logged starts
+  of the steps whose actions they name.
+
+The capture and the story run on different clocks, so the script measures the WSL clock against the Windows clock
+before it starts. Next to the output it writes the run log, the ffmpeg log, the cut log, the timeline and the cut
+plan (`<name>.plan.json`: the cuts and each card's time). It deletes the raw capture once the cut video checks
+out, and keeps it on any failure.
+
+Disk: it refuses to start with less than 12 GB free on `C:`, and stops everything if `C:` drops below 10 GB.
+
+Cleanup: whatever happens (a failure, an error or Ctrl-C), it stops ffmpeg, stops the run (run-app.sh, Basecamp
+and the sequencer) and takes the window off topmost.
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | ok |
+| 2 | a tool is missing |
+| 3 | low disk at the start |
+| 4 | aborted: the disk floor, no window, or ffmpeg died |
+| 5 | the story failed |
+| 6 | nothing was captured |
+| 7 | cut-idle.py failed |
+| 8 | the output did not check out |
+
+When the Nix caches are unreachable, pass the already-built roots through, for example
+`-WslEnv 'AUCTIONS_ROOT=$HOME/lez-target/basecamp/auctions AUCTION_ENGINE_ROOT=$HOME/lez-target/basecamp/auction_engine LOGOS_QT_MCP=$HOME/lez-target/basecamp/qt-mcp'`.
+
+The cut logic has unit tests: `python -I -m unittest discover -s scripts/tests -p test_cut_idle.py`.
+
+The shipped take was recorded before the last timing fixes: its cards and cuts sit about 2 s late, and its end was
+trimmed by hand. The committed scripts fix both (unit-tested and checked on a synthetic clip; not yet used for a
+live recording).
+
 ## Public legacy testnet
 
 `scripts/testnet-legacy.sh` runs the same scenario (`scripts/lib/demo-scenario.sh`) on the public LEZ v0.2.4

@@ -11,22 +11,19 @@ use auction_sdk::{
     decode::Reader,
     deployment::program_id_hex,
     error::{SdkError, SdkResult},
-    plan,
+    ops::{self, SetEngineParamsRequest, CHECK_VERIFY},
+    params, plan,
     verify::{verify_binding, verify_config, VerifiedConfig},
 };
 use lee_core::account::AccountId;
 use stablecoin_core::ProtocolParameters;
-use token_core::TokenDefinition;
 
 use crate::{
     args::AdminCommand,
     env::Env,
     error::CliError,
     output::{kv, yes_no},
-    params,
 };
-
-pub(crate) const CHECK_VERIFY: &str = "admin verify";
 
 pub(crate) fn host_addresses<C: Chain>(env: &Env<C>) -> HostAddresses {
     HostAddresses::new(env.deployment.host_program)
@@ -91,18 +88,9 @@ pub(crate) fn begin<C: Chain>(
     let v = env.verified()?;
     env.announce_admin(&v, out)?;
     let signer = env.account(signer)?;
-    if signer != v.state.admin {
-        return Err(CliError::Verify(SdkError::Mismatch {
-            what: "config admin (refusing before signing: the signer is not the config admin)",
-            expected: v.state.admin.to_string(),
-            found: signer.to_string(),
-        }));
-    }
+    ops::require_engine_admin(&v, signer)?;
     Ok((v, signer))
 }
-
-/// A parameter file with the optional protocol-token and reference-oracle slots.
-type ParamsArgs<'a> = (&'a PathBuf, Option<&'a String>, Option<&'a String>);
 
 pub fn admin<C: Chain>(
     env: &Env<C>,
@@ -133,13 +121,17 @@ pub fn admin<C: Chain>(
             ref_oracle,
             disable_protocol_token,
             disable_ref_oracle,
-        } => set_engine_params(
-            env,
-            admin,
-            (file, protocol_token.as_ref(), ref_oracle.as_ref()),
-            (*disable_protocol_token, *disable_ref_oracle),
-            out,
-        ),
+        } => {
+            let req = SetEngineParamsRequest {
+                admin: admin.clone(),
+                params: file.clone(),
+                protocol_token: protocol_token.clone(),
+                ref_oracle: ref_oracle.clone(),
+                disable_protocol_token: *disable_protocol_token,
+                disable_ref_oracle: *disable_ref_oracle,
+            };
+            set_engine_params(env, &req, out)
+        }
         AdminCommand::SetCollateralConfig {
             admin,
             params: file,
@@ -164,6 +156,9 @@ fn addresses<C: Chain>(
     kv(out, "unused slot 1", &e.unused_protocol_token.to_string())
 }
 
+/// A parameter file with the optional protocol-token and reference-oracle slots.
+type ParamsArgs<'a> = (&'a PathBuf, Option<&'a String>, Option<&'a String>);
+
 fn init_config<C: Chain>(
     env: &Env<C>,
     (admin, salt): (&str, u64),
@@ -185,7 +180,7 @@ fn init_config<C: Chain>(
     let token = optional(env, protocol_token)?;
     let oracle = optional(env, ref_oracle)?;
     if let Some(t) = token {
-        check_protocol_token(env, &t)?;
+        ops::check_protocol_token(&env.chain, env.deployment.token_program, &t)?;
     }
     let p = params::engine_params(file, token.is_some(), oracle.is_some())?;
     let e = EngineAddresses::new(env.deployment.engine_program, &admin, salt);
@@ -209,96 +204,18 @@ fn init_config<C: Chain>(
     print_after(out, "config", read)
 }
 
-/// An omitted slot flag disables the slot on chain, so a change that would do so needs its explicit
-/// `--disable-*` flag (usage error otherwise, before anything is signed).
-fn guard_slot(
-    what: &str,
-    flag: &str,
-    (old, new): (Option<AccountId>, Option<AccountId>),
-    disable: bool,
-) -> Result<(), CliError> {
-    if old.is_some() && new.is_none() && !disable {
-        return Err(CliError::Usage(format!(
-            "refusing before signing: this would disable the {what} the config has; name it \
-             again or pass --{flag} to confirm"
-        )));
-    }
-    Ok(())
-}
-
-/// `old -> new` of a slot, printed before signing whenever it changes.
-fn announce_slot(
-    out: &mut dyn Write,
-    what: &str,
-    old: Option<AccountId>,
-    new: Option<AccountId>,
-) -> Result<(), CliError> {
-    if old == new {
-        return Ok(());
-    }
-    let show = |s: Option<AccountId>| s.map_or_else(|| "none".to_owned(), |i| i.to_string());
-    kv(out, what, &format!("{} -> {}", show(old), show(new)))
-}
-
-/// ADR-038: the protocol token must be a fungible definition owned by the token program.
-fn check_protocol_token<C: Chain>(env: &Env<C>, id: &AccountId) -> Result<(), CliError> {
-    let acc = env.chain.account(id)?;
-    let fungible = acc.program_owner == env.deployment.token_program
-        && matches!(
-            TokenDefinition::try_from(&acc.data),
-            Ok(TokenDefinition::Fungible { .. })
-        );
-    if fungible {
-        return Ok(());
-    }
-    Err(CliError::Usage(format!(
-        "refusing before signing: the protocol token {id} is not a fungible token definition of \
-         the token program (ADR-038); create it first with `dev token-new`"
-    )))
-}
-
 fn set_engine_params<C: Chain>(
     env: &Env<C>,
-    admin: &str,
-    (file, protocol_token, ref_oracle): ParamsArgs<'_>,
-    (disable_token, disable_oracle): (bool, bool),
+    req: &SetEngineParamsRequest,
     out: &mut dyn Write,
 ) -> Result<(), CliError> {
-    let (v, admin) = begin(env, admin, out)?;
-    let token = optional(env, protocol_token)?;
-    let oracle = optional(env, ref_oracle)?;
-    let old_token = v.state.protocol_token;
-    let old_oracle = v.state.protocol_token_oracle_id;
-    guard_slot(
-        "protocol token",
-        "disable-protocol-token",
-        (old_token, token),
-        disable_token,
-    )?;
-    guard_slot(
-        "ref oracle",
-        "disable-ref-oracle",
-        (old_oracle, oracle),
-        disable_oracle,
-    )?;
-    if let Some(t) = token {
-        check_protocol_token(env, &t)?;
-    }
-    announce_slot(out, "protocol token", old_token, token)?;
-    announce_slot(out, "ref oracle", old_oracle, oracle)?;
-    let p = params::engine_params(file, token.is_some(), oracle.is_some())?;
-    if p.protocol_token_ref_price != v.state.protocol_token_ref_price {
-        kv(
-            out,
-            "ref price change",
-            &format!(
-                "{} -> {} (record it in DEPLOYMENTS.md, ADR-017)",
-                v.state.protocol_token_ref_price, p.protocol_token_ref_price
-            ),
-        )?;
-    }
-    let plan = plan::set_engine_params(&v, admin, &p, token, oracle)?;
-    env.send_plain(&plan, "set_engine_params", CHECK_VERIFY, out)?;
+    let v = env.verified()?;
+    env.announce_admin(&v, out)?;
+    let now = env.chain_now()?;
+    let p = env.with_accounts(|accounts| {
+        ops::prepare_set_engine_params(&env.chain, &v, req, accounts, now)
+    })?;
+    env.send_steps(&p, out)?;
     let read = verify_config(&env.chain, &env.deployment, &v.config_id).map(|a| {
         format!(
             "global cap {}, ref price {}",

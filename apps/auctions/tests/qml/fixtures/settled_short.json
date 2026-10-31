@@ -1,0 +1,22 @@
+{
+  "items": [
+    {
+      "bids": 0,
+      "claimed": "0",
+      "debt_repaid": "450000",
+      "ended_at_ms": null,
+      "id": "7PyXEX3xzSS2Poxhg7NtWTkRGsNRnZJNFFQP8bHJb5Eo",
+      "leftover": "0",
+      "lot": "475000",
+      "owner": "2o6Ae5oEDKRmmQy4qtm8YhLhe3rGtkuNjs57it4gGdm5",
+      "penalty": "0",
+      "position": "77ZYFewnzXYP12MJrLqu8yYFYZMsGJ9H1CwDvU75nQjP",
+      "raised": "450000",
+      "shortfall": "150000",
+      "sold": "475000",
+      "target": "660000"
+    }
+  ],
+  "scanned_to": 3,
+  "skipped": []
+}

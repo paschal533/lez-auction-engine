@@ -1,0 +1,14 @@
+{
+  "positions": [
+    {
+      "cr_bps_after": 16666,
+      "cr_bps_now": 16666,
+      "position": "7xdCdVxS8WU8d7XyF32j3nR26AqA5QQcfWBSejgG6T2S"
+    }
+  ],
+  "price": "500000000000000000000000000",
+  "reason": null,
+  "redemption_ray": "500000000000000000000000000",
+  "redemption_ray_after": "500000000000000000000000000",
+  "valid": true
+}

@@ -1,0 +1,11 @@
+{
+  "collateral": "0",
+  "cr_bps": null,
+  "liquidatable": false,
+  "min_cr_bps": 20000,
+  "nominal_debt": "0",
+  "owner": "2o6Ae5oEDKRmmQy4qtm8YhLhe3rGtkuNjs57it4gGdm5",
+  "position": "77ZYFewnzXYP12MJrLqu8yYFYZMsGJ9H1CwDvU75nQjP",
+  "quote": null,
+  "refused": "the engine would reject this: ZeroDebt (code 31)"
+}

@@ -510,3 +510,80 @@ fn send_is_never_retried() {
     assert_eq!(seen.len(), 1, "one sendTransaction, never a second");
     assert_eq!(seen[0]["method"], "sendTransaction");
 }
+
+#[test]
+fn a_stalled_read_is_cut_off_at_the_deadline() {
+    let m = mock(Behavior::Stall);
+    let budget = Duration::from_millis(300);
+    // A 5 s request timeout and the default retries would wait far longer than the deadline.
+    let chain = RpcChain::connect_with_timeout(&m.url, Duration::from_secs(5))
+        .expect("connect")
+        .with_deadline(std::time::Instant::now() + budget);
+    let started = std::time::Instant::now();
+    match chain.last_block_id() {
+        Err(SdkError::Chain(msg)) => assert!(msg.contains("time budget"), "{msg}"),
+        other => panic!("expected Chain, got {other:?}"),
+    }
+    assert!(
+        started.elapsed() < budget + Duration::from_millis(300),
+        "{:?}",
+        started.elapsed()
+    );
+    drop(chain);
+    m.join();
+}
+
+#[test]
+fn a_retry_whose_pause_ends_past_the_deadline_is_not_made() {
+    let (url, handle) = mock_seq(vec![
+        Behavior::Status(502),
+        Behavior::Result(serde_json::json!(42)),
+    ]);
+    let chain = RpcChain::connect_with_timeout(&url, SHORT)
+        .expect("connect")
+        .with_read_retry(ReadRetry {
+            attempts: 2,
+            first_delay: Duration::from_secs(1),
+        })
+        .with_deadline(std::time::Instant::now() + Duration::from_millis(500));
+    let started = std::time::Instant::now();
+    assert!(matches!(chain.last_block_id(), Err(SdkError::Chain(_))));
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        started.elapsed()
+    );
+    drop(chain);
+    assert_eq!(handle.join().expect("mock").len(), 1, "one try, no retry");
+}
+
+#[test]
+fn no_read_or_send_starts_after_the_deadline() {
+    let chain = RpcChain::connect_with_timeout("http://127.0.0.1:9", SHORT)
+        .expect("connect")
+        .with_deadline(std::time::Instant::now());
+    for r in [
+        chain.last_block_id().map(|_| ()),
+        chain.send(&tx()).map(|_| ()),
+    ] {
+        match r {
+            Err(SdkError::Chain(msg)) => assert!(msg.contains("time budget"), "{msg}"),
+            other => panic!("expected Chain, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_read_inside_the_deadline_still_retries() {
+    let (url, handle) = mock_seq(vec![
+        Behavior::Status(502),
+        Behavior::Result(serde_json::json!(42)),
+    ]);
+    let chain = RpcChain::connect_with_timeout(&url, SHORT)
+        .expect("connect")
+        .with_read_retry(NO_WAIT)
+        .with_deadline(std::time::Instant::now() + Duration::from_secs(5));
+    assert_eq!(chain.last_block_id().expect("height after a retry"), 42);
+    drop(chain);
+    assert_eq!(handle.join().expect("mock").len(), 2);
+}

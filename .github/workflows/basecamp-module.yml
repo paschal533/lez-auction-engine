@@ -1,0 +1,47 @@
+name: basecamp-module
+# The Auctions app's Basecamp parts: the auction_engine core module's unit tests (mocked auction_ffi and
+# lez_core) and the app's QML tests (offscreen, against the design system Basecamp master ships).
+on:
+  push:
+    paths:
+      - "crates/auction_ffi/**"
+      - "modules/**"
+      - "apps/**"
+      - "scripts/basecamp/**"
+      - "flake.*"
+      - ".github/workflows/basecamp-module.yml"
+  pull_request:
+    paths:
+      - "crates/auction_ffi/**"
+      - "modules/**"
+      - "apps/**"
+      - "scripts/basecamp/**"
+      - "flake.*"
+      - ".github/workflows/basecamp-module.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: basecamp-module-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  module-and-qml-tests:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - run: scripts/ci/free-disk.sh
+      # The Logos binary caches (docs/spikes/S1.md, research-4): without a hit the builder's Qt and logos-cpp-sdk
+      # graph builds from source.
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            extra-substituters = https://cache.nix.logos.co/public https://logos-co.cachix.org
+            extra-trusted-public-keys = public:l4HrXgL4nw246+LBh2SOJyhz64BoGegOYLheT/iIAPU= logos-co.cachix.org-1:12K8609ho1pCt0erUQrOrs/KmOuhWq/EhVwhzQRb35E=
+      # The builder names this output `unit-tests` (the plan's `#tests` does not exist in the pinned builder).
+      - name: auction_engine unit tests
+        run: nix build ./modules/auction_engine#unit-tests -L --no-link
+      - name: Auctions app QML tests
+        run: scripts/basecamp/qml-tests.sh

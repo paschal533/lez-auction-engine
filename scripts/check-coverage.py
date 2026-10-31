@@ -15,6 +15,7 @@ CRATES = {
     "auction_engine_program": "programs/auction_engine/src/",
     "auction_sdk": "crates/auction_sdk/",
     "auction_cli": "cli/",
+    "auction_ffi": "crates/auction_ffi/",
 }
 THRESHOLD = 80
 

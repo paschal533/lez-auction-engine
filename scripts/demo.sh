@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # One-command reproduction (spec §1.1, ADR-051). Inside Linux or WSL:
-#   scripts/demo.sh [--sequencer-dev-mode 0|1] [--keep] [--preflight-only]
+#   scripts/demo.sh [--sequencer-dev-mode 0|1] [--keep] [--preflight-only] [--setup-only]
+# --setup-only runs the phases up to and including "positions", keeps the sequencer running and prints
+# AUCTIONS_DEPLOYMENT=... LEE_WALLET_HOME_DIR=... for the Basecamp app (scripts/basecamp/run-app.sh).
 # The author's machine: scripts/wsl-env.sh scripts/demo.sh (shared target dir, S1 builds); run it that way.
 # A clean machine first runs scripts/bootstrap-lez.sh (DEMO.md).
 set -euo pipefail
-seq_mode=1; keep=0; preflight_only=0
+seq_mode=1; keep=0; preflight_only=0; setup_only=0
 while (( $# )); do
   case "$1" in
     --sequencer-dev-mode)
@@ -13,7 +15,8 @@ while (( $# )); do
       ;;
     --keep) keep=1 ;;
     --preflight-only) preflight_only=1 ;;
-    *) echo "usage: scripts/demo.sh [--sequencer-dev-mode 0|1] [--keep] [--preflight-only]" >&2; exit 2 ;;
+    --setup-only) setup_only=1; keep=1 ;;
+    *) echo "usage: scripts/demo.sh [--sequencer-dev-mode 0|1] [--keep] [--preflight-only] [--setup-only]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -32,7 +35,8 @@ SUMMARY="$LN/demo-summary.txt"
 . "$(dirname "${BASH_SOURCE[0]}")/lib/demo-scenario.sh"
 on_exit() {
   local s=$?
-  if (( keep == 0 )) && [[ -f "$LN/sequencer.pid" ]]; then ln_stop_sequencer || true; fi
+  # A failed setup-only run leaves nothing for the app to use: its sequencer is stopped too.
+  if (( keep == 0 || (setup_only == 1 && s != 0) )) && [[ -f "$LN/sequencer.pid" ]]; then ln_stop_sequencer || true; fi
   if (( s != 0 )); then echo "demo FAILED (exit $s); logs in $LN/logs, summary in $SUMMARY" >&2; fi
 }
 
@@ -52,4 +56,10 @@ ln_build
 "$REPO/scripts/disk-guard.sh" "${DEMO_MIN_C_GIB:-3}" "${DEMO_MIN_HOME_GIB:-20}" || exit 3
 phase "standalone LEZ v0.2.4 sequencer (RISC0_DEV_MODE=$seq_mode)"
 ln_start_sequencer
-demo_scenario
+if (( setup_only )); then
+  demo_scenario_until positions
+  phase "setup only: sequencer kept running (pid $(cat "$LN/sequencer.pid"))"
+  echo "AUCTIONS_DEPLOYMENT=$DEP LEE_WALLET_HOME_DIR=$LEE_WALLET_HOME_DIR"
+else
+  demo_scenario
+fi

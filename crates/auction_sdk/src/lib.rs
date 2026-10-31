@@ -6,13 +6,16 @@
 pub mod addresses;
 pub mod chain;
 pub mod confirm;
+pub mod dec;
 pub mod decode;
 pub mod demo;
 pub mod deployment;
 pub mod encode;
 pub mod error;
 pub mod keystore;
+pub mod ops;
 pub mod oracle;
+pub mod params;
 pub mod plan;
 pub mod plan_host;
 pub mod quote;
@@ -23,6 +26,10 @@ pub mod scan;
 pub mod testing;
 pub mod tx;
 pub mod verify;
+pub mod views;
+
+/// Version of this crate, reported by the FFI (`auction_ffi_version`).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use chain::{BlockSummary, Chain, TxSummary};
 pub use error::{SdkError, SdkResult};

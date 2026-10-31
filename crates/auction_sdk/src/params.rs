@@ -1,13 +1,14 @@
-//! Parameter files of `admin init-config` / `set-engine-params` / `set-collateral-config`. `u128` values
-//! are decimal strings (JSON numbers cannot carry them safely); the two optional-slot flags come from
-//! `--protocol-token` / `--ref-oracle`, never from the file, so they cannot disagree with the slots.
+//! Parameter files of `admin init-config` / `set-engine-params` / `set-collateral-config` (the files
+//! under `cli/params/`). `u128` values are decimal strings (JSON numbers cannot carry them safely); the
+//! two optional-slot flags come from `--protocol-token` / `--ref-oracle`, never from the file, so they
+//! cannot disagree with the slots.
 
 use std::path::Path;
 
 use auction_engine_core::args::{CollateralArgs, EngineParamsArgs};
 use serde::{de::DeserializeOwned, Deserialize};
 
-use crate::error::CliError;
+use crate::error::{SdkError, SdkResult};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,22 +51,22 @@ struct CollateralFile {
     admin_paused: bool,
 }
 
-fn read<T: DeserializeOwned>(path: &Path) -> Result<T, CliError> {
+fn read<T: DeserializeOwned>(path: &Path) -> SdkResult<T> {
     let text = std::fs::read_to_string(path)
-        .map_err(|e| CliError::Usage(format!("{}: {e}", path.display())))?;
-    serde_json::from_str(&text).map_err(|e| CliError::Usage(format!("{}: {e}", path.display())))
+        .map_err(|e| SdkError::Refused(format!("{}: {e}", path.display())))?;
+    serde_json::from_str(&text).map_err(|e| SdkError::Refused(format!("{}: {e}", path.display())))
 }
 
-fn big(s: &str, field: &str) -> Result<u128, CliError> {
+fn big(s: &str, field: &str) -> SdkResult<u128> {
     s.parse::<u128>()
-        .map_err(|_| CliError::Usage(format!("{field} must be a decimal u128 string")))
+        .map_err(|_| SdkError::Refused(format!("{field} must be a decimal u128 string")))
 }
 
 pub fn engine_params(
     path: &Path,
     protocol_token_enabled: bool,
     ref_oracle_enabled: bool,
-) -> Result<EngineParamsArgs, CliError> {
+) -> SdkResult<EngineParamsArgs> {
     let f: EngineParamsFile = read(path)?;
     let p = EngineParamsArgs {
         global_cap: big(&f.global_cap, "global_cap")?,
@@ -90,11 +91,11 @@ pub fn engine_params(
     };
     // Same rules the engine applies at config time (ADR-024): fail before signing anything.
     p.validate()
-        .map_err(|e| CliError::Usage(format!("invalid engine parameters: {e}")))?;
+        .map_err(|e| SdkError::Refused(format!("invalid engine parameters: {e}")))?;
     Ok(p)
 }
 
-pub fn collateral_args(path: &Path) -> Result<CollateralArgs, CliError> {
+pub fn collateral_args(path: &Path) -> SdkResult<CollateralArgs> {
     let f: CollateralFile = read(path)?;
     Ok(CollateralArgs {
         oracle_scale: f.oracle_scale,
@@ -120,7 +121,7 @@ mod tests {
 
     #[test]
     fn the_localnet_files_parse_and_validate() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("params");
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/params");
         let p =
             engine_params(&dir.join("localnet-engine.json"), true, false).expect("engine params");
         assert_eq!(
@@ -137,7 +138,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmp");
         let f = dir.path().join("p.json");
         let text = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("params/localnet-engine.json"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/params/localnet-engine.json"),
         )
         .expect("read")
         .replace("\"10000000\"", "\"ten\"");
@@ -148,12 +149,12 @@ mod tests {
 
     #[test]
     fn the_demo_files_carry_the_pinned_scenario() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("params");
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/params");
         let p = engine_params(&dir.join("demo-engine.json"), true, false).expect("engine params");
-        assert_eq!(p, auction_sdk::demo::engine_params());
+        assert_eq!(p, crate::demo::engine_params());
         p.validate().expect("valid");
         let c = collateral_args(&dir.join("demo-collateral.json")).expect("collateral args");
-        assert_eq!(c, auction_sdk::demo::collateral_args());
+        assert_eq!(c, crate::demo::collateral_args());
         c.validate(p.global_cap).expect("valid");
     }
 }

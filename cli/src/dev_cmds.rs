@@ -2,7 +2,12 @@
 
 use std::io::Write;
 
-use auction_sdk::{chain::Chain, error::SdkResult, plan_host, verify::verify_chain_identity};
+use auction_sdk::{
+    chain::Chain,
+    error::SdkResult,
+    ops::{self, TokenTransferRequest, CHECK_BALANCE},
+    plan_host,
+};
 use lee_core::account::{Account, AccountId};
 use token_core::TokenHolding;
 
@@ -13,13 +18,6 @@ use crate::{
     error::CliError,
     output::kv,
 };
-
-/// The named dev networks the sending dev commands (mock tokens, mock oracles) may act on: the
-/// throwaway localnet and the public LEZ v0.2.4 legacy testnet (`scripts/testnet-legacy.sh`). Matched
-/// exactly. A name on this list is never enough on its own: the node's block 1 must also be the one the
-/// deployment file recorded (`verify_chain_identity`).
-const DEV_NETWORKS: &[&str] = &["localnet", "testnet-legacy"];
-const CHECK_BALANCE: &str = "dev balance --account <account>";
 
 /// Read-only dev commands run anywhere; the others sign, so they need a named dev network in the
 /// deployment file AND the chain it recorded (ADR-046; Plan 3a M6: a label alone let `--rpc` aim them
@@ -34,14 +32,7 @@ pub(crate) fn is_read_only(cmd: &DevCommand) -> bool {
 pub fn dev<C: Chain>(env: &Env<C>, cmd: &DevCommand, out: &mut dyn Write) -> Result<(), CliError> {
     if !is_read_only(cmd) {
         env.refuse_at_ms()?;
-        if !DEV_NETWORKS.contains(&env.deployment.network.as_str()) {
-            return Err(CliError::Usage(format!(
-                "dev commands that send are for the named dev networks only ({}); the deployment file names network {:?}",
-                DEV_NETWORKS.join(", "),
-                env.deployment.network
-            )));
-        }
-        verify_chain_identity(&env.chain, &env.deployment)?;
+        ops::require_dev_network(&env.chain, &env.deployment)?;
     }
     match cmd {
         DevCommand::ChainId => {
@@ -80,11 +71,17 @@ pub fn dev<C: Chain>(env: &Env<C>, cmd: &DevCommand, out: &mut dyn Write) -> Res
             print_after(out, "account", describe(env, &account))
         }
         DevCommand::TokenTransfer { from, to, amount } => {
-            let (from, to) = (env.account(from)?, env.account(to)?);
-            let plan = plan_host::token_transfer(env.deployment.token_program, from, to, *amount)?;
-            env.send_plain(&plan, "transfer", CHECK_BALANCE, out)?;
-            print_after(out, "from", describe(env, &from))?;
-            print_after(out, "to", describe(env, &to))
+            let req = TokenTransferRequest {
+                from: from.clone(),
+                to: to.clone(),
+                amount: *amount,
+            };
+            let p = env.with_accounts(|accounts| {
+                ops::prepare_token_transfer(&env.deployment, &req, accounts)
+            })?;
+            env.send_steps(&p, out)?;
+            print_after(out, "from", describe(env, &env.account(from)?))?;
+            print_after(out, "to", describe(env, &env.account(to)?))
         }
         DevCommand::OracleCreate {
             price_source,

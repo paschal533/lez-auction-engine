@@ -1,0 +1,8 @@
+{
+  "amount": "500",
+  "buffer_after": "1500",
+  "buffer_before": "2000",
+  "debt_on_auction": "500",
+  "unbacked_after": "500",
+  "unbacked_before": "1000"
+}

@@ -1,0 +1,25 @@
+{
+  "items": [
+    {
+      "bids": 0,
+      "collateral_left": "475000",
+      "discount_ray": "37777777777777777777777777",
+      "ends_at_ms": null,
+      "held_at_max": false,
+      "id": "7PyXEX3xzSS2Poxhg7NtWTkRGsNRnZJNFFQP8bHJb5Eo",
+      "lot": "475000",
+      "max_at_ms": 1700002100000,
+      "min_bid": "25",
+      "paused": null,
+      "position": "77ZYFewnzXYP12MJrLqu8yYFYZMsGJ9H1CwDvU75nQjP",
+      "raised": "0",
+      "rate_per_min_ray": "1777777777777777777777778",
+      "reserved": "660000",
+      "started_at_ms": 1699999400000,
+      "t_eff_ms": 600000,
+      "target": "660000"
+    }
+  ],
+  "scanned_to": 3,
+  "skipped": []
+}

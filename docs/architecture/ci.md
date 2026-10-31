@@ -131,7 +131,7 @@ scripts/basecamp/qml-tests.sh
 - Hosted run: green on `feat/plan-4` at be82e74 (run 41172947166): 51 module tests and 182 QML tests. Before e9f104a the job failed on hosted runners because `host.sh check` read `/mnt/c`, which exists only in WSL; the C: check is now skipped there.
 - The live story (`apps/auctions/tests/story.mjs`) is not a CI job (spec, designer's call 6). It runs locally through `scripts/basecamp/run-app.sh` or `scripts/basecamp/install-lgx.sh` ([basecamp-app.md](basecamp-app.md)).
 
-Plan 4 CI status: the Plan 4 changes to `core.yml` (`auction_ffi` in `core`, `programs` and `coverage`, the header drift step) and `basecamp-module.yml` ran green on hosted runners on `feat/plan-4` at be82e74: `core` 41172947093 (core, programs, coverage, idl-drift, hook-patches, requirements) and `basecamp-module` 41172947166 (51 module tests, 182 QML tests). They have not run on `main` yet: the branch is not merged.
+Plan 4 CI status: the Plan 4 changes to `core.yml` (`auction_ffi` in `core`, `programs` and `coverage`, the header drift step) and `basecamp-module.yml` ran green on hosted runners on `feat/plan-4` at be82e74: `core` 41172947093 (core, programs, coverage, idl-drift, hook-patches, requirements) and `basecamp-module` 41172947166 (51 module tests, 182 QML tests). After the merge they ran green on `main` at 1405ea3 (the Plan 4 merge, PR #3): `core` 41187263086 (core, programs, coverage, idl-drift, hook-patches, requirements), `basecamp-module` 41187263071 (51 module tests, 182 QML tests), `guests` 41187263101, `e2e` 41187263076 and `real-proofs` 41187263065.
 
 ## Pinned versions
 

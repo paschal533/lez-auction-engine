@@ -264,6 +264,7 @@ name = "auction_engine_params"
 version = "0.1.0"
 dependencies = [
  "auction_core",
+ "borsh",
  "risc0-zkvm",
 ]
 

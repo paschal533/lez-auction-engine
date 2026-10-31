@@ -2,6 +2,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "engine_core",
     "programs/methods",
     "programs/mock_host_core",
     "programs/oracle_core",

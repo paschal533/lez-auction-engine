@@ -9,7 +9,8 @@ use std::{
 use borsh::{BorshDeserialize, BorshSerialize};
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_PROGRAM_ACCOUNT_IDS, ClockAccountData};
 use lee::{
-    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, Simulation, V03State,
+    Account, AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey, PublicTransaction,
+    Simulation, V03State,
     error::LeeError,
     privacy_preserving_transaction::circuit::ProgramCatalog,
     program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program},
@@ -108,7 +109,20 @@ impl Chain {
         signers: &[&PrivateKey],
         msg: &impl BorshSerialize,
     ) -> Result<Vec<TransactionEvent>, LeeError> {
-        let tx = self.transaction(root, actors, signers, msg)?;
+        self.send_with_evidence(root, actors, signers, &[], msg)
+    }
+
+    /// [`Chain::send`] carrying `evidence` that claimed fresh public accounts are public, which
+    /// the sequencer needs to admit an actor on an account that does not exist yet.
+    pub fn send_with_evidence(
+        &mut self,
+        root: Actor,
+        actors: &[Actor],
+        signers: &[&PrivateKey],
+        evidence: &[PublicAccountEvidence],
+        msg: &impl BorshSerialize,
+    ) -> Result<Vec<TransactionEvent>, LeeError> {
+        let tx = self.transaction(root, actors, signers, evidence, msg)?;
         let result = self
             .state
             .transition_from_public_transaction(&tx, self.block, self.now_ms);
@@ -161,12 +175,28 @@ impl Chain {
         signers: &[&PrivateKey],
         msg: &impl BorshSerialize,
     ) -> (u64, Result<(), LeeError>) {
-        let tx = match self.transaction(root, actors, signers, msg) {
+        self.cycles_with_evidence(root, actors, signers, &[], msg)
+    }
+
+    /// [`Chain::cycles`] for a transaction carrying `evidence`; the accounts it proves public
+    /// are admitted too.
+    pub fn cycles_with_evidence(
+        &self,
+        root: Actor,
+        actors: &[Actor],
+        signers: &[&PrivateKey],
+        evidence: &[PublicAccountEvidence],
+        msg: &impl BorshSerialize,
+    ) -> (u64, Result<(), LeeError>) {
+        let tx = match self.transaction(root, actors, signers, evidence, msg) {
             Ok(tx) => tx,
             Err(err) => return (0, Err(err)),
         };
         let mut states = HashMap::new();
-        let mut admitted = BTreeSet::new();
+        let mut admitted: BTreeSet<AccountId> = evidence
+            .iter()
+            .map(PublicAccountEvidence::account_id)
+            .collect();
         for actor in &tx.message().public_context.actors {
             if let Some(account) = self.state.get_account_by_id_ref(actor.account_id) {
                 admitted.insert(actor.account_id);
@@ -192,6 +222,7 @@ impl Chain {
         root: Actor,
         actors: &[Actor],
         signers: &[&PrivateKey],
+        evidence: &[PublicAccountEvidence],
         msg: &impl BorshSerialize,
     ) -> Result<PublicTransaction, LeeError> {
         let nonces = signers
@@ -201,9 +232,27 @@ impl Chain {
                 (account, self.state.get_account_by_id(account).nonce)
             })
             .collect();
-        let message = Message::try_new(root, actors.iter().copied(), nonces, msg)?;
+        let message = Message {
+            admission_evidence: evidence.to_vec(),
+            ..Message::try_new(root, actors.iter().copied(), nonces, msg)?
+        };
         let witness = WitnessSet::for_message(&message, signers);
         Ok(PublicTransaction::new(message, witness))
+    }
+}
+
+/// Panics unless `result` is a revert whose error mentions `needle`. A guest panic surfaces as
+/// `ProgramExecutionFailed("Guest panicked: <text>")`, so `needle` is the panic text.
+pub fn expect_revert(result: Result<Vec<TransactionEvent>, LeeError>, needle: &str) {
+    match result {
+        Ok(_) => panic!("expected a revert mentioning {needle:?}, but the transaction applied"),
+        Err(err) => {
+            let text = format!("{err} {err:?}");
+            assert!(
+                text.contains(needle),
+                "revert does not mention {needle:?}: {err:?}"
+            );
+        }
     }
 }
 

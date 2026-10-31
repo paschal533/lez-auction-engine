@@ -3,6 +3,7 @@
 resolver = "3"
 members = [
     "programs/methods",
+    "programs/token_core",
     "harness",
 ]
 # Guests build for riscv32im-risc0-zkvm-elf through risc0_build, as in LEZ's examples.
@@ -19,6 +20,7 @@ clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.g
 # `artifacts` embeds LEZ's prebuilt system program ELFs (artifacts/lez/programs/*.bin at the tag).
 lez_programs = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1", package = "programs", default-features = false, features = ["artifacts"] }
 methods = { path = "programs/methods" }
+token_core = { path = "programs/token_core" }
 harness = { path = "harness" }
 borsh = { version = "1.5.7", features = ["derive"] }
 sha2 = "0.10.8"

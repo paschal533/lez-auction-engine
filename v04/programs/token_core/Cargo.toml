@@ -1,0 +1,13 @@
+[package]
+name = "token_core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# Declared directly (no `host` feature) so the riscv guest can depend on this crate by path.
+[dependencies]
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1" }
+borsh = { version = "1.5.7", features = ["derive"] }

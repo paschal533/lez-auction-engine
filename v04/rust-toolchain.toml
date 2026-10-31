@@ -1,0 +1,4 @@
+# Matches LEZ v0.4.0-rc1's rust-toolchain.toml.
+[toolchain]
+channel = "1.98.1"
+profile = "default"

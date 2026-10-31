@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/auction_core",
+    "crates/auction_engine_params",
     "crates/auction_sdk",
     "crates/auction_ffi",
     "cli",
@@ -29,6 +30,7 @@ exclude = [
     "programs/test_programs/methods/guest",
     "fuzz",
     "tools/risc0-packager",
+    "v04",
 ]
 resolver = "2"
 

@@ -153,6 +153,10 @@ pub struct ConfigState {
     pub freeze_on_bad_debt: bool,
     pub bad_debt_freeze_threshold: u128,
     pub system: SystemParamsRec,
+    /// Read-block scratch (design note §4.1): the actor whose `StateReply` the config awaits.
+    /// Set by the handler that sends the `ReadState`, cleared by the reply, and asserted `None`
+    /// by the `Proceed` sentinel, so it is `None` in every committed state.
+    pub pending_read: Option<Actor>,
 }
 tagged_state!(ConfigState, TAG_CONFIG);
 
@@ -492,6 +496,7 @@ pub(crate) mod fixtures {
             freeze_on_bad_debt: true,
             bad_debt_freeze_threshold: 600,
             system: sys(),
+            pending_read: None,
         }
     }
 

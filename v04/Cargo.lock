@@ -1303,8 +1303,10 @@ dependencies = [
 name = "harness"
 version = "0.1.0"
 dependencies = [
+ "auction_engine_params",
  "borsh",
  "clock_core",
+ "engine_core",
  "lee",
  "lee_core",
  "methods",

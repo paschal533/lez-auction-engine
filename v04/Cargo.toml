@@ -23,6 +23,8 @@ clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.g
 # `artifacts` embeds LEZ's prebuilt system program ELFs (artifacts/lez/programs/*.bin at the tag).
 lez_programs = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1", package = "programs", default-features = false, features = ["artifacts"] }
 methods = { path = "programs/methods" }
+engine_core = { path = "engine_core" }
+auction_engine_params = { path = "../crates/auction_engine_params", features = ["borsh"] }
 mock_host_core = { path = "programs/mock_host_core" }
 oracle_core = { path = "programs/oracle_core" }
 token_core = { path = "programs/token_core" }

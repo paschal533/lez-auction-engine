@@ -1,5 +1,6 @@
 //! In-process test harness on LEZ v0.4.0-rc1: a `lee::V03State` with our guests and the clock
-//! system program installed, signed public transactions, simulation, and harness-set time.
+//! system program installed, signed public transactions, simulation, and harness-set time; and
+//! [`World`], the deployed token, oracle, mock host and engine the engine tests share.
 
 use std::{
     borrow::Cow,
@@ -18,6 +19,9 @@ use lee::{
 };
 use lee_core::{BlockId, Timestamp, program::TransactionEvent};
 use sha2::{Digest as _, Sha256};
+
+pub mod world;
+pub use world::World;
 
 /// The name `Chain::program` knows the clock system program by.
 pub const CLOCK: &str = "clock";

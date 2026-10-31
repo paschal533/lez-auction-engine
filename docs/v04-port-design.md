@@ -69,8 +69,9 @@ Abbreviations: `PM` = `lee/state_machine/core/src/program/mod.rs`, `ACC` = `lee/
     (`lee/state_machine/src/public_transaction/message.rs:18-46`, `lee/state_machine/src/fees.rs:13-30`).
 12. **Fees.** The reserve is `gas_limit * base_fee_exec + ...` (`lez/programs/fee/core/src/assess.rs:61-70`);
     the actual fee is the executed cycles clamped to `gas_limit` (`assess.rs:84-86`). That a **reverted**
-    transaction is charged its whole `gas_limit` is reported by a third party (vpavlin's LEZ-V04-NOTES) and
-    **[unverified]** in source.
+    transaction is charged its whole `gas_limit` was reported by a third party (vpavlin's LEZ-V04-NOTES) and is
+    now **confirmed on chain** by spike S8 (`docs/spikes/S8.md`): a revert at gas 200k and 5M was charged exactly
+    `gas_limit × 8` plus storage; a successful call was charged its metered 7,555 cycles.
 13. **Events.** `ProgramEvent { selector: [u8; 8], data }`, selector by convention the first 8 bytes of
     `sha256("<program>::<EventName>")` (PM:701-710). That the sequencer stores events only for final blocks
     is **[unverified]** (research, [3P]).
@@ -219,7 +220,7 @@ F6 (forward-only): auction and system-auction phases are `AwaitingSeize -> Aucti
 `Live -> Ended`). Each handler asserts the phase it expects and only moves forward; the Sentinel asserts the
 terminal phase of its conversation. A pending phase therefore never survives a transaction.
 
-**(b) A revert is charged its whole gas limit** ([unverified], §2 point 12). If true:
+**(b) A revert is charged its whole gas limit** (confirmed by spike S8, §2 point 12). So:
 
 - Racing keepers and bidders pay for losing. The second `liquidate` of a position, or a bid after the final
   fill (`NotAuctioning`), costs `gas_limit * base_fee_exec` instead of a few executions.

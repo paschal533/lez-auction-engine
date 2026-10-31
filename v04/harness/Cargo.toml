@@ -17,5 +17,6 @@ sha2.workspace = true
 
 [dev-dependencies]
 methods.workspace = true
+mock_host_core.workspace = true
 oracle_core.workspace = true
 token_core.workspace = true

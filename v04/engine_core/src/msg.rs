@@ -32,11 +32,12 @@ pub enum EngineMsg {
         collateral_def: AccountId,
         args: CollateralArgs,
     },
-    /// 2. Starts the liquidation of `position`; `now_ms` is the caller's clock claim.
+    /// 2. Liquidates `position`; `nonce` is the expected auction number, `now_ms` the clock claim.
     Liquidate {
         config: AccountId,
         collateral_def: AccountId,
         position: AccountId,
+        nonce: u64,
         now_ms: u64,
     },
     /// 3. A bid on the auction `(config, position, nonce)`.
@@ -74,7 +75,7 @@ pub enum EngineMsg {
         paused_total_ms: u64,
         collateral: Box<CollateralState>,
     },
-    /// 7. Config to record: the next auction of the position is number `nonce`.
+    /// 7. Config to record: auction number `nonce`; the record asserts `nonce == count`, then increments.
     Bump { nonce: u64 },
     /// 8. Config to auction (empty state): creates it in `AwaitingSeize`, bound to `host`.
     Open {
@@ -155,6 +156,7 @@ mod tests {
                 config: id(1),
                 collateral_def: id(2),
                 position: id(3),
+                nonce: 5,
                 now_ms: 4,
             },
             EngineMsg::Bid {

@@ -439,10 +439,19 @@ name = "auction_engine_core"
 version = "0.1.0"
 dependencies = [
  "auction_core",
+ "auction_engine_params",
  "borsh",
  "lee_core",
  "risc0-zkvm",
  "serde",
+]
+
+[[package]]
+name = "auction_engine_params"
+version = "0.1.0"
+dependencies = [
+ "auction_core",
+ "risc0-zkvm",
 ]
 
 [[package]]

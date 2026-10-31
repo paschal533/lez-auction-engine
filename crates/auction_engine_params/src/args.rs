@@ -9,8 +9,6 @@ use auction_core::{
     units::BPS,
 };
 
-use borsh::{BorshDeserialize, BorshSerialize};
-
 use crate::EngineError;
 
 /// System auction ttl bounds (spec §5.12: 10 min – 7 d).
@@ -43,7 +41,8 @@ pub fn schedule_from_words(words: &[u32]) -> Result<Schedule, EngineError> {
 }
 
 /// Flat engine parameters of `init_config` / `set_engine_params`.
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "borsh", derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub struct EngineParamsArgs {
     pub global_cap: u128,
     pub freeze_on_bad_debt: bool,
@@ -132,7 +131,8 @@ impl EngineParamsArgs {
 }
 
 /// Flat collateral parameters of `set_collateral_config`.
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "borsh", derive(borsh::BorshSerialize, borsh::BorshDeserialize))]
 pub struct CollateralArgs {
     pub oracle_scale: u8,
     pub max_oracle_age_ms: u64,

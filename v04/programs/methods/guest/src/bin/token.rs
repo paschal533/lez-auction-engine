@@ -1,8 +1,9 @@
 //! The token program (design note §6): holdings and definitions as actor states.
 //!
-//! Credits are synchronous, so a whole conversation settles in one transaction, and a fresh
-//! holding needs no signature: only this program can write its actor states. The program sends
-//! nothing but `Credit`, `SupplyDown` and `StateReply`. Errors are panics `token: <reason>`.
+//! A holding keeps a balance per definition, and a definition needs its account's authorisation,
+//! so nobody can lock an account's token slot with a junk token. Credits are synchronous, so a
+//! whole conversation settles in one transaction. The program sends nothing but `Credit`,
+//! `SupplyDown` and `StateReply`. Errors are panics `token: <reason>`.
 
 use lee_core::{
     account::{AccountId, Actor},
@@ -20,8 +21,13 @@ fn token_actor(input: &ReceiveInput, account: AccountId) -> Actor {
     Actor::new(account, input.receiver.program_account_id)
 }
 
+/// The receiver's holding; an account with no state yet holds nothing.
 fn load_holding(input: &ReceiveInput) -> Holding {
-    Holding::decode(input.pre_state.as_ref()).expect("token: NotAHolding")
+    if input.pre_state.as_ref().is_empty() {
+        Holding::empty()
+    } else {
+        Holding::decode(input.pre_state.as_ref()).expect("token: NotAHolding")
+    }
 }
 
 fn load_definition(input: &ReceiveInput) -> Definition {
@@ -35,28 +41,35 @@ fn handle_message(input: &ReceiveInput, message: TokenMsg) -> Response {
             initial_to,
             initial_supply,
         } => new_definition(input, minter, initial_to, initial_supply),
-        TokenMsg::Transfer { to, amount } => {
+        TokenMsg::Transfer {
+            definition,
+            to,
+            amount,
+        } => {
             let mut holding = load_holding(input);
-            debit(input, &mut holding, to, amount);
-            send_credit(input, holding, to, amount)
+            debit(input, &mut holding, definition, amount);
+            assert_ne!(to, input.receiver.account_id, "token: SelfTransfer");
+            send_credit(input, &holding, definition, to, amount)
         }
-        TokenMsg::Sweep { to, at_least } => {
+        TokenMsg::Sweep {
+            definition,
+            to,
+            at_least,
+        } => {
             let mut holding = load_holding(input);
-            assert!(holding.balance >= at_least, "token: BelowAtLeast");
-            let amount = holding.balance;
-            debit(input, &mut holding, to, amount);
-            send_credit(input, holding, to, amount)
+            let amount = holding.balance(definition);
+            assert!(amount >= at_least, "token: BelowAtLeast");
+            debit(input, &mut holding, definition, amount);
+            assert_ne!(to, input.receiver.account_id, "token: SelfTransfer");
+            send_credit(input, &holding, definition, to, amount)
         }
-        TokenMsg::Burn { amount } => {
+        TokenMsg::Burn { definition, amount } => {
             let mut holding = load_holding(input);
-            assert!(input.is_authorized, "token: Unauthorized");
-            holding.balance = holding
-                .balance
-                .checked_sub(amount)
-                .expect("token: InsufficientBalance");
-            let definition = token_actor(input, holding.definition);
-            Response::set_state(encode(&holding))
-                .send_sync(definition, &TokenMsg::SupplyDown { amount })
+            debit(input, &mut holding, definition, amount);
+            Response::set_state(encode(&holding)).send_sync(
+                token_actor(input, definition),
+                &TokenMsg::SupplyDown { amount },
+            )
         }
         TokenMsg::MintTo { to, amount } => {
             let mut definition = load_definition(input);
@@ -95,6 +108,7 @@ fn new_definition(
     initial_to: Option<AccountId>,
     initial_supply: u128,
 ) -> Response {
+    assert!(input.is_authorized, "token: Unauthorized");
     assert!(input.pre_state.as_ref().is_empty(), "token: AlreadyExists");
     let state = Response::set_state(encode(&Definition::new(initial_supply, minter)));
     match initial_to {
@@ -112,36 +126,34 @@ fn new_definition(
     }
 }
 
-/// Checks authorisation, the recipient and the balance, then debits `holding` in place.
-fn debit(input: &ReceiveInput, holding: &mut Holding, to: AccountId, amount: u128) {
+/// Checks authorisation and the balance, then debits `definition`'s entry of `holding` in place.
+fn debit(input: &ReceiveInput, holding: &mut Holding, definition: AccountId, amount: u128) {
     assert!(input.is_authorized, "token: Unauthorized");
-    assert_ne!(to, input.receiver.account_id, "token: SelfTransfer");
-    holding.balance = holding
-        .balance
+    let balance = holding
+        .balance(definition)
         .checked_sub(amount)
         .expect("token: InsufficientBalance");
+    holding.set_balance(definition, balance);
 }
 
-fn send_credit(input: &ReceiveInput, holding: Holding, to: AccountId, amount: u128) -> Response {
-    let credit = TokenMsg::Credit {
-        definition: holding.definition,
-        amount,
-    };
-    Response::set_state(encode(&holding)).send_sync(token_actor(input, to), &credit)
+fn send_credit(
+    input: &ReceiveInput,
+    holding: &Holding,
+    definition: AccountId,
+    to: AccountId,
+    amount: u128,
+) -> Response {
+    let credit = TokenMsg::Credit { definition, amount };
+    Response::set_state(encode(holding)).send_sync(token_actor(input, to), &credit)
 }
 
 fn receive_credit(input: &ReceiveInput, definition: AccountId, amount: u128) -> Response {
     assert!(input.from_own_program(), "token: ForeignCredit");
-    let holding = if input.pre_state.as_ref().is_empty() {
-        Holding::new(definition, amount)
-    } else {
-        let mut holding = load_holding(input);
-        assert_eq!(holding.definition, definition, "token: WrongDefinition");
-        holding.balance = holding
-            .balance
-            .checked_add(amount)
-            .expect("token: BalanceOverflow");
-        holding
-    };
+    let mut holding = load_holding(input);
+    let balance = holding
+        .balance(definition)
+        .checked_add(amount)
+        .expect("token: BalanceOverflow");
+    holding.set_balance(definition, balance);
     Response::set_state(encode(&holding))
 }

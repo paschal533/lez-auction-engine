@@ -69,13 +69,19 @@ impl World {
         let (definition, a) = (world.definition, world.a);
         world
             .chain
-            .send_with_evidence(definition, &[definition, a], &[], &[evidence(&d_key)], &msg)
+            .send(definition, &[definition, a], &[&d_key], &msg)
             .expect("the definition is created");
         world
     }
 
+    fn balance_of(&self, holding: Actor, definition: Actor) -> Option<u128> {
+        self.chain
+            .state::<Holding>(holding)
+            .map(|h| h.balance(definition.account_id))
+    }
+
     fn balance(&self, holding: Actor) -> Option<u128> {
-        self.chain.state::<Holding>(holding).map(|h| h.balance)
+        self.balance_of(holding, self.definition)
     }
 
     fn supply(&self) -> u128 {
@@ -96,6 +102,14 @@ impl World {
         self.chain
             .send_with_evidence(a, actors, &[&self.a_key], &[evidence(&self.b_key)], msg)
     }
+
+    fn transfer_a_to_b(&self, amount: u128) -> TokenMsg {
+        TokenMsg::Transfer {
+            definition: self.definition.account_id,
+            to: self.b.account_id,
+            amount,
+        }
+    }
 }
 
 #[test]
@@ -104,26 +118,18 @@ fn new_definition_then_transfer_credits_a_fresh_holding() {
     assert_eq!(w.balance(w.a), Some(1_000));
     assert_eq!(w.balance(w.b), None);
 
-    let msg = TokenMsg::Transfer {
-        to: w.b.account_id,
-        amount: 250,
-    };
+    let msg = w.transfer_a_to_b(250);
     w.send_a(&[w.a, w.b], &msg).expect("transfer applies");
 
     assert_eq!(w.balance(w.b), Some(250));
     assert_eq!(w.balance(w.a), Some(750));
     assert_eq!(w.supply(), 1_000);
-    let holding = w.chain.state::<Holding>(w.b).expect("holding");
-    assert_eq!(holding.definition, w.definition.account_id);
 }
 
 #[test]
 fn transfer_without_authorization_reverts() {
     let mut w = World::new(1_000, None);
-    let msg = TokenMsg::Transfer {
-        to: w.b.account_id,
-        amount: 1,
-    };
+    let msg = w.transfer_a_to_b(1);
     let (a, b) = (w.a, w.b);
     expect_revert(w.chain.send(a, &[a, b], &[], &msg), "token: Unauthorized");
     assert_eq!(w.balance(a), Some(1_000));
@@ -132,37 +138,37 @@ fn transfer_without_authorization_reverts() {
 #[test]
 fn transfer_beyond_the_balance_reverts() {
     let mut w = World::new(10, None);
-    let msg = TokenMsg::Transfer {
-        to: w.b.account_id,
-        amount: 11,
-    };
+    let msg = w.transfer_a_to_b(11);
     expect_revert(w.send_a(&[w.a, w.b], &msg), "token: InsufficientBalance");
 }
 
 #[test]
 fn sweep_moves_everything_and_enforces_at_least() {
     let mut w = World::new(1_000, None);
-    let too_much = TokenMsg::Sweep {
+    let sweep = |at_least| TokenMsg::Sweep {
+        definition: w.definition.account_id,
         to: w.b.account_id,
-        at_least: 1_001,
+        at_least,
     };
+    let (too_much, exact) = (sweep(1_001), sweep(1_000));
     expect_revert(w.send_a(&[w.a, w.b], &too_much), "token: BelowAtLeast");
     assert_eq!(w.balance(w.a), Some(1_000));
 
-    let exact = TokenMsg::Sweep {
-        to: w.b.account_id,
-        at_least: 1_000,
-    };
     w.send_a(&[w.a, w.b], &exact).expect("sweep applies");
     assert_eq!(w.balance(w.a), Some(0));
     assert_eq!(w.balance(w.b), Some(1_000));
+    let holding = w.chain.state::<Holding>(w.a).expect("holding stays");
+    assert!(holding.balances.is_empty(), "a zero entry is removed");
 }
 
 #[test]
 fn burn_lowers_supply() {
     let mut w = World::new(1_000, None);
-    w.send_a(&[w.a, w.definition], &TokenMsg::Burn { amount: 400 })
-        .expect("burn applies");
+    let burn = TokenMsg::Burn {
+        definition: w.definition.account_id,
+        amount: 400,
+    };
+    w.send_a(&[w.a, w.definition], &burn).expect("burn applies");
     assert_eq!(w.balance(w.a), Some(600));
     assert_eq!(w.supply(), 600);
 }
@@ -191,13 +197,7 @@ fn mint_to_only_from_the_minter_actor() {
         initial_supply: 0,
     };
     chain
-        .send_with_evidence(
-            definition,
-            &[definition],
-            &[],
-            &[evidence(&d_key)],
-            &new_definition,
-        )
+        .send(definition, &[definition], &[&d_key], &new_definition)
         .expect("definition without supply");
     let mint = forward(
         definition,
@@ -251,40 +251,95 @@ fn mint_to_only_from_the_minter_actor() {
         chain.state::<Definition>(definition).map(|d| d.supply),
         Some(5)
     );
-    assert_eq!(chain.state::<Holding>(a).map(|h| h.balance), Some(5));
+    let held = chain.state::<Holding>(a).map(|h| h.balance(d_account));
+    assert_eq!(held, Some(5));
+}
+
+/// Creates a second token whose whole supply goes to B; returns its definition actor.
+fn junk_token_to_b(w: &mut World, supply: u128) -> Actor {
+    let (j_key, j_account) = w.chain.key("junk");
+    let junk = Actor::new(j_account, w.token);
+    let msg = TokenMsg::NewDefinition {
+        minter: None,
+        initial_to: Some(w.b.account_id),
+        initial_supply: supply,
+    };
+    w.chain
+        .send_with_evidence(junk, &[junk, w.b], &[&j_key], &[evidence(&w.b_key)], &msg)
+        .expect("junk definition");
+    junk
 }
 
 #[test]
-fn credit_with_another_definition_reverts() {
+fn two_definitions_coexist_in_one_holding() {
     let mut w = World::new(1_000, None);
-    // A second token: B's holding of it comes from a second definition's initial supply.
-    let (d2_key, d2_account) = w.chain.key("definition2");
-    let b_evidence = evidence(&w.b_key);
-    let d2 = Actor::new(d2_account, w.token);
-    let new_definition = TokenMsg::NewDefinition {
-        minter: None,
-        initial_to: Some(w.b.account_id),
-        initial_supply: 7,
-    };
-    w.chain
-        .send_with_evidence(
-            d2,
-            &[d2, w.b],
-            &[],
-            &[evidence(&d2_key), b_evidence],
-            &new_definition,
-        )
-        .expect("second definition");
-    assert_eq!(w.balance(w.b), Some(7));
+    let junk = junk_token_to_b(&mut w, 7);
+    let msg = w.transfer_a_to_b(100);
+    w.send_a(&[w.a, w.b], &msg)
+        .expect("credit of a second token");
+    assert_eq!(w.balance_of(w.b, junk), Some(7));
+    assert_eq!(w.balance(w.b), Some(100));
 
-    // A sends token-1 units to B, who holds token 2.
-    let msg = TokenMsg::Transfer {
-        to: w.b.account_id,
-        amount: 1,
+    // B debits the first token; the second is intact.
+    let back = TokenMsg::Transfer {
+        definition: w.definition.account_id,
+        to: w.a.account_id,
+        amount: 100,
     };
-    expect_revert(w.send_a(&[w.a, w.b], &msg), "token: WrongDefinition");
+    let b = w.b;
+    w.chain
+        .send(b, &[b, w.a], &[&w.b_key], &back)
+        .expect("B transfers back");
+    assert_eq!(w.balance_of(w.b, junk), Some(7));
+    let holding = w.chain.state::<Holding>(w.b).expect("holding");
+    assert_eq!(holding.balances.len(), 1, "the emptied entry is removed");
     assert_eq!(w.balance(w.a), Some(1_000));
-    assert_eq!(w.balance(w.b), Some(7));
+}
+
+#[test]
+fn squatting_a_fresh_holding_with_a_junk_token_does_not_block_the_real_one() {
+    let mut w = World::new(1_000, None);
+    junk_token_to_b(&mut w, 1);
+    assert_eq!(w.balance(w.b), Some(0), "B holds only the junk token");
+
+    let msg = w.transfer_a_to_b(300);
+    w.send_a(&[w.a, w.b], &msg).expect("the real credit lands");
+    assert_eq!(w.balance(w.b), Some(300));
+
+    let onward = TokenMsg::Transfer {
+        definition: w.definition.account_id,
+        to: w.a.account_id,
+        amount: 120,
+    };
+    let b = w.b;
+    w.chain
+        .send(b, &[b, w.a], &[&w.b_key], &onward)
+        .expect("B moves the real token on");
+    assert_eq!(w.balance(w.b), Some(180));
+    assert_eq!(w.balance(w.a), Some(820));
+}
+
+#[test]
+fn new_definition_requires_authorization() {
+    let mut chain = new_chain();
+    let token = chain.program("token");
+    let (d_key, d_account) = chain.key("definition");
+    let definition = Actor::new(d_account, token);
+    let msg = TokenMsg::NewDefinition {
+        minter: None,
+        initial_to: None,
+        initial_supply: 0,
+    };
+    // Admitted (the key's account is proven public) but not authorised: nobody signed.
+    let result =
+        chain.send_with_evidence(definition, &[definition], &[], &[evidence(&d_key)], &msg);
+    expect_revert(result, "token: Unauthorized");
+    assert_eq!(chain.raw_state(definition), None);
+
+    chain
+        .send(definition, &[definition], &[&d_key], &msg)
+        .expect("the definition account signs");
+    assert!(chain.state::<Definition>(definition).is_some());
 }
 
 #[test]
@@ -301,6 +356,24 @@ fn credit_and_supply_down_from_outside_the_token_program_revert() {
         w.chain.send(definition, &[definition], &[], &down),
         "token: ForeignSupplyDown",
     );
+
+    // The same messages from another program's actors, the real inflation path.
+    let (_, x_account) = w.chain.key("x");
+    w.chain.fund(x_account, 1);
+    let relay = w.chain.program("relay");
+    for foreign in [
+        Actor::new(x_account, relay),
+        Actor::new(a.account_id, relay),
+    ] {
+        let credit = forward(a, &credit);
+        let result = w.chain.send(foreign, &[foreign, a], &[], &credit);
+        expect_revert(result, "token: ForeignCredit");
+        let down = forward(definition, &down);
+        let result = w.chain.send(foreign, &[foreign, definition], &[], &down);
+        expect_revert(result, "token: ForeignSupplyDown");
+    }
+    assert_eq!(w.balance(a), Some(1_000));
+    assert_eq!(w.supply(), 1_000);
 }
 
 #[test]
@@ -321,10 +394,8 @@ fn read_state_replies_to_from() {
         .raw_state(reader)
         .expect("the relay stored the reply");
     let reply: StateReply = borsh::from_slice(&raw).expect("a StateReply");
-    assert_eq!(
-        Holding::decode(reply.state.as_ref()),
-        Some(Holding::new(w.definition.account_id, 1_000))
-    );
+    let holding = Holding::decode(reply.state.as_ref()).expect("a holding");
+    assert_eq!(holding.balance(w.definition.account_id), 1_000);
 
     // A root read has nobody to reply to.
     expect_revert(

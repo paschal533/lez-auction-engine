@@ -319,25 +319,28 @@ may mint (`lez/programs/wrapped_token/core/src/lib.rs:1-4`).
 | Collateral | transfers only | `T` for the PoC (one code path, `Sweep` available); native collateral is a later option: custody works with a seeded native `Transfer`, but there is no sweep, so sweeps become Read + exact Transfer |
 
 **What the vendored token program becomes.** A port of today's `programs/token` to actors, keeping its
-model: one holding per account, holding = `T`'s actor state on that account, `{ definition, balance }`;
-definition = `T`'s actor state on the definition account, `{ supply, minter: Option<Actor>, .. }`.
+model with one change: a holding is `T`'s actor state on an account, a map `{ balances: definition -> balance }`
+(an entry at zero is removed), so one account can hold any number of tokens; definition = `T`'s actor state on the definition account, `{ supply, minter: Option<Actor>, .. }`.
 
 | Message (at) | Check | Effect |
 |---|---|---|
-| `NewDefinition { minter, .. }` (definition) | empty state | creates the definition |
-| `Transfer { to, amount }` (holding) | `is_authorized` (signature or PDA seed) | debit, then sync `Credit` → `(to, T)` |
-| `Sweep { to, at_least }` (holding) | `is_authorized`; balance `>= at_least` | moves the whole balance (ADR-033) |
-| `Burn { amount }` (holding) | `is_authorized` | debit, then sync `SupplyDown` → `(definition, T)` |
+| `NewDefinition { minter, initial_to, initial_supply }` (definition) | `is_authorized`; empty state | creates the definition |
+| `Transfer { definition, to, amount }` (holding) | `is_authorized` (signature or PDA seed) | debit that entry, then sync `Credit` → `(to, T)` |
+| `Sweep { definition, to, at_least }` (holding) | `is_authorized`; entry `>= at_least` | moves that entry's whole balance (ADR-033) |
+| `Burn { definition, amount }` (holding) | `is_authorized` | debit that entry, then sync `SupplyDown` → `(definition, T)` |
 | `MintTo { to, amount }` (definition) | `from == minter` (whole actor) | supply up, then `Credit` → `(to, T)` |
-| `Credit { definition, amount }` (holding) | `from_own_program()`; an empty holding takes the definition, else it must match (`WrongDefinition`) | credit |
+| `Credit { definition, amount }` (holding) | `from_own_program()` | adds to that definition's entry, creating it |
 | `ReadState` (any) | `from` is set | `StateReply` → `from` |
 
 Two deliberate differences from v0.2.4: credits are **sync**, so a whole engine conversation settles in one
-transaction without relying on async promotion; and a fresh holding needs no signature. Only `T` can write
-`T`'s actor states, so nobody can squat a holding, and `RecipientMustSign` (spec, S7) is dropped [I]. The
-token must send nothing but `Credit`, `SupplyDown` and `StateReply` (§4.3 (c) point 5). Whether an
-undeclared fresh account is admitted is decided by the sequencer (`admit`, EX:1190-1210); the SDK declares
-recipients anyway.
+transaction without relying on async promotion; and a fresh holding needs no signature from its owner. Only
+`T` can write `T`'s actor states, and `RecipientMustSign` (spec, S7) is dropped [I]. Squatting is closed two
+ways: a holding keeps one entry per definition, so a junk token credited to an account (or to a predictable
+vault PDA) cannot lock out the real one, and `NewDefinition` needs the definition account's authorisation, so
+nobody can claim someone else's account as a definition. The token must send nothing but `Credit`,
+`SupplyDown` and `StateReply` (§4.3 (c) point 5). Whether an undeclared fresh account is admitted is decided by
+the sequencer (`admit`, EX:1190-1210): a declared, unsigned, nonexistent key account needs
+`PublicAccountEvidence` (found in the Task 3 tests), so the SDK declares recipients and attaches it.
 
 **Flows** (seed = the PDA seed the engine attaches so `T` sees `is_authorized` on an engine holding):
 

@@ -128,10 +128,10 @@ scripts/basecamp/qml-tests.sh
 - The first command builds and runs the core module's C++ tests against LOGOS_CMOCK, with `auction_ffi` and `lez_core` mocked. The pinned builder names this output `unit-tests`; there is no `#tests` output.
 - The second runs every `apps/auctions/tests/qml/tst_*.qml` with `qmltestrunner`, offscreen, on the builder's Qt 6.9.2 and design system `88330d04` (ADR-054).
 - Without a cache hit, the builder's Qt and logos-cpp-sdk graph builds from source, so the first run's time depends on the caches.
-- The job has not run on a hosted runner: the Plan 4 branch has not been pushed. Last local results: 46 module tests (Task 11) and 171 QML tests (Task 16).
+- Hosted run: green on `feat/plan-4` at be82e74 (run 41172947166): 51 module tests and 182 QML tests. Before e9f104a the job failed on hosted runners because `host.sh check` read `/mnt/c`, which exists only in WSL; the C: check is now skipped there.
 - The live story (`apps/auctions/tests/story.mjs`) is not a CI job (spec, designer's call 6). It runs locally through `scripts/basecamp/run-app.sh` or `scripts/basecamp/install-lgx.sh` ([basecamp-app.md](basecamp-app.md)).
 
-Plan 4 CI status: none of the Plan 4 changes to `core.yml` (`auction_ffi` in `core`, `programs` and `coverage`, the header drift step) nor `basecamp-module.yml` has run on a hosted runner yet, because the branch has not been pushed.
+Plan 4 CI status: the Plan 4 changes to `core.yml` (`auction_ffi` in `core`, `programs` and `coverage`, the header drift step) and `basecamp-module.yml` ran green on hosted runners on `feat/plan-4` at be82e74: `core` 41172947093 (core, programs, coverage, idl-drift, hook-patches, requirements) and `basecamp-module` 41172947166 (51 module tests, 182 QML tests). They have not run on `main` yet: the branch is not merged.
 
 ## Pinned versions
 

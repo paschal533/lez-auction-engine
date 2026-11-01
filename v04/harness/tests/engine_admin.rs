@@ -11,8 +11,8 @@ use engine_core::{
     check::fail_text,
     msg::EngineMsg,
     state::{
-        AccountingState, CollateralState, ConfigState, SchedulePointRec, SystemParamsRec, TAG_COLL,
-        TAG_CONFIG,
+        AccountingState, CollateralState, ConfigState, ObserveCtx, SchedulePointRec,
+        SystemParamsRec, TAG_COLL, TAG_CONFIG,
     },
 };
 use harness::{
@@ -69,7 +69,9 @@ fn expected_config(w: &World) -> ConfigState {
 }
 
 /// The collateral state a first `SetCollateral` with `CollateralArgs::defaults_for_tests()`
-/// writes (values copied from those defaults; schedule words `[0, 200, 2_700_000, 1_000]`).
+/// writes at time 0 (values copied from those defaults; schedule words
+/// `[0, 200, 2_700_000, 1_000]`). Its Observe block saw the oracle's publish at 0 (valid), and
+/// it carries the config's observe context.
 fn expected_collateral(w: &World) -> CollateralState {
     CollateralState {
         tag: TAG_COLL,
@@ -101,7 +103,14 @@ fn expected_collateral(w: &World) -> CollateralState {
         admin_paused: false,
         paused_since_ms: None,
         paused_total_ms: 0,
-        last_seen_oracle_ts: None,
+        last_seen_oracle_ts: Some(0),
+        ctx: ObserveCtx {
+            host: w.params,
+            oracle: w.oracle,
+            clock: w.chain.clock(),
+            slack_ms: SLACK_MS,
+        },
+        pending: None,
     }
 }
 
@@ -260,7 +269,8 @@ fn set_collateral_only_through_the_admin_proxy() {
         &fail_text(EngineError::NotAdmin),
     );
 
-    // A second `SetCollateral` replaces the parameters in place.
+    // A second `SetCollateral` replaces the parameters in place; its Observe block starts the
+    // pause clock at the claimed time (0) because the admin pauses.
     let update = w.set_collateral_msg(CollateralArgs {
         penalty_bps: 1_500,
         admin_paused: true,
@@ -273,6 +283,7 @@ fn set_collateral_only_through_the_admin_proxy() {
         Some(CollateralState {
             penalty_bps: 1_500,
             admin_paused: true,
+            paused_since_ms: Some(0),
             ..expected_collateral(&w)
         })
     );

@@ -6,14 +6,17 @@
 
 use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use engine_core::{
-    actors::{accounting_actor, collateral_actor, config_actor},
+    actors::{
+        accounting_actor, auction_actor, collateral_actor, config_actor, record_actor,
+        vault_holding, vault_seed as engine_vault_seed,
+    },
     msg::EngineMsg,
 };
 use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence, error::LeeError};
 use lee_core::program::TransactionEvent;
 use mock_host_core::{HostMsg, is_unsafe, position_id, vault_id, vault_seed};
 use oracle_core::OracleMsg;
-use token_core::TokenMsg;
+use token_core::{Holding, TokenMsg};
 
 use crate::Chain;
 
@@ -87,6 +90,9 @@ pub struct World {
     pub whale_key: PrivateKey,
     /// Owners of the positions opened so far, in order.
     pub owners: Vec<Owner>,
+    /// The keeper that liquidates (a signer; its reward goes to its own holding `(keeper, T)`).
+    pub keeper: AccountId,
+    pub keeper_key: PrivateKey,
     /// The chain time the world last set, ms.
     pub now_ms: u64,
 }
@@ -101,6 +107,7 @@ impl World {
             ("mock_host", methods::MOCK_HOST_ELF),
             ("relay", methods::RELAY_ELF),
             ("engine", methods::ENGINE_ELF),
+            ("grant_probe", methods::GRANT_PROBE_ELF),
         ]);
         let (token, host_prog, engine) = (
             chain.program("token"),
@@ -114,7 +121,8 @@ impl World {
         let (sdef_key, stable_def) = chain.key("stable-def");
         let (oracle_key, oracle_account) = chain.key("oracle");
         let (_, publisher_account) = chain.key("publisher");
-        for account in [admin, params_account, whale, publisher_account] {
+        let (keeper_key, keeper) = chain.key("keeper");
+        for account in [admin, params_account, whale, publisher_account, keeper] {
             chain.fund(account, 1);
         }
         let config = config_actor(engine, admin, SALT);
@@ -137,6 +145,8 @@ impl World {
             whale,
             whale_key,
             owners: Vec::new(),
+            keeper,
+            keeper_key,
             now_ms: 0,
             chain,
         };
@@ -229,12 +239,14 @@ impl World {
         }
     }
 
-    /// `SetCollateral` of the world's collateral definition for salt [`SALT`].
+    /// `SetCollateral` of the world's collateral definition for salt [`SALT`], claiming the
+    /// world's current time.
     pub fn set_collateral_msg(&self, args: CollateralArgs) -> EngineMsg {
         EngineMsg::SetCollateral {
             salt: SALT,
             collateral_def: self.collateral_def,
             args,
+            now_ms: self.now_ms,
         }
     }
 
@@ -257,7 +269,17 @@ impl World {
         {
             let config = config_actor(self.engine, proxy, *salt);
             let collateral = collateral_actor(self.engine, config.account_id, *collateral_def);
-            return vec![at, config, collateral];
+            // The collateral actor observes: host params, oracle, clock.
+            let clock = self.chain.clock();
+            return vec![at, config, collateral, self.params, self.oracle, clock];
+        }
+        if let EngineMsg::Liquidate {
+            position, nonce, ..
+        } = msg
+        {
+            let mut actors = vec![at];
+            actors.extend(self.liquidate_actors(*position, *nonce));
+            return actors;
         }
         panic!("not a proxied engine message: {msg:?}")
     }
@@ -380,6 +402,125 @@ impl World {
             position: position.account_id,
         });
         position.account_id
+    }
+
+    /// The owner whose position is `position`.
+    ///
+    /// # Panics
+    /// If the world did not open `position`.
+    pub fn owner_of(&self, position: AccountId) -> &Owner {
+        self.owners
+            .iter()
+            .find(|owner| owner.position == position)
+            .unwrap_or_else(|| panic!("the world opened no position {position:?}"))
+    }
+
+    /// `position`'s liquidation record `record_actor(E, config, position)`.
+    pub fn record(&self, position: AccountId) -> Actor {
+        record_actor(self.engine, self.config.account_id, position)
+    }
+
+    /// The auction `auction_actor(E, config, position, nonce)`.
+    pub fn auction(&self, position: AccountId, nonce: u64) -> Actor {
+        auction_actor(self.engine, self.config.account_id, position, nonce)
+    }
+
+    /// The auction's vault holding `(pda(E, ["VAULT", auction]), T)`.
+    pub fn vault(&self, position: AccountId, nonce: u64) -> Actor {
+        let auction = self.auction(position, nonce).account_id;
+        vault_holding(self.engine, self.token, auction)
+    }
+
+    /// The host vault holding of `position`'s owner.
+    pub fn host_vault(&self, position: AccountId) -> Actor {
+        let owner = self.owner_of(position).account;
+        Actor::new(vault_id(self.host_prog, owner), self.token)
+    }
+
+    /// `account`'s balance of `definition`; zero if it holds nothing.
+    pub fn balance(&self, account: AccountId, definition: AccountId) -> u128 {
+        self.chain
+            .raw_state(Actor::new(account, self.token))
+            .map_or(0, |bytes| {
+                Holding::decode(&bytes)
+                    .expect("a token holding")
+                    .balance(definition)
+            })
+    }
+
+    /// `account`'s collateral balance.
+    pub fn collateral_balance(&self, account: AccountId) -> u128 {
+        self.balance(account, self.collateral_def)
+    }
+
+    /// The keeper's `Liquidate` of `position` with expected auction number `nonce`, claiming
+    /// `now_ms`.
+    pub fn liquidate_msg(&self, position: AccountId, nonce: u64, now_ms: u64) -> EngineMsg {
+        EngineMsg::Liquidate {
+            config: self.config.account_id,
+            collateral_def: self.collateral_def,
+            position,
+            nonce,
+            now_ms,
+        }
+    }
+
+    /// Every actor a liquidation of `position` as auction `nonce` touches, except the proxy:
+    /// collateral, host params, oracle, clock, config, record, auction, host position and vault,
+    /// the auction vault and the keeper's holding.
+    pub fn liquidate_actors(&self, position: AccountId, nonce: u64) -> Vec<Actor> {
+        vec![
+            self.collateral,
+            self.params,
+            self.oracle,
+            self.chain.clock(),
+            self.config,
+            self.record(position),
+            self.auction(position, nonce),
+            Actor::new(position, self.host_prog),
+            self.host_vault(position),
+            self.vault(position, nonce),
+            Actor::new(self.keeper, self.token),
+        ]
+    }
+
+    /// The admission evidence a liquidation needs: the auction vault is a fresh engine PDA that
+    /// a token `Credit` creates (ruling R-5b).
+    pub fn liquidate_evidence(
+        &self,
+        position: AccountId,
+        nonce: u64,
+    ) -> [PublicAccountEvidence; 1] {
+        let auction = self.auction(position, nonce).account_id;
+        [PublicAccountEvidence::Pda {
+            program: self.engine,
+            seed: engine_vault_seed(auction),
+        }]
+    }
+
+    /// The keeper liquidates `position` as auction `nonce`, claiming the world's current time.
+    pub fn liquidate(
+        &mut self,
+        position: AccountId,
+        nonce: u64,
+    ) -> Result<Vec<TransactionEvent>, LeeError> {
+        self.liquidate_at(position, nonce, self.now_ms)
+    }
+
+    /// The keeper liquidates `position` as auction `nonce`, claiming `now_ms`.
+    pub fn liquidate_at(
+        &mut self,
+        position: AccountId,
+        nonce: u64,
+        now_ms: u64,
+    ) -> Result<Vec<TransactionEvent>, LeeError> {
+        let msg = self.liquidate_msg(position, nonce, now_ms);
+        let actors = self.proxy_actors(self.keeper, &msg);
+        let evidence = self.liquidate_evidence(position, nonce);
+        let root = Actor::new(self.keeper, self.engine);
+        let key = self.keeper_key.clone();
+        self.chain
+            .send_with_evidence(root, &actors, &[&key], &evidence, &msg)
     }
 
     fn host_proxied(&self, message: HostMsg) -> HostMsg {

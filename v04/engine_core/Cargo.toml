@@ -15,5 +15,6 @@ auction_core = { path = "../../crates/auction_core" }
 auction_engine_params = { path = "../../crates/auction_engine_params", features = ["borsh"] }
 
 [dev-dependencies]
+clock_core.workspace = true
 mock_host_core = { path = "../programs/mock_host_core" }
 sha2 = "0.10.8"

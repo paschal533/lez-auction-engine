@@ -4,7 +4,9 @@
 //! - Config `K = config_actor(E, admin, salt)`: accepts only `from == (admin, E)` and re-derives
 //!   its own address from that sender and the salt.
 //! - Accounting `accounting_actor(E, K)` and collateral `collateral_actor(E, K, def)`: accept only
-//!   their config, re-derived from the sender and checked against their own address.
+//!   their config, re-derived from the sender and checked against their own address. The config
+//!   relays a validated `SetCollateral` as `Configure` with its observe context; the collateral
+//!   actor writes the parameters and then observes with the new admin flag (row 2, ruling R-7b).
 
 use auction_engine_params::{
     EngineError,
@@ -15,8 +17,8 @@ use engine_core::{
     check::{expect_from, fail},
     msg::EngineMsg,
     state::{
-        AccountingState, CollateralState, ConfigState, SystemParamsRec, TAG_COLL, TAG_CONFIG,
-        recs_from_schedule,
+        AccountingState, CollateralState, ConfigState, ObserveCtx, SystemParamsRec, TAG_COLL,
+        TAG_CONFIG, recs_from_schedule,
     },
 };
 use lee_core::{
@@ -25,12 +27,13 @@ use lee_core::{
 };
 use oracle_core::OracleMsg;
 
-fn engine(input: &ReceiveInput) -> AccountId {
+/// The engine program `E`: the receiver's program.
+pub fn engine(input: &ReceiveInput) -> AccountId {
     input.receiver.program_account_id
 }
 
 /// The sender's account; the sender must be an actor of this engine program.
-fn engine_sender(input: &ReceiveInput, err: EngineError) -> AccountId {
+pub fn engine_sender(input: &ReceiveInput, err: EngineError) -> AccountId {
     let from = input.from.unwrap_or_else(|| fail(err));
     expect_from(input, Actor::new(from.account_id, engine(input)), err);
     from.account_id
@@ -57,13 +60,8 @@ fn expect_admin_proxy(input: &ReceiveInput, salt: u64) -> AccountId {
     admin
 }
 
-/// `Init` from an engine actor: at the sender's accounting actor it is the config's relay,
-/// anywhere else it must be the admin proxy's forward to the config.
+/// `Init` at the config, forwarded by the admin's proxy with the CONFIG seed.
 pub fn on_init(input: &ReceiveInput, message: &EngineMsg) -> Response {
-    let from = engine_sender(input, EngineError::NotAdmin);
-    if input.receiver == accounting_actor(engine(input), from) {
-        return init_accounting(input);
-    }
     let EngineMsg::Init {
         salt,
         params,
@@ -89,7 +87,7 @@ pub fn on_init(input: &ReceiveInput, message: &EngineMsg) -> Response {
         clock: *clock,
         slack_ms: *slack_ms,
     };
-    init_config(input, message, &config)
+    init_config(input, &config)
 }
 
 struct InitConfig<'a> {
@@ -104,9 +102,9 @@ struct InitConfig<'a> {
     slack_ms: u64,
 }
 
-/// Creates the config (v0.2.4 checks and codes), reads the oracle once, relays `Init` to the
-/// accounting actor, and ends with the `Proceed` sentinel.
-fn init_config(input: &ReceiveInput, message: &EngineMsg, c: &InitConfig<'_>) -> Response {
+/// Creates the config (v0.2.4 checks and codes) with its oracle read pending, and sends nothing:
+/// the seed it was granted stays with this message (ruling R-8b). `InitReads` follows.
+fn init_config(input: &ReceiveInput, c: &InitConfig<'_>) -> Response {
     // Uninitialised = empty state; without the proxy's seed grant the PDA is not ours to create.
     if !input.pre_state.as_ref().is_empty() || !input.is_authorized {
         fail(EngineError::WrongAccount("config"));
@@ -123,7 +121,6 @@ fn init_config(input: &ReceiveInput, message: &EngineMsg, c: &InitConfig<'_>) ->
     nonzero_actor(c.oracle);
     nonzero_actor(c.clock);
 
-    let k = input.receiver;
     let state = ConfigState {
         tag: TAG_CONFIG,
         salt: c.salt,
@@ -145,15 +142,36 @@ fn init_config(input: &ReceiveInput, message: &EngineMsg, c: &InitConfig<'_>) ->
         system: SystemParamsRec::from_core(&system),
         pending_read: Some(c.oracle),
     };
-    let accounting = SyncMessage::new(accounting_actor(engine(input), k.account_id), message)
-        .with_pda_seeds([accounting_seed(k.account_id)]);
     Response::set_state(state.encode())
-        .send_sync(c.oracle, &OracleMsg::ReadState)
+}
+
+/// `InitReads` from an engine actor: at the sender's accounting actor it is the config's
+/// creation relay; at a config just created by `Init`, it is the admin proxy's continuation:
+/// read the oracle once, create the accounting (ACCT seed, a message that sends nothing), and end
+/// with the `Proceed` sentinel.
+pub fn on_init_reads(input: &ReceiveInput) -> Response {
+    let from = engine_sender(input, EngineError::NotAdmin);
+    let (e, k) = (engine(input), input.receiver);
+    if k == accounting_actor(e, from) {
+        return init_accounting(input);
+    }
+    let config = ConfigState::decode(input.pre_state.as_ref())
+        .unwrap_or_else(|| fail(EngineError::WrongAccount("config")));
+    expect_from(input, Actor::new(config.admin, e), EngineError::NotAdmin);
+    if k != config_actor(e, config.admin, config.salt) || config.pending_read != Some(config.oracle)
+    {
+        fail(EngineError::WrongAccount("config"));
+    }
+    let accounting = SyncMessage::new(accounting_actor(e, k.account_id), &EngineMsg::InitReads)
+        .with_pda_seeds([accounting_seed(k.account_id)]);
+    Response::keep_state()
+        .send_sync(config.oracle, &OracleMsg::ReadState)
         .send(accounting)
         .send_sync(k, &EngineMsg::Proceed)
 }
 
-/// At `accounting_actor(E, K)`, relayed by `K` with the ACCT seed: creates the accounting.
+/// At `accounting_actor(E, K)`, relayed by `K` with the ACCT seed: creates the accounting and
+/// sends nothing.
 fn init_accounting(input: &ReceiveInput) -> Response {
     if !input.pre_state.as_ref().is_empty() || !input.is_authorized {
         fail(EngineError::WrongAccount("accounting"));
@@ -161,19 +179,17 @@ fn init_accounting(input: &ReceiveInput) -> Response {
     Response::set_state(AccountingState::new().encode())
 }
 
-/// `SetCollateral` from an engine actor: at the sender's collateral actor for `collateral_def`
-/// it is the config's relay, anywhere else it must be the admin proxy's forward to the config.
+/// `SetCollateral` at the config, forwarded by the admin's proxy: checks the admin and the
+/// arguments (v0.2.4 codes), then relays `Configure` with the config's observe context to
+/// `collateral_actor(E, K, def)` with the COLL seed (it creates the actor and sends nothing),
+/// followed by the unseeded `Observe` (ruling R-8b).
 pub fn on_set_collateral(
     input: &ReceiveInput,
-    message: &EngineMsg,
     salt: u64,
     collateral_def: AccountId,
     args: &CollateralArgs,
+    now_ms: u64,
 ) -> Response {
-    let from = engine_sender(input, EngineError::NotAdmin);
-    if input.receiver == collateral_actor(engine(input), from, collateral_def) {
-        return write_collateral(input, from, collateral_def, args);
-    }
     let admin = expect_admin_proxy(input, salt);
     let config = ConfigState::decode(input.pre_state.as_ref())
         .unwrap_or_else(|| fail(EngineError::WrongAccount("config")));
@@ -184,25 +200,42 @@ pub fn on_set_collateral(
     args.validate(config.global_cap)
         .unwrap_or_else(|err| fail(err));
     let k = input.receiver.account_id;
-    let relay = SyncMessage::new(collateral_actor(engine(input), k, collateral_def), message)
+    let configure = EngineMsg::Configure {
+        collateral_def,
+        args: args.clone(),
+        ctx: ObserveCtx {
+            host: config.host,
+            oracle: config.oracle,
+            clock: config.clock,
+            slack_ms: config.slack_ms,
+        },
+    };
+    let collateral = collateral_actor(engine(input), k, collateral_def);
+    let relay = SyncMessage::new(collateral, &configure)
         .with_pda_seeds([collateral_seed(k, collateral_def)]);
-    Response::keep_state().send(relay)
+    Response::keep_state()
+        .send(relay)
+        .send_sync(collateral, &EngineMsg::Observe { now_ms })
 }
 
-/// At `collateral_actor(E, K, def)`, relayed by `K` (which validated `args` against its global
-/// cap) with the COLL seed: creates or replaces the parameters, keeping the reservation and the
-/// pause clock of an existing state.
-fn write_collateral(
+/// `Configure` at `collateral_actor(E, K, def)`, relayed by `K` (which validated `args` against
+/// its global cap) with the COLL seed: creates or replaces the parameters, keeping the
+/// reservation and the pause clock of an existing state. Sends nothing; the config's `Observe`
+/// follows.
+pub fn on_configure(
     input: &ReceiveInput,
-    config: AccountId,
     collateral_def: AccountId,
     args: &CollateralArgs,
+    ctx: ObserveCtx,
 ) -> Response {
-    if !input.is_authorized {
+    let config = engine_sender(input, EngineError::NotAdmin);
+    if input.receiver != collateral_actor(engine(input), config, collateral_def)
+        || !input.is_authorized
+    {
         fail(EngineError::WrongAccount("coll_config"));
     }
     let base = if input.pre_state.as_ref().is_empty() {
-        fresh_collateral(config, collateral_def)
+        fresh_collateral(config, collateral_def, ctx)
     } else {
         CollateralState::decode(input.pre_state.as_ref())
             .filter(|state| {
@@ -227,12 +260,20 @@ fn write_collateral(
         type_cap: args.type_cap,
         schedule: recs_from_schedule(&params.schedule),
         admin_paused: args.admin_paused,
+        ctx,
         ..base
     };
+    if next.pending.is_some() {
+        fail(EngineError::WrongAccount("pending"));
+    }
     Response::set_state(next.encode())
 }
 
-fn fresh_collateral(config: AccountId, collateral_def: AccountId) -> CollateralState {
+fn fresh_collateral(
+    config: AccountId,
+    collateral_def: AccountId,
+    ctx: ObserveCtx,
+) -> CollateralState {
     CollateralState {
         tag: TAG_COLL,
         config,
@@ -255,5 +296,7 @@ fn fresh_collateral(config: AccountId, collateral_def: AccountId) -> CollateralS
         paused_since_ms: None,
         paused_total_ms: 0,
         last_seen_oracle_ts: None,
+        ctx,
+        pending: None,
     }
 }

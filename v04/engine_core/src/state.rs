@@ -7,7 +7,7 @@ use auction_core::{
     auction::{Auction, Status},
     liquidation::CollateralParams,
     pause::PauseClock,
-    price::{FeedParams, OracleScale},
+    price::{FeedParams, OracleReading, OracleScale},
     schedule::{Schedule, SchedulePoint},
     system::SystemParams,
 };
@@ -186,8 +186,69 @@ pub struct CollateralState {
     pub paused_since_ms: Option<u64>,
     pub paused_total_ms: u64,
     pub last_seen_oracle_ts: Option<u64>,
+    /// The config's actors and slack the Observe block uses, copied by the config when it relays
+    /// `SetCollateral` (all fixed at `Init`).
+    pub ctx: ObserveCtx,
+    /// Observe-block scratch (design note §4.1): the pending reads and what follows them. Set by
+    /// the handler that starts an observation, filled by the replies, consumed and cleared by the
+    /// `Proceed` sentinel, so it is `None` in every committed state.
+    pub pending: Option<PendingObserve>,
 }
 tagged_state!(CollateralState, TAG_COLL);
+
+/// What the collateral actor needs from its config to observe: the host params actor (redemption
+/// price, ADR-028 oracle), the oracle, the clock and the clock slack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ObserveCtx {
+    pub host: Actor,
+    pub oracle: Actor,
+    pub clock: Actor,
+    pub slack_ms: u64,
+}
+
+/// One oracle publication as the engine reads it (v0.2.4 `OracleReading`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct OracleReadingRec {
+    pub price_raw: u128,
+    pub confidence_raw: u128,
+    pub timestamp_ms: u64,
+}
+
+impl OracleReadingRec {
+    #[must_use]
+    pub fn to_core(self) -> OracleReading {
+        OracleReading {
+            price_raw: self.price_raw,
+            confidence_raw: self.confidence_raw,
+            timestamp_ms: self.timestamp_ms,
+        }
+    }
+}
+
+/// An observation in flight at the collateral actor: `now_ms` is the caller's clock claim (asserted
+/// against the clock), the readings arrive as `StateReply`s, `then` runs at `Proceed`.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PendingObserve {
+    pub now_ms: u64,
+    /// The host's redemption price, once its reply is in.
+    pub redemption_ray: Option<u128>,
+    /// The oracle's publication, once its reply is in.
+    pub reading: Option<OracleReadingRec>,
+    pub then: ObserveThen,
+}
+
+/// What the collateral actor does once an observation is complete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum ObserveThen {
+    /// Only record the pause clock (`SetCollateral`).
+    Record,
+    /// Require a live type, then hand the liquidation to the config (row 4).
+    Liquidate {
+        keeper: AccountId,
+        position: AccountId,
+        nonce: u64,
+    },
+}
 
 impl CollateralState {
     pub fn feed_params(&self) -> Result<FeedParams, EngineError> {
@@ -381,8 +442,38 @@ pub struct AuctionState {
     pub start_ms: u64,
     pub schedule: Vec<SchedulePointRec>,
     pub type_paused_total_at_start: u64,
+    /// Liquidation scratch (design note §4.3 a): the quote inputs between `Open` and `Seized`,
+    /// then the vault check between `Seized` and its `StateReply`. Cleared before the `Finish`
+    /// sentinel, so it is `None` in every committed state.
+    pub scratch: Option<AuctionScratch>,
 }
 tagged_state!(AuctionState, TAG_AUCTION);
+
+/// See [`AuctionState::scratch`].
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum AuctionScratch {
+    /// Set by `Open` (phase `AwaitingSeize`): what the `Seized` report is quoted with.
+    Quote(Box<QuoteCtx>),
+    /// Set by `Seized` (phase `Auctioning`): the vault read must show at least `at_least` of
+    /// `definition` (R6 as a floor, ruling R-5e).
+    VaultRead {
+        vault: Actor,
+        definition: AccountId,
+        at_least: u128,
+    },
+}
+
+/// The liquidation context the config hands the auction at `Open`: the observed bid price, the
+/// global reservation and the collateral actor's state as observed in this transaction.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct QuoteCtx {
+    /// The token program `T` (the auction vault is `(pda(E, ["VAULT", auction]), T)`).
+    pub token: AccountId,
+    pub price_ray: u128,
+    pub global_cap: u128,
+    pub global_reserved: u128,
+    pub collateral: CollateralState,
+}
 
 impl AuctionState {
     /// The core view; an auction still `AwaitingSeize` has no core state yet.
@@ -523,6 +614,13 @@ pub(crate) mod fixtures {
             paused_since_ms: Some(5),
             paused_total_ms: 6,
             last_seen_oracle_ts: Some(7),
+            ctx: ObserveCtx {
+                host: actor(2, 7),
+                oracle: actor(10, 11),
+                clock: actor(12, 13),
+                slack_ms: 6_000,
+            },
+            pending: None,
         }
     }
 
@@ -558,6 +656,7 @@ pub(crate) mod fixtures {
             start_ms: 1_000,
             schedule: vec![point()],
             type_paused_total_at_start: 0,
+            scratch: None,
         }
     }
 }

@@ -7,7 +7,7 @@ use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::{AccountId, Actor};
 
-use crate::state::CollateralState;
+use crate::state::{CollateralState, ObserveCtx};
 
 /// Borsh variant index of [`EngineMsg::Seized`] (ruling R-P1); the mock host encodes the same.
 pub const SEIZED_INDEX: u8 = 5;
@@ -26,11 +26,13 @@ pub enum EngineMsg {
         clock: Actor,
         slack_ms: u64,
     },
-    /// 1. Sets (or replaces) a collateral type's parameters.
+    /// 1. Sets (or replaces) a collateral type's parameters, then observes the feed with the new
+    ///    admin flag at the clock claim `now_ms` (row 2).
     SetCollateral {
         salt: u64,
         collateral_def: AccountId,
         args: CollateralArgs,
+        now_ms: u64,
     },
     /// 2. Liquidates `position`; `nonce` is the expected auction number, `now_ms` the clock claim.
     Liquidate {
@@ -69,24 +71,30 @@ pub enum EngineMsg {
     /// 6. Collateral actor to config: observation done, the liquidation may go ahead (row 4 context).
     LiqCtx {
         position: AccountId,
+        nonce: u64,
         keeper: AccountId,
         now_ms: u64,
+        /// The bid price `P` (v0.2.4 `bid_price`) of this observation.
         price_ray: u128,
-        paused_total_ms: u64,
+        /// The collateral actor's state after this observation.
         collateral: Box<CollateralState>,
     },
-    /// 7. Config to record: auction number `nonce`; the record asserts `nonce == count`, then increments.
-    Bump { nonce: u64 },
-    /// 8. Config to auction (empty state): creates it in `AwaitingSeize`, bound to `host`.
+    /// 7. Config to `position`'s record: auction number `nonce`; the record asserts
+    ///    `nonce == count`, then increments.
+    Bump { position: AccountId, nonce: u64 },
+    /// 8. Config to auction (empty state): creates it in `AwaitingSeize`, bound to `host`, with
+    ///    what the host's `Seized` report is quoted against.
     Open {
         position: AccountId,
         nonce: u64,
         keeper: AccountId,
         host: Actor,
+        token: AccountId,
         now_ms: u64,
         price_ray: u128,
-        paused_total_ms: u64,
         collateral: Box<CollateralState>,
+        global_cap: u128,
+        global_reserved: u128,
     },
     /// 9. Auction to collateral actor and config: reserve `amount` of cap for the auction.
     Reserve {
@@ -125,6 +133,51 @@ pub enum EngineMsg {
     },
     /// 14. Sentinel of the Read block: the replies are in, consume them.
     Proceed,
+    /// 15. Config to collateral actor (COLL seed): writes the validated `SetCollateral` with the
+    ///     config's observe context, and sends nothing; `Observe` follows unseeded.
+    Configure {
+        collateral_def: AccountId,
+        args: CollateralArgs,
+        ctx: ObserveCtx,
+    },
+    /// 16. A seeded probe (ruling R-8b): its handler only asserts the receiver holds a `kind`
+    ///     state and sends nothing, so the PDA seed it carries is inherited by no other message.
+    ///     The real message follows it unseeded, as its next sibling.
+    Probe { kind: ProbeKind },
+    /// 17. After the seeded `Init` created the config: proxy to config, the config's reads and
+    ///     the accounting's creation; config to accounting (ACCT seed), the creation itself.
+    InitReads,
+    /// 18. After the seeded `Configure` wrote the parameters: config to collateral actor, observe
+    ///     at the clock claim `now_ms`.
+    Observe { now_ms: u64 },
+}
+
+/// What a [`EngineMsg::Probe`] expects at its receiver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum ProbeKind {
+    /// A config; otherwise `WrongAccount("config")`.
+    Config,
+    /// A collateral actor; otherwise `WrongAccount("coll_config")`.
+    Collateral,
+}
+
+/// The clock program's message set (`clock_core::Message` at LEZ v0.4.0-rc1), mirrored so the
+/// guest needs no clock crate; only `AssertTimestamp` is sent. Pinned by a test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum ClockMsg {
+    Tick {
+        timestamp: u64,
+        block_id: u64,
+    },
+    Record {
+        block_id: u64,
+        timestamp: u64,
+    },
+    /// The clock asserts its timestamp lies in `[at_least, at_most]`.
+    AssertTimestamp {
+        at_least: u64,
+        at_most: u64,
+    },
 }
 
 #[cfg(test)]
@@ -151,6 +204,7 @@ mod tests {
                 salt: 1,
                 collateral_def: id(1),
                 args: CollateralArgs::defaults_for_tests(),
+                now_ms: 2,
             },
             EngineMsg::Liquidate {
                 config: id(1),
@@ -182,6 +236,22 @@ mod tests {
                 "{message:?}"
             );
         }
+    }
+
+    #[test]
+    fn clock_assert_matches_the_clock_program() {
+        let ours = ClockMsg::AssertTimestamp {
+            at_least: 5,
+            at_most: 9,
+        };
+        let theirs = clock_core::Message::AssertTimestamp {
+            at_least: 5,
+            at_most: 9,
+        };
+        assert_eq!(
+            borsh::to_vec(&ours).expect("encodes"),
+            borsh::to_vec(&theirs).expect("encodes")
+        );
     }
 
     #[test]

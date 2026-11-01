@@ -45,10 +45,10 @@ fn load_position(input: &ReceiveInput) -> Position {
 
 fn handle_message(input: &ReceiveInput) -> Response {
     // At `P`, anything from the configured oracle is the reply to our read.
-    if let Some(params) = Params::decode(input.pre_state.as_ref()) {
-        if input.from == Some(params.oracle) {
-            return on_oracle_reply(input, params);
-        }
+    if let Some(params) = Params::decode(input.pre_state.as_ref())
+        && input.from == Some(params.oracle)
+    {
+        return on_oracle_reply(input, params);
     }
     let message = HostMsg::try_from_slice(&input.message).expect("host: BadMessage");
     match message {

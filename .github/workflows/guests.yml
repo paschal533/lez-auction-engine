@@ -1,7 +1,8 @@
 name: guests
 # The path filter lists every input of the Docker build: the root manifest and lock (the guests inherit
 # `workspace = true` keys), the guests' path-dependency crates (programs/** covers stablecoin, auction_engine,
-# their cores and token/twap_oracle cores; crates/auction_core), patches, the build and check scripts, the
+# their cores and token/twap_oracle cores; crates/auction_core; crates/auction_engine_params, which compiles the
+# engine core's args.rs/error.rs and must never change them), patches, the build and check scripts, the
 # Docker context rules, the vendored packager, the committed binaries and this workflow. The same list is
 # repeated for push and pull_request (GitHub Actions has no YAML anchors).
 on:
@@ -10,6 +11,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/auction_core/**"
+      - "crates/auction_engine_params/**"
       - "programs/**"
       - "patches/**"
       - "scripts/build-guests*"
@@ -23,6 +25,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/auction_core/**"
+      - "crates/auction_engine_params/**"
       - "programs/**"
       - "patches/**"
       - "scripts/build-guests*"

@@ -1,0 +1,82 @@
+# The LEZ v0.4.0-rc1 port (Plan 5), a workspace separate from the v0.2.4 root one.
+[workspace]
+resolver = "3"
+members = [
+    "engine_core",
+    "programs/methods",
+    "programs/mock_host_core",
+    "programs/oracle_core",
+    "programs/token_core",
+    "harness",
+    "sdk",
+]
+# Guests build for riscv32im-risc0-zkvm-elf through risc0_build, as in LEZ's examples.
+exclude = ["programs/methods/guest"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+lee = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1", features = ["test-utils"] }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1", features = ["host"] }
+clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1" }
+# `artifacts` embeds LEZ's prebuilt system program ELFs (artifacts/lez/programs/*.bin at the tag).
+lez_programs = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1", package = "programs", default-features = false, features = ["artifacts"] }
+methods = { path = "programs/methods" }
+engine_core = { path = "engine_core" }
+auction_engine_params = { path = "../crates/auction_engine_params", features = ["borsh"] }
+mock_host_core = { path = "programs/mock_host_core" }
+oracle_core = { path = "programs/oracle_core" }
+token_core = { path = "programs/token_core" }
+harness = { path = "harness" }
+sdk = { path = "sdk" }
+# The sequencer client side, for the SDK's live half.
+common = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1" }
+sequencer_service_rpc = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1", features = ["client"] }
+wallet = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1" }
+borsh = { version = "1.5.7", features = ["derive"] }
+tokio = "1.54.1"
+sha2 = "0.10.8"
+risc0-build = "=3.0.5"
+
+# LEZ v0.4.0-rc1 patches keccak the same way; keeps our resolution identical to the tag's.
+[patch.crates-io]
+keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e99771beedf04946eab21a4a62adc2951377" }
+
+# Same lint policy as the root workspace.
+[workspace.lints.rust]
+rust_2018_idioms = { level = "deny", priority = -1 }
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious  = { level = "deny", priority = -1 }
+perf        = { level = "deny", priority = -1 }
+style       = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+allow_attributes = "warn"
+allow_attributes_without_reason = "deny"
+arithmetic_side_effects = "deny"
+indexing_slicing = "deny"
+as_conversions = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+large_enum_variant = "deny"
+wildcard_enum_match_arm = "deny"
+module_name_repetitions = "allow"
+similar_names = "allow"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+overflow-checks = true
+
+[profile.release]
+overflow-checks = true

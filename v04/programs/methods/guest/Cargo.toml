@@ -1,0 +1,25 @@
+[package]
+name = "v04-guests"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+# Built by risc0_build from ../build.rs, outside the v04 workspace.
+[workspace]
+
+[dependencies]
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1" }
+borsh = { version = "1.5.7", features = ["derive"] }
+risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }
+auction_engine_params = { path = "../../../../crates/auction_engine_params", features = ["borsh"] }
+engine_core = { path = "../../../engine_core" }
+mock_host_core = { path = "../../mock_host_core" }
+oracle_core = { path = "../../oracle_core" }
+token_core = { path = "../../token_core" }
+
+[patch.crates-io]
+keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e99771beedf04946eab21a4a62adc2951377" }
+
+[profile.release]
+debug = 0
+strip = "symbols"

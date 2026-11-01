@@ -1,0 +1,30 @@
+[package]
+name = "sdk"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lee.workspace = true
+lee_core.workspace = true
+borsh.workspace = true
+engine_core.workspace = true
+auction_engine_params.workspace = true
+# The live-sequencer half (`live`): RPC client, transaction wire type, wallet keys and program loader.
+common.workspace = true
+sequencer_service_rpc.workspace = true
+wallet.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+harness.workspace = true
+# The live example (`examples/slice.rs`) speaks the other guests' messages and reads the clock.
+token_core.workspace = true
+oracle_core.workspace = true
+mock_host_core.workspace = true
+clock_core.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

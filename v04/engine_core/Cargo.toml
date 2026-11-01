@@ -1,0 +1,20 @@
+[package]
+name = "engine_core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# `lee_core` is declared without its `host` feature so the riscv guest can depend on this crate by path.
+[dependencies]
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1" }
+borsh = { version = "1.5.7", features = ["derive"] }
+auction_core = { path = "../../crates/auction_core" }
+auction_engine_params = { path = "../../crates/auction_engine_params", features = ["borsh"] }
+
+[dev-dependencies]
+clock_core.workspace = true
+mock_host_core = { path = "../programs/mock_host_core" }
+sha2 = "0.10.8"

@@ -2,7 +2,7 @@
 //! message is for follows from the message, its sender and the receiver's address, never from a
 //! caller-supplied account list.
 //!
-//! - `proxy`: root `Init` / `SetCollateral` / `Liquidate` at the signer's own engine actor
+//! - `proxy`: root `Init` / `SetCollateral` / `Liquidate` / `ClaimLeftover` at the signer's own engine actor
 //!   `(signer, E)`, forwarded only if the signer signed (Proxy block).
 //! - `admin`: the config, accounting and collateral handlers of `Init` / `SetCollateral`, each
 //!   accepting only the one actor that may send it (Relay block, whole-actor checks).
@@ -12,6 +12,10 @@
 //!   `Proceed`), run by `SetCollateral` and `Liquidate`.
 //! - `liquidate`: the config's liquidation context, the record's `Bump`, and the reservations.
 //! - `auction`: the auction's `Open`, `Seized` (the quote), vault check and `Finish` sentinel.
+//! - `bid`: root `Bid` at the collateral actor (Observe), the auction's `BidCtx` (quote, token
+//!   moves, chain end) and the accounting's `Settled`.
+//! - `claim`: the auction's `ClaimLeftover`, forwarded by the owner's proxy.
+//! - `settle`: the auction's `SettleEmpty`, forwarded by its config (permissionless root).
 //!
 //! Errors are panics with the v0.2.4 text (`engine_core::check::fail`).
 
@@ -20,6 +24,10 @@
 mod admin;
 #[path = "engine/auction.rs"]
 mod auction;
+#[path = "engine/bid.rs"]
+mod bid;
+#[path = "engine/claim.rs"]
+mod claim;
 #[path = "engine/liquidate.rs"]
 mod liquidate;
 #[path = "engine/observe.rs"]
@@ -28,9 +36,15 @@ mod observe;
 mod proxy;
 #[path = "engine/read.rs"]
 mod read;
+#[path = "engine/settle.rs"]
+mod settle;
 
 use borsh::BorshDeserialize;
-use engine_core::msg::EngineMsg;
+use engine_core::{
+    bid::{BidQuote, ChainEnd, SettledTotals},
+    msg::EngineMsg,
+    state::BidRequestRec,
+};
 use lee_core::program::{ReceiveInput, Response};
 
 lee_core::actor_entrypoint!(raw handle_message);
@@ -102,13 +116,29 @@ fn handle_message(input: &ReceiveInput) -> Response {
             position,
             nonce,
             amount,
-        } => liquidate::on_reserve(input, position, nonce, amount),
+        } => liquidate::on_reservation(
+            input,
+            (position, nonce),
+            amount,
+            liquidate::Reservation::Reserve,
+        ),
+        EngineMsg::Release {
+            position,
+            nonce,
+            amount,
+        } => liquidate::on_reservation(
+            input,
+            (position, nonce),
+            amount,
+            liquidate::Reservation::Release,
+        ),
         EngineMsg::Open {
             position,
             nonce,
             keeper,
             host,
             token,
+            stable_def,
             now_ms,
             price_ray,
             collateral,
@@ -122,6 +152,7 @@ fn handle_message(input: &ReceiveInput) -> Response {
                 keeper,
                 host,
                 token,
+                stable_def,
                 now_ms,
                 price_ray,
                 global_cap,
@@ -137,10 +168,89 @@ fn handle_message(input: &ReceiveInput) -> Response {
             ..
         } => auction::on_seized(input, position, owner, collateral, nominal_debt),
         EngineMsg::Finish => auction::on_finish(input),
-        EngineMsg::Bid { .. }
-        | EngineMsg::ClaimLeftover { .. }
-        | EngineMsg::Release { .. }
-        | EngineMsg::Settled { .. }
-        | EngineMsg::BidCtx { .. } => panic!("engine: NotYetSupported"),
+        EngineMsg::Bid {
+            bidder,
+            config,
+            collateral_def,
+            position,
+            nonce,
+            max_debt_in,
+            min_collateral_out,
+            now_ms,
+        } => bid::on_bid(
+            input,
+            &bid::BidRoute {
+                config,
+                collateral_def,
+                now_ms,
+            },
+            BidRequestRec {
+                bidder,
+                position,
+                nonce,
+                max_debt_in,
+                min_collateral_out,
+            },
+        ),
+        EngineMsg::BidCtx {
+            bidder,
+            position,
+            nonce,
+            max_debt_in,
+            min_collateral_out,
+            price_ray,
+            now_ms,
+            paused_total_ms,
+            min_bid,
+            chost,
+        } => bid::on_bid_ctx(
+            input,
+            &bid::BidCtxArgs {
+                bidder,
+                position,
+                nonce,
+                quote: BidQuote {
+                    max_debt_in,
+                    min_collateral_out,
+                    price_ray,
+                    now_ms,
+                    paused_total_ms,
+                    min_bid,
+                    chost,
+                },
+            },
+        ),
+        EngineMsg::Settled {
+            config,
+            position,
+            nonce,
+            debt_raised,
+            penalty_raised,
+            shortfall,
+            release,
+            leftover,
+        } => bid::on_settled(
+            input,
+            (config, position, nonce),
+            &SettledTotals {
+                debt_raised,
+                penalty_raised,
+                end: ChainEnd {
+                    shortfall,
+                    release,
+                    leftover,
+                },
+            },
+        ),
+        EngineMsg::ClaimLeftover {
+            config,
+            position,
+            nonce,
+        } => claim::on_claim(input, config, position, nonce),
+        EngineMsg::SettleEmpty {
+            config,
+            position,
+            nonce,
+        } => settle::on_settle_empty(input, config, position, nonce),
     }
 }

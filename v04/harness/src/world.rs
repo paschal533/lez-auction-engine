@@ -101,6 +101,11 @@ impl World {
     /// Everything deployed and the host initialised; the engine is not initialised yet and the
     /// host is not bound.
     pub fn bare() -> Self {
+        Self::bare_at(RAY)
+    }
+
+    /// [`World::bare`] with the host's redemption price `redemption_price_ray`.
+    pub fn bare_at(redemption_price_ray: u128) -> Self {
         let mut chain = Chain::new(&[
             ("token", methods::TOKEN_ELF),
             ("oracle", methods::ORACLE_ELF),
@@ -186,7 +191,7 @@ impl World {
             stable_def,
             collateral_def,
             oracle,
-            redemption_price_ray: RAY,
+            redemption_price_ray,
             min_cr_ray: MIN_CR_RAY,
         };
         w.chain
@@ -198,7 +203,12 @@ impl World {
     /// [`World::bare`], then the admin's `Init` and `SetCollateral` and the host bound to the
     /// config actor.
     pub fn new() -> Self {
-        let mut w = Self::bare();
+        Self::new_at(RAY)
+    }
+
+    /// [`World::new`] with the host's redemption price `redemption_price_ray`.
+    pub fn new_at(redemption_price_ray: u128) -> Self {
+        let mut w = Self::bare_at(redemption_price_ray);
         let key = w.admin_key.clone();
         let init = w.init_msg();
         w.send_engine(w.admin, &[&key], &init)
@@ -281,6 +291,14 @@ impl World {
             actors.extend(self.liquidate_actors(*position, *nonce));
             return actors;
         }
+        if let EngineMsg::ClaimLeftover {
+            position, nonce, ..
+        } = msg
+        {
+            let mut actors = vec![at];
+            actors.extend(self.claim_actors(*position, *nonce));
+            return actors;
+        }
         panic!("not a proxied engine message: {msg:?}")
     }
 
@@ -335,7 +353,36 @@ impl World {
     /// is unsafe at [`MIN_CR_RAY`] (half the price it would need). Returns the position account.
     pub fn open_unsafe_position(&mut self, collateral: u128, debt: u128) -> AccountId {
         let label = format!("owner-{}", self.owners.len());
-        let (key, owner) = self.chain.key(&label);
+        let (key, owner, position) = self.open_position(&label, collateral, debt);
+        let price = debt
+            .checked_mul(MIN_CR_RAY)
+            .and_then(|needed| needed.checked_div(collateral))
+            .and_then(|at_ratio| at_ratio.checked_div(2))
+            .expect("collateral is non-zero and the debt small enough")
+            .max(1);
+        assert!(
+            is_unsafe(collateral, debt, price, MIN_CR_RAY),
+            "the position must be unsafe at the published price"
+        );
+        self.set_price(price);
+        self.owners.push(Owner {
+            key,
+            account: owner,
+            position,
+        });
+        position
+    }
+
+    /// A fresh signer `label` gets `collateral` from the whale, opens a host position with it
+    /// and generates `debt`, which the host mints to its own holding. Returns its key, account
+    /// and position.
+    pub fn open_position(
+        &mut self,
+        label: &str,
+        collateral: u128,
+        debt: u128,
+    ) -> (PrivateKey, AccountId, AccountId) {
+        let (key, owner) = self.chain.key(label);
         self.chain.fund(owner, 1);
         let (token, host) = (self.token, self.host_prog);
         let (owner_holding, proxy) = (Actor::new(owner, token), Actor::new(owner, host));
@@ -384,24 +431,7 @@ impl World {
                 &generate,
             )
             .expect("debt is generated");
-
-        let price = debt
-            .checked_mul(MIN_CR_RAY)
-            .and_then(|needed| needed.checked_div(collateral))
-            .and_then(|at_ratio| at_ratio.checked_div(2))
-            .expect("collateral is non-zero and the debt small enough")
-            .max(1);
-        assert!(
-            is_unsafe(collateral, debt, price, MIN_CR_RAY),
-            "the position must be unsafe at the published price"
-        );
-        self.set_price(price);
-        self.owners.push(Owner {
-            key,
-            account: owner,
-            position: position.account_id,
-        });
-        position.account_id
+        (key, owner, position.account_id)
     }
 
     /// The owner whose position is `position`.

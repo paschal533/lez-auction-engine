@@ -24,6 +24,9 @@ pub struct AuctionIdentity {
     pub host: Actor,
     pub keeper: AccountId,
     pub start_ms: u64,
+    /// The token program `T` and the stablecoin definition, from the config.
+    pub token: AccountId,
+    pub stable_def: AccountId,
 }
 
 /// The auction `Open` writes: phase `AwaitingSeize`, no core amounts yet, the quote inputs in
@@ -36,6 +39,9 @@ pub fn awaiting_seize(id: &AuctionIdentity, ctx: QuoteCtx) -> AuctionState {
         position: id.position,
         nonce: id.nonce,
         host: id.host,
+        token: id.token,
+        collateral_def: ctx.collateral.collateral_definition_id,
+        stable_def: id.stable_def,
         phase: AuctionPhase::AwaitingSeize,
         owner: AccountId::new([0; 32]),
         keeper: id.keeper,
@@ -111,7 +117,6 @@ mod tests {
 
     fn ctx(price_ray: u128) -> QuoteCtx {
         QuoteCtx {
-            token: id(8),
             price_ray,
             global_cap: 10_000_000,
             global_reserved: 0,
@@ -132,6 +137,8 @@ mod tests {
             host: actor(3, 4),
             keeper: id(5),
             start_ms: 1_000,
+            token: id(8),
+            stable_def: id(6),
         }
     }
 

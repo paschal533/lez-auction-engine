@@ -8,8 +8,9 @@
 //! 4. `Finish` to the auction: depth-first order runs it after every earlier subtree, so it sees
 //!    the whole conversation (Sentinel).
 //!
-//! `Reserve` from the auction lands at the collateral actor and the config, each accepting only
-//! the auction re-derived from its own address and the message's `(position, nonce)`.
+//! `Reserve` (after the quote) and `Release` (at the chain end of a bid) from the auction land at
+//! the collateral actor and the config, each accepting only the auction re-derived from its own
+//! address and the message's `(position, nonce)`.
 
 use auction_engine_params::EngineError;
 use engine_core::{
@@ -67,6 +68,7 @@ pub fn on_liq_ctx(input: &ReceiveInput, c: &LiqCtx, collateral: CollateralState)
         keeper: c.keeper,
         host: cfg.host,
         token: cfg.token,
+        stable_def: cfg.stablecoin_definition_id,
         now_ms: c.now_ms,
         price_ray: c.price_ray,
         collateral: Box::new(collateral),
@@ -122,14 +124,30 @@ pub fn on_bump(input: &ReceiveInput, position: AccountId, nonce: u64) -> Respons
     Response::set_state(next.encode())
 }
 
-/// `Reserve` at the collateral actor (type reservation) or the config (global reservation), from
-/// exactly the auction `(config, position, nonce)` of the receiver's config.
-pub fn on_reserve(input: &ReceiveInput, position: AccountId, nonce: u64, amount: u128) -> Response {
+/// Which way a reservation message moves the caps.
+#[derive(Clone, Copy)]
+pub enum Reservation {
+    /// `Reserve` (after the liquidation quote).
+    Reserve,
+    /// `Release` (at the auction's chain end); more than is reserved is v0.2.4's `Math`.
+    Release,
+}
+
+/// `Reserve` / `Release` at the collateral actor (type reservation) or the config (global
+/// reservation), from exactly the auction `(config, position, nonce)` of the receiver's config.
+pub fn on_reservation(
+    input: &ReceiveInput,
+    (position, nonce): (AccountId, u64),
+    amount: u128,
+    way: Reservation,
+) -> Response {
     let e = engine(input);
-    let add = |reserved: u128| {
-        reserved
-            .checked_add(amount)
-            .unwrap_or_else(|| fail(EngineError::Math))
+    let apply = |reserved: u128| {
+        match way {
+            Reservation::Reserve => reserved.checked_add(amount),
+            Reservation::Release => reserved.checked_sub(amount),
+        }
+        .unwrap_or_else(|| fail(EngineError::Math))
     };
     if let Some(coll) = CollateralState::decode(input.pre_state.as_ref()) {
         let auction = auction_actor(e, coll.config, position, nonce);
@@ -138,7 +156,7 @@ pub fn on_reserve(input: &ReceiveInput, position: AccountId, nonce: u64, amount:
             fail(EngineError::WrongAccount("pending"));
         }
         let next = CollateralState {
-            type_reserved: add(coll.type_reserved),
+            type_reserved: apply(coll.type_reserved),
             ..coll
         };
         return Response::set_state(next.encode());
@@ -151,7 +169,7 @@ pub fn on_reserve(input: &ReceiveInput, position: AccountId, nonce: u64, amount:
         fail(EngineError::WrongAccount("pending"));
     }
     let next = ConfigState {
-        global_reserved: add(cfg.global_reserved),
+        global_reserved: apply(cfg.global_reserved),
         ..cfg
     };
     Response::set_state(next.encode())

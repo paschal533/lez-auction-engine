@@ -35,6 +35,7 @@ pub struct OpenArgs {
     pub keeper: AccountId,
     pub host: Actor,
     pub token: AccountId,
+    pub stable_def: AccountId,
     pub now_ms: u64,
     pub price_ray: u128,
     pub global_cap: u128,
@@ -58,9 +59,10 @@ pub fn on_open(input: &ReceiveInput, o: &OpenArgs, collateral: CollateralState) 
         host: o.host,
         keeper: o.keeper,
         start_ms: o.now_ms,
+        token: o.token,
+        stable_def: o.stable_def,
     };
     let ctx = QuoteCtx {
-        token: o.token,
         price_ray: o.price_ray,
         global_cap: o.global_cap,
         global_reserved: o.global_reserved,
@@ -99,8 +101,8 @@ pub fn on_seized(
     };
     let (opened, quote) = quote_seized(&a, &ctx, &report).unwrap_or_else(|err| fail(err));
     let (e, me) = (engine(input), input.receiver.account_id);
-    let vault = vault_holding(e, ctx.token, me);
-    let definition = ctx.collateral.collateral_definition_id;
+    let vault = vault_holding(e, a.token, me);
+    let definition = a.collateral_def;
     let state = AuctionState {
         scratch: Some(AuctionScratch::VaultRead {
             vault,

@@ -5,8 +5,10 @@
 #![forbid(unsafe_code)]
 
 pub mod actors;
+pub mod bid;
 pub mod check;
 pub mod feed;
 pub mod liquidation;
 pub mod msg;
+pub mod scratch;
 pub mod state;

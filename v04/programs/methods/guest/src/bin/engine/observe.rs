@@ -1,5 +1,5 @@
 //! Observe block at the collateral actor `C = collateral_actor(E, config, def)` (design note §4.1,
-//! v0.2.4 `feed.rs` / `observe.rs`), shared by `SetCollateral` and `Liquidate`:
+//! v0.2.4 `feed.rs` / `observe.rs`), shared by `SetCollateral`, `Liquidate` and `Bid`:
 //!
 //! 1. `start` stores a [`PendingObserve`] and sends `ReadState` to the host params actor
 //!    (redemption price; its oracle must be ours, ADR-028), `ReadState` to the oracle,
@@ -8,7 +8,7 @@
 //! 3. `proceed` (run after every earlier subtree) needs both readings, runs `feed::observe`,
 //!    writes the pause clock, clears the scratch and runs the continuation: nothing more for
 //!    `SetCollateral`; for `Liquidate`, `require_live` and the bid price, then `LiqCtx` to the
-//!    config (row 4).
+//!    config (row 4); for `Bid`, the same, then `BidCtx` to the auction (rows 5-6).
 //!
 //! While an observation is pending the actor accepts nothing but the awaited replies and its
 //! own `Proceed` (design note §4.3 c, guard 2).
@@ -167,6 +167,12 @@ pub fn proceed(input: &ReceiveInput) -> Response {
     let response = Response::set_state(observed.encode());
     match pending.then {
         ObserveThen::Record => response,
+        ObserveThen::Bid(request) => {
+            let price_ray = feed::live_price(&coll, &obs, r_ray).unwrap_or_else(|err| fail(err));
+            let (probe, auction, ctx) =
+                crate::bid::bid_ctx(input, &observed, (price_ray, pending.now_ms), &request);
+            response.send(probe).send_sync(auction, &ctx)
+        }
         ObserveThen::Liquidate {
             keeper,
             position,

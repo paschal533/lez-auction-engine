@@ -42,8 +42,11 @@ pub enum EngineMsg {
         nonce: u64,
         now_ms: u64,
     },
-    /// 3. A bid on the auction `(config, position, nonce)`.
+    /// 3. A bid on the auction `(config, position, nonce)`, root at the collateral actor
+    ///    `collateral_actor(E, config, collateral_def)`. `bidder` pays the charge from, and is paid
+    ///    the collateral to, its own holding `(bidder, T)`, so it must sign (rows 5-6).
     Bid {
+        bidder: AccountId,
         config: AccountId,
         collateral_def: AccountId,
         position: AccountId,
@@ -52,7 +55,8 @@ pub enum EngineMsg {
         min_collateral_out: u128,
         now_ms: u64,
     },
-    /// 4. The owner claims the leftover collateral of a settled auction.
+    /// 4. The owner claims the leftover collateral of a settled auction, root at the owner's
+    ///    proxy `(owner, E)` (row 8).
     ClaimLeftover {
         config: AccountId,
         position: AccountId,
@@ -90,6 +94,7 @@ pub enum EngineMsg {
         keeper: AccountId,
         host: Actor,
         token: AccountId,
+        stable_def: AccountId,
         now_ms: u64,
         price_ray: u128,
         collateral: Box<CollateralState>,
@@ -108,8 +113,11 @@ pub enum EngineMsg {
         nonce: u64,
         amount: u128,
     },
-    /// 11. Auction to accounting: the auction settled with these totals.
+    /// 11. Auction to accounting `accounting_actor(E, config)`: the auction `(config, position,
+    ///     nonce)` settled with these cumulative totals and this chain end (v0.2.4
+    ///     `record_settled`).
     Settled {
+        config: AccountId,
         position: AccountId,
         nonce: u64,
         debt_raised: u128,
@@ -120,16 +128,20 @@ pub enum EngineMsg {
     },
     /// 12. Sentinel, the last message of a liquidation: the conversation must have reached its end.
     Finish,
-    /// 13. Collateral actor to auction: a bid with its observation context (rows 5-6).
+    /// 13. Collateral actor to auction: a bid with its observation context (rows 5-6): the bid
+    ///     price `P`, the clock claim, the type's pause total after this (live) observation, and
+    ///     the type's current `min_bid` and `chost` (v0.2.4 quotes with the current parameters).
     BidCtx {
+        bidder: AccountId,
         position: AccountId,
         nonce: u64,
         max_debt_in: u128,
         min_collateral_out: u128,
         price_ray: u128,
-        redemption_ray: u128,
         now_ms: u64,
         paused_total_ms: u64,
+        min_bid: u128,
+        chost: u128,
     },
     /// 14. Sentinel of the Read block: the replies are in, consume them.
     Proceed,
@@ -150,6 +162,15 @@ pub enum EngineMsg {
     /// 18. After the seeded `Configure` wrote the parameters: config to collateral actor, observe
     ///     at the clock claim `now_ms`.
     Observe { now_ms: u64 },
+    /// 19. Root at the config `K = (config, E)`, permissionless (row 7; v0.2.4 `settle_empty`):
+    ///     settles the auction `(config, position, nonce)` whose lot is empty. `K` sends a seeded
+    ///     `Probe { Auction }`, then this message unseeded to the auction, which accepts it only
+    ///     from `K` and ends with the same `Settled` / `Release` tail as a bid's chain end.
+    SettleEmpty {
+        config: AccountId,
+        position: AccountId,
+        nonce: u64,
+    },
 }
 
 /// What a [`EngineMsg::Probe`] expects at its receiver.
@@ -159,6 +180,8 @@ pub enum ProbeKind {
     Config,
     /// A collateral actor; otherwise `WrongAccount("coll_config")`.
     Collateral,
+    /// An auction; otherwise `WrongAccount("auction")` (v0.2.4 `load_auction`).
+    Auction,
 }
 
 /// The clock program's message set (`clock_core::Message` at LEZ v0.4.0-rc1), mirrored so the
@@ -214,6 +237,7 @@ mod tests {
                 now_ms: 4,
             },
             EngineMsg::Bid {
+                bidder: id(9),
                 config: id(1),
                 collateral_def: id(2),
                 position: id(3),

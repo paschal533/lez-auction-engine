@@ -1,0 +1,50 @@
+name: v04
+# The LEZ v0.4.0-rc1 port (Plan 5): the separate `v04` workspace and the shared crates it uses.
+# Host toolchain: Rust 1.98.1 from v04/rust-toolchain.toml (as LEZ v0.4.0-rc1). Guests: built by
+# risc0_build during `cargo test` with the pinned rzup components (r0vm 3.0.5, see
+# .github/actions/install-risc0). librocksdb-sys (via LEZ) needs libclang.
+# The standalone-sequencer e2e (v04/scripts/e2e.sh) stays local, like the v0.2.4 localnet story.
+on:
+  push:
+    paths:
+      - "v04/**"
+      - "crates/auction_core/**"
+      - "crates/auction_engine_params/**"
+      - ".github/workflows/v04.yml"
+  pull_request:
+    paths:
+      - "v04/**"
+      - "crates/auction_core/**"
+      - "crates/auction_engine_params/**"
+      - ".github/workflows/v04.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  v04:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: "2"
+    defaults:
+      run:
+        working-directory: v04
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - run: scripts/ci/free-disk.sh
+        working-directory: .
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev pkg-config libssl-dev libpcsclite-dev
+      # Reads v04/rust-toolchain.toml (channel 1.98.1, rustfmt and clippy in the default profile).
+      - name: Rust 1.98.1 from the toolchain file
+        run: |
+          rustup toolchain install || rustup toolchain install 1.98.1 --profile default
+          cargo --version | grep -q "1.98.1"
+      - uses: ./.github/actions/install-risc0
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: v04, shared-key: v04 }
+      # Our crates only: `--all` would also format the shared crates (crates/*) under rules their own CI owns.
+      - run: cargo fmt -p engine_core -p methods -p mock_host_core -p oracle_core -p token_core -p harness -p sdk -- --check
+      # Ruling R-2b: guests are built by `cargo test`, not by clippy (the methods build script fails under clippy).
+      - run: RISC0_SKIP_BUILD=1 cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace

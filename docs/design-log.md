@@ -1355,3 +1355,190 @@ The screens need about 17 views and quotes and 16 actions. With one C symbol per
 Accepted (Plan 4, Tasks 3, 9 and 10)
 
 ---
+
+## ADR-056: The 0.4 Actor Layout; `ENGINE_AUTH`, `MINT_AUTH` and Account Slots Retire
+
+**Context**
+LEZ 0.4 replaces account lists with actors `(account, program)` and messages (design note §2, §3). Every piece of engine state needs an actor. The v0.2.4 authority PDAs (`ENGINE_AUTH`, `MINT_AUTH`) and the ADR-030 unused slots existed only because a callee could not see who called it. Spike S9 showed that a message's `from` is the whole sending actor, and that a check on the program alone lets a second config of the same engine through (S9 finding 2).
+
+**Options**
+- (A) Keep the v0.2.4 PDAs and pass them along as authorisation grants.
+- (B) The design note §3 layout: engine state at `(pda(E, seeds), E)` with today's seeds; token holdings and engine vaults at `(.., T)`; callers identified by the whole `from` actor; the authority PDAs and slots dropped.
+
+**Decision**
+(B), with three refinements made while building the slice (Plan 5):
+- **Engine actors.** Config, collateral, accounting, liquidation record and auction are `(pda(E, ..), E)` with the ADR-020 seeds, `E` = the deployed program address. The auction vault `(pda(E, ["VAULT", auction]), T)` and the surplus buffer `(pda(E, ["BUFFER", config]), T)` hold token state on engine seeds (design note §3 table).
+- **Retired.** `ENGINE_AUTH`: the host stores the bound engine actor `(K, E)` and checks `from == Some(engine_actor)` (§5). `MINT_AUTH`: a token definition names its minting actor (§6). `UnusedSlot(k)`: no account lists exist, so `None` in the config is enough.
+- **User holdings live on the user's account** `(user, T)` (ruling R-3a). A signing bidder, keeper or owner admits its own fresh holding by its signature. A fresh holding of a non-signer needs `PublicAccountEvidence::Key`.
+- **Holdings are multi-definition** (ruling R-3b): `Holding { balances: BTreeMap<definition, u128> }`, and debits name their definition. A junk token credited first cannot block a real one, so squatting a vault PDA does nothing. This corrects design note §6, whose "nobody can squat a holding" premise did not hold.
+- **Host routing** (ruling R-5a): host root messages go to the params actor `P = (params, H)`; owner actions go through the owner's proxy `(owner, H)`. Positions are `(pda(H, ["POSITION", owner]), H)` and accept only `from == P`.
+
+**Trade-offs**
+- Every check compares a full `Actor`. A bare account-id check would accept `(config, AttackerProgram)`.
+- A holding PDA that a token `Credit` creates (rather than its own program) must be admitted with `Pda` evidence (ruling R-5b). The SDK attaches it (ADR-061).
+- Engine actors re-derive every address from their own stored fields, so the caller cannot substitute an account (ADR-019 (iii) holds by construction).
+
+**Evidence**
+- Design note §3, §5, §6; spikes S8 (admission) and S9 (whole-actor checks, PDAs created by their own program).
+- Tests: `squatter_cannot_init_another_admins_config`, `squatting_a_fresh_holding_with_a_junk_token_does_not_block_the_real_one`, `two_definitions_coexist_in_one_holding`, `rogue_config_of_the_same_engine_cannot_seize`, `engine_actor_at_an_attacker_account_cannot_either`, `impostor_program_at_the_config_account_cannot_send_internal_messages`.
+- Live: `v04/scripts/e2e.sh` (Plan 5, Task 13) runs the slice on a standalone sequencer with this layout.
+
+**Status**
+Accepted (Plan 5, Tasks 3, 5, 7-10)
+
+---
+
+## ADR-057: Five Conversation Blocks, Whole-Actor Checks and Seeded Probes
+
+**Context**
+0.4 has no return values and no cross-program reads. A handler returns its state and a list of messages, which run depth-first after it returns (design note §2, §4.1). Each v0.2.4 instruction must become a conversation that still commits atomically and cannot be steered by a caller or by a program the engine did not name.
+
+**Options**
+- (A) Ad-hoc message sequences per instruction.
+- (B) The design note §4.1 blocks, used everywhere: **Proxy**, **Relay**, **Read**, **Sentinel**, **Assert**, plus the **Observe** composite at the collateral actor.
+
+**Decision**
+(B).
+- **Proxy.** A signer's root message goes to `(signer, E)`, which forwards only if `is_authorized`; the receiver checks `from == (signer, E)`. Init, SetCollateral, Liquidate and ClaimLeftover use it.
+- **Relay.** An actor writes its state, then messages the next one. The receiver checks `from` against an actor it re-derives from its own fields.
+- **Read.** `ReadState` → `StateReply`. The reply is accepted only from the actor read, and only while a pending scratch field expects it.
+- **Sentinel.** The last message of a response is a self-message: `Proceed` closes a Read and continues, `Finish` closes a whole conversation at the auction (ruling R-7d). Depth-first order runs it after every earlier subtree. It panics if a reply is missing, so a half-done conversation never commits.
+- **Assert.** A message that only checks a precondition and panics otherwise, e.g. the clock's `AssertTimestamp` (ADR-058).
+- **Seeded probes** (ruling R-8b). Grants are inherited down the call tree, so a PDA seed is attached only to a message whose subtree is empty. Where an engine message must reach a PDA that may not exist yet, a seeded leaf `Probe` goes first and the real message follows unseeded as its sibling. The engine therefore reports its own error for an absent auction or config, and no seed reaches the host.
+
+**Trade-offs**
+- Executions grow: `Liquidate` is 27 and a final `Bid` 18 (CYCLES.md), against 5 and 3-4 on v0.2.4 (ADR-036). Cycles stay under 8 % of the 10M cap.
+- Each probe costs one execution.
+- The SDK must declare every actor a conversation touches (ADR-061).
+
+**Evidence**
+- Design note §4.1, §4.3 (c); spike S9 (the Read/reply/Sentinel shape, atomic rollback on a later panic).
+- Tests: `forged_seized_and_finish_are_refused`, `seized_outside_awaiting_seize_reverts`, `host_that_never_replies_leaves_no_auction`, `root_messages_to_internal_actors_revert`, `collateral_grant_does_not_reach_the_host`, `bid_on_an_absent_auction_reverts_with_engine_error`, `claim_before_liquidation_reverts_with_engine_error`, `forged_bid_ctx_settled_and_release_are_refused`.
+
+**Status**
+Accepted (Plan 5, Tasks 6-10)
+
+---
+
+## ADR-058: Claimed Time, Asserted Against the Clock with `slack_ms`
+
+**Context**
+An engine actor cannot read the clock account, because 0.4 has no cross-program reads. The pause clock, discounts and feed age all need the current time.
+
+**Options**
+- (A) Read `CLOCK_01` with a `ReadState` round trip on every time-dependent instruction.
+- (B) The caller claims `now_ms` in the root message. The engine sends `AssertTimestamp { at_least: now_ms, at_most: now_ms + slack_ms }` to `(CLOCK_01, clock)` (design note §4.1, "Time").
+
+**Decision**
+(B).
+- `slack_ms` is a config field set at `Init`.
+- The claim can only be earlier than the clock, by at most `slack_ms`. Discounts, `t_eff` and the pause clock use `now_ms`, which favours the protocol. Feed-age checks use `now_ms + slack_ms`, so an understated claim cannot make a stale feed look fresh.
+- The assert runs inside the Observe composite, with the host and oracle Reads, before the Sentinel `Proceed`.
+- `slack_ms` must cover the block interval plus the wait for inclusion: a claim made at the head block is checked against the clock of the block that includes it. The harness uses 6 s. The standalone sequencer makes a block every 15 s, so the live e2e initialises with 60 s.
+
+**Trade-offs**
+- One Assert execution instead of a Read and a reply.
+- A too-small `slack_ms` makes every time-dependent transaction revert, and each revert pays its whole gas limit (S8). A too-large one lets a caller backdate a claim by up to `slack_ms`.
+- The slice has no setter: a wrong value means a new config.
+
+**Evidence**
+- Design note §4.1; spike S8 (15 s blocks on `networks/local.json`).
+- Tests: `liquidate_with_now_outside_the_clock_window_reverts`, `stale_feed_pauses_and_reverts_liquidate`, `clock_assert_matches_the_clock_program`, `feed_age_counts_the_slack`.
+- Harness: `Chain::set_now_ms` writes the clock actor as the sequencer's tick does (ruling R-P2). The live e2e exercises the same assert on the sequencer.
+
+**Status**
+Accepted (Plan 5, Tasks 2, 7-9, 13)
+
+---
+
+## ADR-059: One Bid Message, Rooted at the Collateral Actor
+
+**Context**
+ADR-029 split `bid` from `bid_with_settlement` only because `Accounting` had to be in the v0.2.4 account list. On 0.4 the engine names every actor itself (design note §4.2 notes).
+
+**Options**
+- (A) Keep two variants.
+- (B) One `Bid` message. The chain end (`Settled` to accounting, `Release` to collateral and config) runs whenever the fill ends the auction.
+
+**Decision**
+(B).
+- `Bid { bidder, config, collateral_def, position, nonce, max_debt_in, min_collateral_out, now_ms }` is a root message at the collateral actor `C`, signed by the bidder. `C` runs Observe and sends `BidCtx` to the auction. The auction quotes and moves tokens: it burns the debt part, transfers the penalty to the buffer, and transfers or sweeps collateral from the vault to the bidder. At the chain end it settles.
+- The bid stays rooted at `C`, not at a bidder proxy. The bidder's signature on its own holding is the authorisation; a proxy would add two executions and no safety (ruling R-9c).
+- `SettleEmpty` (an empty lot after the keeper reward) is a separate permissionless message rooted at the config, so an absent auction reports the engine's error (rulings R-9a, R-9d).
+- The `ChainEndAccountsMissing` revert disappears; the SDK always declares accounting.
+
+**Trade-offs**
+- An unsigned or underfunded bid fails with the token's error, not the v0.2.4 engine error. `VaultBelowBook` surfaces as the token's `Sweep` floor (ruling R-9c).
+- Program bidders are not supported in the slice, because a program cannot sign.
+
+**Evidence**
+- Design note §4.2 rows 5-8 and notes.
+- Tests: `partial_bid_then_final_bid_settles_once`, `split_bid_neutrality_holds`, `lot_emptying_final_bid_sweeps_the_vault_and_books_the_shortfall`, `a_bid_needs_the_bidder_signature_and_funds`, `empty_lot_auction_settles_and_releases_reservations`.
+- Live: the e2e's partial and final bids (Task 13).
+
+**Status**
+Accepted (Plan 5, Task 9)
+
+---
+
+## ADR-060: Host Interface v2: `LiquidatePosition` and the `Seized` Report
+
+**Context**
+The engine can no longer read a position and the host vault before calling the host (design note §4.3 (a)). It must still book exactly what was seized (R6).
+
+**Options**
+- (A) The auction reads the position with `ReadState` and sends exact amounts; the host asserts they equal the whole position.
+- (B) The host seizes and reports. `LiquidatePosition { position, custody, reply_to }` arrives from the bound engine actor; the host sweeps the whole vault to custody first, then replies `Seized` to `reply_to`.
+
+**Decision**
+(B), as in design note §5, implemented by the mock CDP host (option B there):
+- **Encoding** (ruling R-P1): `EngineMsg::Seized` is variant index 5, with fields `position, owner, collateral, normalized_debt, nominal_debt`. The host encodes it without depending on the engine crate, and a test pins the index.
+- **Acceptance** (ruling R-5d): the auction accepts `Seized` only in phase `AwaitingSeize`, which never survives a transaction. It accepts it only from exactly `Actor(requested_position, H)`, where `H` is the bound host's program and `requested_position` the position the `Liquidate` named.
+- **Health check in the host**: `P` Reads the oracle before judging the position unsafe (ADR-028 moves into the host).
+- **Custody floor** (ruling R-5e): donations can reach a host vault before a seizure, so custody may receive more than `Seized.collateral`. The engine books the reported amounts, and `Finish` asserts `vault ≥ collateral − reward`. Because this is a floor, a 1-unit donation cannot block every liquidation.
+
+**Trade-offs**
+- Two fewer executions than (A), and the host stays the only reader of its own state.
+- Donated surplus stays in the vault, unaccounted. This does not affect the invariant on booked amounts.
+- The interface is our proposal until upstream ports the stablecoin (design note §8 task 12). The mock's layout is not upstream's, so `Init` does not validate the host's `ProtocolParameters` yet (ruling R-7c).
+
+**Evidence**
+- Design note §4.3 (a), §5; spike S9 (engine → host → engine reply, rogue config refused).
+- Tests: `liquidate_sweeps_to_custody_then_reports_seized`, `seized_index_matches_the_host_encoding`, `donation_to_the_host_vault_does_not_block_liquidation`, `liquidate_refused_before_binding_and_from_any_other_actor`, `liquidate_refused_while_safe`.
+
+**Status**
+Accepted (Plan 5, Tasks 5, 8)
+
+---
+
+## ADR-061: Simulate, Then Send with a Fitted Gas Limit
+
+**Context**
+On 0.4 every public transaction must carry a `FeeDeclaration`, and a revert is charged its whole gas limit (spike S8, findings 1 and 3). A flat large limit makes every lost race expensive. Simulation with the right admitted set predicts settlement exactly (S8 finding 4).
+
+**Options**
+- (A) A flat gas limit per instruction.
+- (B) The SDK simulates each plan against current state right before sending and declares `gas_limit = ceil(cycles × 1.2)`.
+
+**Decision**
+(B), in `v04/sdk`:
+- **Plans** declare the root, every touched actor, the signers and the admission evidence. Evidence is attached only for fresh holdings that a token `Credit` creates at an engine PDA: the auction vault on `Liquidate` and the buffer on the first `Bid` (ruling R-5b). Signers admit their own holdings. Engine actors created by their own seed-granted messages need none (S9).
+- **Simulation** is one pure function over any `StateSource`, either the live sequencer through `Snapshot` or the in-process harness (ruling R-P3). It admits what settlement admits: signers, the payer, existing accounts and evidence.
+- **Fee**: `gas_limit = fit_gas(cycles)`, refused above the 10M cap, and `tip = 0`. `max_fee = gas_limit × exec price + (wire bytes + 64) × storage price`, where each price is the higher of the head base fee and the next block's ceiling. The payer is billed the cycles used, never `max_fee`.
+- **Confirmation**: poll `getTransaction` until the transaction is included, then read the block's `reverted` list. A reverted transaction is included and charged, so inclusion alone does not mean it applied.
+- Nothing is sent after a failed simulation.
+
+**Trade-offs**
+- One simulation per send.
+- A state change between simulation and inclusion can still revert a send, at a cost of at most 1.2 × its cycles.
+- `send_signed` takes explicit keys for signers the wallet does not hold (the e2e's derived actors).
+
+**Evidence**
+- Design note §4.3 (b), §8 task 9; spikes S8 and S9.
+- Tests: `plans_declare_every_touched_actor`, `undeclared_fresh_recipient_is_caught_in_simulation`, `fit_gas_adds_twenty_percent_and_caps`, `max_fee_prices_gas_and_wire_bytes_at_the_next_block_ceiling`.
+- Live: `v04/scripts/e2e.sh` sends every slice transaction this way; its run is recorded in `v04/README.md`.
+
+**Status**
+Accepted (Plan 5, Tasks 12, 13)
+
+---

@@ -7126,12 +7126,18 @@ version = "0.1.0"
 dependencies = [
  "auction_engine_params",
  "borsh",
+ "clock_core",
  "common",
  "engine_core",
  "harness",
  "lee",
  "lee_core",
+ "mock_host_core",
+ "oracle_core",
  "sequencer_service_rpc",
+ "sha2 0.10.9",
+ "token_core",
+ "tokio",
  "wallet",
 ]
 

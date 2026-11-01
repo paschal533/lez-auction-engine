@@ -9,14 +9,18 @@
 //! inclusion cannot push the fee reserve above `max_fee`. The payer is billed the actual fee
 //! (cycles used, not the limit), never `max_fee`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::{Duration, Instant},
+};
 
-use common::transaction::LeeTransaction;
+use common::{HashType, transaction::LeeTransaction};
 use lee::{
-    Account, AccountId, FeeDeclaration, PrivateKey, PublicTransaction,
+    Account, AccountId, FeeDeclaration, PrivateKey, PublicKey, PublicTransaction,
     privacy_preserving_transaction::circuit::{Dependency, ProgramCatalog, ProgramKind},
     public_transaction::WitnessSet,
 };
+use lee_core::BlockId;
 use sequencer_service_rpc::{FeeStateQuote, RpcClient as _, SequencerClient};
 use wallet::{WalletCore, program_facades::program_loader::ProgramLoader};
 
@@ -158,46 +162,82 @@ pub fn max_fee(gas_limit: u64, wire_bytes: u64, quote: &FeeStateQuote) -> u128 {
         .saturating_add(storage.saturating_mul(u128::from(stor)))
 }
 
+/// What [`send`] declared for a transaction it handed to the sequencer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sent {
+    /// The transaction hash.
+    pub hash: [u8; 32],
+    /// The cycles the simulation used.
+    pub cycles: u64,
+    /// `fit_gas(cycles)`, the declared gas limit.
+    pub gas_limit: u64,
+    /// The declared fee ceiling (see [`max_fee`]).
+    pub max_fee: u128,
+}
+
 /// Simulates `plan`, fits its gas, declares the fee (see the module docs), signs it with the
-/// payer's and the plan signers' wallet keys and sends it. Returns the transaction hash.
+/// payer's and the plan signers' wallet keys and sends it.
 ///
 /// # Errors
-/// [`SdkError::WouldRevert`] / [`SdkError::GasAboveCap`] before anything is sent;
-/// [`SdkError::MissingKey`] if the wallet cannot sign; [`SdkError::Rpc`] if the sequencer fails
-/// or refuses the transaction.
+/// [`SdkError::MissingKey`] if the wallet cannot sign; otherwise as [`send_signed`].
 pub async fn send(
     client: &SequencerClient,
     wallet: &Wallet,
     plan: &Plan,
     payer: AccountId,
-) -> Result<[u8; 32], SdkError> {
+) -> Result<Sent, SdkError> {
+    let keys = signing_accounts(plan, payer)
+        .into_iter()
+        .map(|account| {
+            wallet
+                .storage()
+                .key_chain()
+                .pub_account_signing_key(account)
+                .ok_or(SdkError::MissingKey(account))
+        })
+        .collect::<Result<Vec<&PrivateKey>, _>>()?;
+    send_signed(client, wallet, plan, payer, &keys).await
+}
+
+/// [`send`] signed with `keys` instead of the wallet's: `keys` must hold the payer's key and
+/// every plan signer's (extra keys are ignored). The wallet is used only to load programs.
+///
+/// # Errors
+/// [`SdkError::WouldRevert`] / [`SdkError::GasAboveCap`] before anything is sent;
+/// [`SdkError::MissingKey`] if `keys` lack a required signer; [`SdkError::Rpc`] if the sequencer
+/// fails or refuses the transaction.
+pub async fn send_signed(
+    client: &SequencerClient,
+    wallet: &Wallet,
+    plan: &Plan,
+    payer: AccountId,
+    keys: &[&PrivateKey],
+) -> Result<Sent, SdkError> {
+    let accounts = signing_accounts(plan, payer);
+    let by_account: BTreeMap<AccountId, &PrivateKey> = keys
+        .iter()
+        .map(|key| (AccountId::from(&PublicKey::new_from_private_key(key)), *key))
+        .collect();
+    let keys = accounts
+        .iter()
+        .map(|account| {
+            by_account
+                .get(account)
+                .copied()
+                .ok_or(SdkError::MissingKey(*account))
+        })
+        .collect::<Result<Vec<&PrivateKey>, _>>()?;
     let cycles = simulate(client, wallet, plan, payer).await?;
     let gas_limit = fit_gas(cycles)?;
     let quote = client
         .get_fee_state()
         .await
         .map_err(|err| SdkError::Rpc(format!("getFeeState: {err}")))?;
-    let accounts: Vec<AccountId> = [payer]
-        .into_iter()
-        .chain(plan.signers.iter().copied())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let nonces = wallet
-        .get_accounts_nonces(&accounts)
+    let nonces = client
+        .get_accounts_nonces(accounts.clone())
         .await
         .map_err(|err| SdkError::Rpc(format!("getAccountsNonces: {err}")))?;
     let nonces: BTreeMap<_, _> = accounts.iter().copied().zip(nonces).collect();
-    let keys = accounts
-        .iter()
-        .map(|account| {
-            wallet
-                .storage()
-                .key_chain()
-                .pub_account_signing_key(*account)
-                .ok_or(SdkError::MissingKey(*account))
-        })
-        .collect::<Result<Vec<&PrivateKey>, _>>()?;
     let fee = |max_fee| FeeDeclaration {
         payer,
         gas_limit,
@@ -206,17 +246,85 @@ pub async fn send(
     };
     let sized = signed(plan, &nonces, fee(0), &keys);
     let wire_bytes = wire_size(&sized)?;
-    let tx = signed(
-        plan,
-        &nonces,
-        fee(max_fee(gas_limit, wire_bytes, &quote)),
-        &keys,
-    );
+    let max_fee = max_fee(gas_limit, wire_bytes, &quote);
+    let tx = signed(plan, &nonces, fee(max_fee), &keys);
     let hash = client
         .send_transaction(LeeTransaction::Public(tx))
         .await
         .map_err(|err| SdkError::Rpc(format!("sendTransaction: {err}")))?;
-    Ok(hash.0)
+    Ok(Sent {
+        hash: hash.0,
+        cycles,
+        gas_limit,
+        max_fee,
+    })
+}
+
+/// Waits until the transaction `hash` is in a block (polling `getTransaction` every `poll`, at
+/// most `timeout`), then checks the block's `reverted` list. Returns the block id.
+///
+/// A reverted transaction is still included and charged (S8), so inclusion alone does not mean
+/// it applied.
+///
+/// # Errors
+/// [`SdkError::Reverted`] if the block marks it reverted; [`SdkError::Rpc`] if the sequencer
+/// fails or the transaction is not included within `timeout`.
+pub async fn confirm(
+    client: &SequencerClient,
+    hash: [u8; 32],
+    poll: Duration,
+    timeout: Duration,
+) -> Result<BlockId, SdkError> {
+    let started = Instant::now();
+    let block_id = loop {
+        let found = client
+            .get_transaction(HashType(hash))
+            .await
+            .map_err(|err| SdkError::Rpc(format!("getTransaction: {err}")))?;
+        if let Some((_, block_id)) = found {
+            break block_id;
+        }
+        if started.elapsed() >= timeout {
+            return Err(SdkError::Rpc(format!(
+                "transaction {} not included within {timeout:?}",
+                HashType(hash)
+            )));
+        }
+        tokio::time::sleep(poll).await;
+    };
+    let block = client
+        .get_block(block_id)
+        .await
+        .map_err(|err| SdkError::Rpc(format!("getBlock {block_id}: {err}")))?
+        .ok_or_else(|| SdkError::Rpc(format!("block {block_id} not found")))?;
+    let position = block
+        .body
+        .transactions
+        .iter()
+        .position(|tx| tx.hash().0 == hash)
+        .ok_or_else(|| {
+            SdkError::Rpc(format!(
+                "block {block_id} does not list transaction {}",
+                HashType(hash)
+            ))
+        })?;
+    if block.body.is_reverted(position) {
+        return Err(SdkError::Reverted(format!(
+            "transaction {} reverted in block {block_id}",
+            HashType(hash)
+        )));
+    }
+    Ok(block_id)
+}
+
+/// The payer and the plan's signers, deduplicated and ordered: the accounts a send signs for.
+fn signing_accounts(plan: &Plan, payer: AccountId) -> Vec<AccountId> {
+    [payer]
+        .into_iter()
+        .chain(plan.signers.iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn signed(

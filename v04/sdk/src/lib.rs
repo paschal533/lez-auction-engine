@@ -14,7 +14,7 @@ pub use builder::{
     BidArgs, Deployment, InitArgs, LiquidateArgs, Plan, plan_bid, plan_claim_leftover, plan_init,
     plan_liquidate, plan_set_collateral, plan_settle_empty,
 };
-pub use live::{Snapshot, max_fee, send, simulate};
+pub use live::{Sent, Snapshot, confirm, max_fee, send, send_signed, simulate};
 pub use simulate::{MAX_GAS_EXEC, StateSource, fit_gas, simulate_with};
 
 /// What can go wrong building, simulating or sending a plan.
@@ -32,6 +32,8 @@ pub enum SdkError {
     Rpc(String),
     /// The wallet holds no signing key for a payer or signer.
     MissingKey(lee::AccountId),
+    /// The transaction was included (and charged) but its action reverted.
+    Reverted(String),
 }
 
 impl fmt::Display for SdkError {
@@ -43,6 +45,7 @@ impl fmt::Display for SdkError {
             Self::MissingState(reason) => write!(f, "missing state: {reason}"),
             Self::Rpc(reason) => write!(f, "sequencer: {reason}"),
             Self::MissingKey(account) => write!(f, "no signing key for {account}"),
+            Self::Reverted(reason) => write!(f, "reverted on chain: {reason}"),
         }
     }
 }

@@ -17,6 +17,14 @@ auction_engine_params.workspace = true
 common.workspace = true
 sequencer_service_rpc.workspace = true
 wallet.workspace = true
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 harness.workspace = true
+# The live example (`examples/slice.rs`) speaks the other guests' messages and reads the clock.
+token_core.workspace = true
+oracle_core.workspace = true
+mock_host_core.workspace = true
+clock_core.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

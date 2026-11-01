@@ -2,7 +2,8 @@
 
 ## 1. Status and scope
 
-Written 2026-10-31 from code reading only. Nothing was built. Baseline: this repo on LEZ v0.2.4 (ADR-001).
+Written 2026-10-31 from code reading only. Nothing was built. Update 2026-11-01: Plan 5 built the liquidation slice in `v04/`
+(status in the §8 task table; decisions in ADR-056 to ADR-061). Baseline: this repo on LEZ v0.2.4 (ADR-001).
 Target: LEZ **v0.4.0-rc1** (`1806e873`). Every LEZ claim below cites a file at that tag; paths are relative
 to `logos-blockchain/logos-execution-zone`. Claims I could not check in source are marked **[unverified]**.
 Background and upstream status: `docs/research/2026-10-31-lez-0.4-port-research.md` (the "research").
@@ -194,6 +195,10 @@ Notes on the table:
   (§2 point 3). The Relay checks guarantee each write was caused by a genuine engine step, and the Sentinel
   guarantees the conversation finished. Atomicity therefore holds; it is enforced by the transaction, not
   by one handler.
+- **As built (Plan 5).** The slice keeps the bid rooted at `C` with no bidder proxy; an unsigned or
+  underfunded bid fails with the token's error, and `VaultBelowBook` surfaces as the token's `Sweep` floor
+  (unreachable: only `E` debits `V`). `settle_empty` is rooted at `K`, not `A`, so an absent auction reports
+  the engine's error (rulings R-9a, R-9c, R-9d; ADR-059; THREAT_MODEL "LEZ 0.4 port").
 - **Executions grow.** `liquidate` goes from 5 executions (ADR-036) to roughly 15-20; `bid` from 3-4 to
   about 10-12. P1/P3 ("in one block") still hold because it is one transaction, but gas and fees must be
   re-measured (CYCLES.md, ADR-048) before the design is frozen.
@@ -411,17 +416,17 @@ moves to transaction-status polling (ADR-053 already polls `txStatus` through `l
 
 | # | Task | Effort | Status |
 |---|---|---|---|
-| 0 | Spike: standalone sequencer at rc1, deploy an example with `wallet deploy-program`, one fee-paying tx from Rust; record genesis keys, fees, and whether reverts charge the full gas limit | 1-2 d | doable now |
-| 1 | Review this note; record ADRs: actor layout and retired PDAs, the five building blocks, claimed time, one bid message, host interface v2 | 1-2 d | doable now |
-| 2 | Refactor on v0.2.4 first: split each handler into a pure step function (state in, state out, effects list) and a thin I/O shell; existing tests stay green | 3-4 d | doable now, de-risks 6 |
-| 3 | Rust 1.98.1, edition 2024 where needed; pin `lee`/`lee_core` to v0.4.0-rc1 in a new workspace member | 1 d | doable now |
-| 4 | Token actor port (§6) and a minimal oracle actor | 4-6 d | doable now |
-| 5 | Mock CDP host implementing the F7 interface (§5 option B) | 3-5 d | doable now |
-| 6 | Engine guest on `actor_entrypoint!`: messages, building blocks, all 17 instructions; hand-kept SPEL-schema IDL with a drift test | 2-3 wk | doable now; U1 not met |
-| 7 | In-process harness on `lee` v0.4; port security (§4.3 (c)), invariant (R6, inv 2/7/9-11/17) and two-instance tests | 1-1.5 wk | after 4-6 |
-| 8 | Measure cycles and gas per instruction; new CYCLES.md baseline (ADR-048) | 2-3 d | after 7 |
-| 9 | SDK: tx builder, decoders, PDA math, simulate-then-send with fitted `gas_limit`, scanner, confirmation | 1.5-2 wk | after 6 |
-| 10 | Scripts and CI: bootstrap from the v0.4 tag, e2e on a standalone sequencer with `RISC0_DEV_MODE=0`, no reliance on events | 3-5 d | after 9 |
+| 0 | Spike: standalone sequencer at rc1, deploy an example with `wallet deploy-program`, one fee-paying tx from Rust; record genesis keys, fees, and whether reverts charge the full gas limit | 1-2 d | done: spikes S8, S9 |
+| 1 | Review this note; record ADRs: actor layout and retired PDAs, the five building blocks, claimed time, one bid message, host interface v2 | 1-2 d | done: ADR-056 to ADR-061 (Plan 5, Task 13) |
+| 2 | Refactor on v0.2.4 first: split each handler into a pure step function (state in, state out, effects list) and a thin I/O shell; existing tests stay green | 3-4 d | not done as a separate step: the slice was written directly as pure `engine_core` code plus a guest shell |
+| 3 | Rust 1.98.1, edition 2024 where needed; pin `lee`/`lee_core` to v0.4.0-rc1 in a new workspace member | 1 d | done: `v04/` workspace (Plan 5, Task 1) |
+| 4 | Token actor port (§6) and a minimal oracle actor | 4-6 d | done: multi-definition holdings (R-3b), oracle with relay publisher (Plan 5, Tasks 3-4) |
+| 5 | Mock CDP host implementing the F7 interface (§5 option B) | 3-5 d | done (Plan 5, Task 5) |
+| 6 | Engine guest on `actor_entrypoint!`: messages, building blocks, all 17 instructions; hand-kept SPEL-schema IDL with a drift test | 2-3 wk | partial: the liquidation slice (Init, SetCollateral, Liquidate, Bid, SettleEmpty, ClaimLeftover; Plan 5, Tasks 6-9); the other 11 instructions and the IDL are Plan 6 |
+| 7 | In-process harness on `lee` v0.4; port security (§4.3 (c)), invariant (R6, inv 2/7/9-11/17) and two-instance tests | 1-1.5 wk | done for the slice: `harness`, security and invariant tests (Plan 5, Tasks 2, 10) |
+| 8 | Measure cycles and gas per instruction; new CYCLES.md baseline (ADR-048) | 2-3 d | done for the slice: `v04/CYCLES.md` (Plan 5, Task 11) |
+| 9 | SDK: tx builder, decoders, PDA math, simulate-then-send with fitted `gas_limit`, scanner, confirmation | 1.5-2 wk | partial: plans, decoders, simulate-then-send, block-level confirmation (Plan 5, Tasks 12-13); the scanner is Plan 6 |
+| 10 | Scripts and CI: bootstrap from the v0.4 tag, e2e on a standalone sequencer with `RISC0_DEV_MODE=0`, no reliance on events | 3-5 d | partial: `v04/scripts/e2e.sh` (local) and the `v04` CI workflow (Plan 5, Task 13) |
 | 11 | CLI, `auction_ffi`, Basecamp module on `lez_core` 0.6.0 | 1 wk | blocked: lez_core #72 |
 | 12 | Replace the mock host with upstream's port (or our own, §5 option A) | 1 wk after upstream; 3-4 wk alone | blocked upstream |
 | 13 | Reproducible guests, ImageIDs, immutable deploys, DEPLOYMENTS.md (ADR-047), real proofs (ADR-045) | 3-5 d | after 12 |

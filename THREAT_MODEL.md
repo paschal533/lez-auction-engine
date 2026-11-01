@@ -67,6 +67,15 @@ Plus: C-class (griefing price discovery: anyone can bid early at a low discount;
 - **`[local]` stablecoin commits bypass the patch series (RT-06, Low).** `export-hook-patches.sh` skips commits whose subject contains `[local]` and `check-hook-patches.sh` replays them before comparing, so such a commit can change deployed stablecoin source without reaching `patches/stablecoin` while the check stays green. Today the only one is `0aecfc9` (ADR-035, an `instance-b` feature-gated entry-point change). M1: compare the deployed tree against the patch series, or allowlist the paths a `[local]` commit may touch.
 - **Price-band edges (RT-07, Info).** ADR-005's clamp `P = clamp(M, R·lo, R·hi)` has two edges. When the market price `M` is below `R·lo`, the engine pays more collateral per coin than the market rate (the surplus comes out of the owner's leftover or becomes a booked shortfall). When `M > R·hi/(1−d_max)` (a valid feed, for example above 1.57 R at hi = 11000 and d_max = 30%), a bid buys less collateral than its coin is worth at any discount, so auctions hold their reservations (no expiry, ADR-012) until the market returns. Neither is a code defect; keep `lo` close to 10000 in deployments.
 
+## LEZ 0.4 port (Plan 5 slice, `v04/`): accepted differences
+
+The 0.4 engine (ADR-056 to ADR-061) replaces the v0.2.4 authentication above with whole-actor `from` checks; the v0.2.4 sections still describe the deployed PoC. Accepted for the slice (ruling R-9c):
+- **Token errors instead of engine errors.** An unsigned or underfunded bid fails with the token's error, not v0.2.4's engine error. `VaultBelowBook` surfaces as the token's `Sweep` floor (`BelowAtLeast`); it is unreachable, because only the engine can debit an auction vault.
+- **Bid rooted at the collateral actor, no bidder proxy.** The bidder's signature on its own holding authorises the payment; a proxy would cost two executions and add no check.
+- **No program bidders or owners.** The proxy pattern needs a signer, so a program cannot bid or claim a leftover in the slice.
+- **A signature authorises the signer's holdings for the whole transaction**, including the host's and oracle's `ReadState` handling. This trusts the programs a config binds (host, oracle, token), as design note §4.3 (c) point 1 already requires.
+- **Custody floor, not equality** (ruling R-5e): a donation to a host vault before a seizure stays in the auction vault, unbooked; the engine books the host's report.
+
 ## Engine freeze recovery (ops runbook)
 
 1. `check_solvency` froze the host: `ProtocolParameters.is_frozen == true` is the current freeze state. `Accounting.host_frozen_by_engine == true` only says the engine has frozen this host **at least once**: the engine sets it on every Freeze and never clears it, so it stays `true` after an unfreeze and is not a current-state flag.

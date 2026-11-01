@@ -30,6 +30,12 @@ pub use world::World;
 pub const CLOCK: &str = "clock";
 
 /// A single-node chain held in memory. Every `send` is its own block.
+///
+/// Known differences from the LEZ sequencer: the sequencer applies the clock tick last in each
+/// block, while `set_now_ms` writes the clock accounts before the next send; there are no fees and
+/// no gas metering in-process (`cycles` simulates, but `send` charges nothing); `fund` force-creates
+/// accounts instead of transferring from a genesis payer; and the harness skips the sequencer's
+/// system-state guard, so the in-process run does not check it.
 pub struct Chain {
     state: V03State,
     catalog: ProgramCatalog,

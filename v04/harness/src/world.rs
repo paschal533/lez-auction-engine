@@ -28,7 +28,8 @@ pub const MIN_CR_RAY: u128 = RAY * 3 / 2;
 pub const SAFE_PRICE_RAY: u128 = 2 * RAY;
 /// The config salt of the world's admin.
 pub const SALT: u64 = 1;
-/// The config's clock slack, ms.
+/// The config's clock slack, ms. In-process only: a 15 s-block sequencer needs >= 60 s (ADR-058;
+/// the SDK example's `SLACK_MS` default).
 pub const SLACK_MS: u64 = 6_000;
 /// The collateral supply, all minted to the whale that funds position owners.
 pub const WHALE_COLLATERAL: u128 = 1_000_000_000_000;

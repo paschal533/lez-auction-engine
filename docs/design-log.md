@@ -1495,6 +1495,9 @@ The engine can no longer read a position and the host vault before calling the h
 - **Encoding** (ruling R-P1): `EngineMsg::Seized` is variant index 5, with fields `position, owner, collateral, normalized_debt, nominal_debt`. The host encodes it without depending on the engine crate, and a test pins the index.
 - **Acceptance** (ruling R-5d): the auction accepts `Seized` only in phase `AwaitingSeize`, which never survives a transaction. It accepts it only from exactly `Actor(requested_position, H)`, where `H` is the bound host's program and `requested_position` the position the `Liquidate` named.
 - **Health check in the host**: `P` Reads the oracle before judging the position unsafe (ADR-028 moves into the host).
+- **Order** (Transfer, then `Seized`): pinned by `liquidate_opens_an_auction_and_pays_the_keeper`. The keeper reward is paid from the auction vault inside the `Seized` subtree, so it only succeeds if the sweep landed first. The relay-sink test `liquidate_sweeps_to_custody_then_reports_seized` checks the report's content and the final balances, not the order.
+- **Type match** (ruling R-F2): the collateral actor's Observe block fails `HostMismatch` unless the host's `params.collateral_def` is the type's definition, so a config cannot configure (and so cannot liquidate) a type the bound host does not hold.
+- **Positions obey only their `P`**: `Seize` and `AddDebt` at a position fail `host: NotItsParams` unless they come from the params actor that created it, so a rogue `P'` of the same host program (its own oracle and bound engine) cannot seize or add debt to another `P`'s position.
 - **Custody floor** (ruling R-5e): donations can reach a host vault before a seizure, so custody may receive more than `Seized.collateral`. The engine books the reported amounts, and `Finish` asserts `vault ≥ collateral − reward`. Because this is a floor, a 1-unit donation cannot block every liquidation.
 
 **Trade-offs**
@@ -1504,7 +1507,7 @@ The engine can no longer read a position and the host vault before calling the h
 
 **Evidence**
 - Design note §4.3 (a), §5; spike S9 (engine → host → engine reply, rogue config refused).
-- Tests: `liquidate_sweeps_to_custody_then_reports_seized`, `seized_index_matches_the_host_encoding`, `donation_to_the_host_vault_does_not_block_liquidation`, `liquidate_refused_before_binding_and_from_any_other_actor`, `liquidate_refused_while_safe`.
+- Tests: `liquidate_sweeps_to_custody_then_reports_seized`, `liquidate_opens_an_auction_and_pays_the_keeper` (order), `seized_index_matches_the_host_encoding`, `donation_to_the_host_vault_does_not_block_liquidation`, `liquidate_refused_before_binding_and_from_any_other_actor`, `liquidate_refused_while_safe`, `collateral_type_the_host_does_not_hold_is_refused`, `seize_from_another_params_actor_reverts`, `add_debt_from_another_params_actor_reverts`.
 
 **Status**
 Accepted (Plan 5, Tasks 5, 8)

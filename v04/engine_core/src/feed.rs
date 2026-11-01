@@ -3,8 +3,10 @@
 //!
 //! Time (design note §4.1): `now_ms` is the caller's claim, asserted to lie in
 //! `[clock − slack, clock]`. The feed-age check uses `now_ms + slack_ms`, so an understated claim
-//! cannot make a stale feed look fresh; the pause clock records `now_ms`, which favours the
-//! protocol for `t_eff` as ADR-024 intends.
+//! cannot make a stale feed look fresh; the pause clock records `now_ms`. The bias of a claim is
+//! bounded by `slack_ms` but does not always favour the protocol: a pause closed at an
+//! understated `now_ms` is shorter, and an auction's `start_ms` can be up to `slack_ms` in the
+//! past (ADR-058; design note §4.1).
 
 use auction_core::{
     error::PauseReason,

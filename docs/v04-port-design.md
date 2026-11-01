@@ -151,6 +151,8 @@ Every instruction below is built from these. Names are ours, not LEZ's.
 use: discounts, `t_eff` and delay checks (`DelayNotElapsed`, relist, TTL) use `now`, which favours the
 protocol; feed-age checks use `now + slack`, so an understated `now` cannot make a stale feed look fresh.
 Today `CLOCK_01` also holds the previous block's timestamp, so the semantics are close to ADR-024's.
+The bias of a claim is bounded by `slack`, but it does not always favour the protocol: a pause closed at an
+understated `now` is shorter, and an auction's `start_ms` can be up to `slack` in the past (ADR-058).
 
 **Observe** (shared by `liquidate`, `bid`, `observe_feed`, `set_collateral_config`) runs at the collateral
 actor `C = (pda(E, ["COLL", config, def]), E)`, which owns the pause clock: Read `(redemption_state, H)`,
@@ -172,7 +174,7 @@ auction, `V` = vault holding `(pda, T)`, `B` = buffer holding, `→` = sync mess
 | 1 | `set_engine_params` | proxy | → K; K writes; → Acc *Assert* "no live system auction" if the change touches the protocol token or system params (`ProtocolTokenLocked`); → C *Assert* caps if needed | K | K: `from == (cfg.admin, E)` |
 | 2 | `set_collateral_config` | proxy | → K → C; C runs Observe with the new admin flag, writes | C | C: `from == K` |
 | 3 | `observe_feed` | C | Observe only; an invalid reading is recorded, never a panic (ADR-032) | C (pause clock) | none (permissionless) |
-| 4 | `liquidate` | proxy `(keeper, E)` | → C (Observe, `require_live`) → K `LiqCtx`. K sends, in order: record `Bump{nonce}`; A `Open` (phase `AwaitingSeize`); host `LiquidatePosition{custody: V, oracle, reply_to: A}` [host checks, moves collateral to V, → A `Seized{..}`; A quotes, pays the keeper reward from V, sends `Reserve`]; A `Finish` (Sentinel) | record, A, C/K reservations (sent by A as `Reserve` after the quote), V | host: `from == (K, E)` (§5); A on `Seized`: `from ==` the bound host actor stored in `Open`; C/K on `Reserve`: `from ==` A re-derived from `(config, position, nonce)` |
+| 4 | `liquidate` | proxy `(keeper, E)` | → C (Observe, `require_live`) → K `LiqCtx`. K sends, in order: record `Bump{nonce}`; A `Open` (phase `AwaitingSeize`); host `LiquidatePosition{position, custody: V, reply_to: A}` (no oracle field: freshness is the engine's Observe) [host checks, moves collateral to V, → A `Seized{..}`; A quotes, pays the keeper reward from V, sends `Reserve`]; A `Finish` (Sentinel) | record, A, C/K reservations (sent by A as `Reserve` after the quote), V | host: `from == (K, E)` (§5); A on `Seized`: `from ==` the bound host actor stored in `Open`; C/K on `Reserve`: `from ==` A re-derived from `(config, position, nonce)` |
 | 5-6 | `bid` / `bid_with_settlement` → one `Bid` | C | Observe → A `BidCtx{price, r, now, paused_total}`; A quotes, writes; → `(bidder_stable, T)` Burn(debt part) → Transfer(penalty part → B) → V `Transfer` or `Sweep{at_least}` → bidder collateral (VAULT seed); at chain end → Acc `Settled`, → C `Release`, → K `Release` | A, C, Acc, K at chain end; holdings | bidder holding: signs; V: seed `["VAULT", A]`; A: `from == C`; Acc/C/K: `from == A` re-derived |
 | 7 | `settle_empty` | A | A asserts `Auctioning` and `collateral_left == 0`; → Acc `Settled`, → C, K `Release` | A, Acc, C, K | permissionless (today's "caller signs" requirement disappears; the fee payer is the caller) |
 | 8 | `claim_leftover` | proxy `(owner, E)` | → A; → V `Sweep{to, at_least: claimable - claimed}` (VAULT seed) | A | A: `from == (A.owner, E)` |
@@ -278,7 +280,7 @@ pins both the program and the configuration (ADR-027) with no PDA grant. Consequ
 | Message | Sent by | Host does | Host sends |
 |---|---|---|---|
 | `SetLiquidationEngine { engine_actor }` | host admin, root | stores the binding | nothing |
-| `LiquidatePosition { position, custody: Actor, oracle: Actor, reply_to: Actor }` | `(K, E)` | Variant C; checks the oracle equals its market oracle (ADR-028 moves here); runs today's checks (unsafe at the minimum ratio, fresh oracle); seizes the **whole** position (ADR-012) | token Transfer of the whole vault balance to `custody` (vault PDA seed), then `Seized { position, owner, collateral, normalized_debt, nominal_debt }` → `reply_to` |
+| `LiquidatePosition { position, custody: AccountId, reply_to: Actor }` | `(K, E)` | Variant C; reads its own market oracle and checks the position is unsafe at the minimum ratio; seizes the **whole** position (ADR-012). No oracle field: the engine's Observe already checked that the host's oracle is the config's (ADR-028), that its `collateral_def` is the type's (ruling R-F2) and that the feed is fresh | token Transfer of the whole vault balance to `custody` (vault PDA seed), then `Seized { position, owner, collateral, normalized_debt, nominal_debt }` → `reply_to` |
 | `EngineFreezeNewDebt` | `(K, E)` | Variant C; sets `is_frozen` (idempotent) | nothing |
 
 The engine's `A` accepts `Seized` only from the host actor it recorded in `Open`, and only in phase
@@ -346,6 +348,17 @@ nobody can claim someone else's account as a definition. The token must send not
 `SupplyDown` and `StateReply` (§4.3 (c) point 5). Whether an undeclared fresh account is admitted is decided by
 the sequencer (`admit`, EX:1190-1210): a declared, unsigned, nonexistent key account needs
 `PublicAccountEvidence` (found in the Task 3 tests), so the SDK declares recipients and attaches it.
+
+**Correction to the squatting note above (final review, Plan 5).** One entry per definition stops a junk
+token from *locking out* the real one, but two gaps remain, both fixed in Plan 6:
+- **The unbounded holding map is a liquidation-blocking vector.** Any `Transfer` may credit any account, so an
+  owner can stuff junk definitions into their own host vault until the seizure's `Sweep`, whose cost grows with
+  the whole map, exceeds the 10M gas cap; the position then cannot be liquidated. Auction vaults and the
+  surplus buffer are exposed the same way. Planned fix: one holding account per `(owner, definition)`, or debits
+  whose cost does not depend on the map's size.
+- **A PDA definition address can be pre-blocked without being published.** Its address is derivable, and a
+  `Credit` creates a holding state there, after which `NewDefinition` (empty state required) fails. Plan 6 must
+  create PDA definitions (e.g. the protocol token's) at initialisation, before use.
 
 **Flows** (seed = the PDA seed the engine attaches so `T` sees `is_authorized` on an engine holding):
 

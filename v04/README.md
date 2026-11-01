@@ -36,7 +36,7 @@ match the tag's.
 
 CI: `.github/workflows/v04.yml` runs fmt, clippy and `cargo test --workspace` on changes under `v04/`,
 `crates/auction_core/` or `crates/auction_engine_params/`. The e2e below stays local, like the v0.2.4
-localnet story: it needs a LEZ build and about 15 minutes of 15 s blocks.
+localnet story: it needs a LEZ build and about 25 minutes of 15 s blocks.
 
 ## End to end on a standalone sequencer
 
@@ -52,6 +52,10 @@ engine with `wallet program-loader deploy` (segment count from a dry run, spike 
 `cargo run -p sdk --example slice`, and stops the sequencer with `pkill -x sequencer_servi`. It exits
 non-zero on any failed step and expects `slice complete`.
 
+`SLACK_MS` (the config's clock slack, ADR-058) defaults to 60 s in the example; the in-process harness uses
+6 s (`harness::world::SLACK_MS`). A 15 s-block sequencer needs at least 60 s, since a claim must lie within
+`slack` of a clock that only moves once per block.
+
 The example sends every transaction through the SDK (simulate, `gas_limit = ceil(1.2 × cycles)`,
 `max_fee` at the next block's price ceiling, send, confirm by the block's `reverted` list) and prints
 each hash, the simulated cycles, `gas_limit` and the fee actually charged (the payer's balance before
@@ -62,8 +66,8 @@ the leftover claim.
 
 Two runs (one in stages, one `e2e.sh` end to end, each on a fresh sequencer) gave identical cycles,
 gas limits and fees. Engine instructions of the staged run (the other 13 transactions are the token, oracle and mock-host setup;
-all 20 are in the task report). Every transaction applied first time; the fee charged equals
-`cycles × 8 + wire bytes × 8` exactly, i.e. the simulation predicted settlement.
+all 20 are in the task report). Every transaction applied first time; the fee charged
+matched `cycles × 8 + wire bytes × 8` in the recorded runs (the example asserts fee ≤ `max_fee`).
 
 | Instruction | Block | Simulated cycles | CYCLES.md | gas_limit | Fee charged |
 |---|---|---|---|---|---|

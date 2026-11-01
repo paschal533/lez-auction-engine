@@ -9,7 +9,7 @@
 #   7. stop the sequencer by its exact process name.
 # `e2e.sh` (or `e2e.sh all`) runs every step; `up`, `deploy`, `slice`, `down` run them in stages.
 # Exits non-zero on any failed step. Local only (no CI): it needs a few GB of LEZ build and
-# about 15 minutes of 15 s blocks.
+# about 25 minutes of 15 s blocks.
 #
 # Environment (all optional):
 #   LEZ_DIR        LEZ checkout at v0.4.0-rc1      (default ~/lez-spikes/lez-v04, cloned if absent)
@@ -17,7 +17,8 @@
 #   CARGO_TARGET_DIR  target dir for v04           (default ~/lez-target/v04-port)
 #   E2E_HOME       sequencer home + wallet, wiped  (default ~/lez-e2e/v04)
 #   ENV_SH         sourced first (libclang, libpcsclite sysroot; default ~/lez-spikes/s1/env.sh if present)
-#   RUN_TAG, SLACK_MS  passed to the example
+#   RUN_TAG, SLACK_MS  passed to the example (SLACK_MS default 60000: a 15 s-block sequencer needs
+#                  >= 60 s of clock slack, ADR-058; the in-process harness uses 6 s)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -17,3 +17,6 @@ borsh = ["dep:borsh"]
 
 [dev-dependencies]
 serde_json = "1.0"
+# Root workspace only: pins `seeds` to the v0.2.4 core's `pda` helpers (tests/seeds_match_core.rs).
+# A dev-dependency is never resolved when the v0.4 workspace uses this crate as a path dependency.
+auction_engine_core = { path = "../../programs/auction_engine/core" }

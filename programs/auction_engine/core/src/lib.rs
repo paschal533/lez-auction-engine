@@ -2,11 +2,13 @@
 //! errors and argument parsing. Used by the guest, the host handlers, tests and (Plan 3) the SDK.
 #![forbid(unsafe_code)]
 
+pub mod args;
+pub mod error;
 pub mod instruction;
 pub mod pda;
 pub mod state;
 
-pub use auction_engine_params::{args, error, EngineError};
+pub use error::EngineError;
 pub use instruction::Instruction;
 
 #[cfg(test)]

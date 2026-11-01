@@ -2,7 +2,8 @@
 //! v0.2.4 `feed.rs` / `observe.rs`), shared by `SetCollateral`, `Liquidate` and `Bid`:
 //!
 //! 1. `start` stores a [`PendingObserve`] and sends `ReadState` to the host params actor
-//!    (redemption price; its oracle must be ours, ADR-028), `ReadState` to the oracle,
+//!    (redemption price; its oracle must be ours, ADR-028, and its collateral definition the
+//!    type's, ruling R-F2), `ReadState` to the oracle,
 //!    `AssertTimestamp { now, now + slack }` to the clock, and `Proceed` to itself.
 //! 2. `on_reply` takes each reading only from exactly the actor asked, once.
 //! 3. `proceed` (run after every earlier subtree) needs both readings, runs `feed::observe`,
@@ -110,6 +111,11 @@ pub fn on_reply(input: &ReceiveInput) -> Option<Response> {
     let from = input.from?;
     if from == coll.ctx.host && pending.redemption_ray.is_none() {
         let params = reply_state(input, Params::decode, EngineError::HostMismatch);
+        // Ruling R-F2: the type must be the collateral the host holds, or the engine would price
+        // and auction the host's collateral under another type's parameters.
+        if params.collateral_def != coll.collateral_definition_id {
+            fail(EngineError::HostMismatch);
+        }
         // ADR-028: the price comes from the oracle the host's health gate uses.
         if params.oracle != coll.ctx.oracle {
             fail(EngineError::OracleMismatch);

@@ -252,7 +252,12 @@ mod tests {
                 nonce: 3,
             },
         ];
-        for (index, message) in roots.iter().enumerate() {
+        assert_indices(&roots, 0);
+    }
+
+    /// Every message's first byte is its variant index, counted from `first`.
+    fn assert_indices<T: BorshSerialize + core::fmt::Debug>(messages: &[T], first: usize) {
+        for (index, message) in (first..).zip(messages) {
             let bytes = borsh::to_vec(message).expect("encodes");
             assert_eq!(
                 usize::from(*bytes.first().expect("non-empty")),
@@ -260,6 +265,108 @@ mod tests {
                 "{message:?}"
             );
         }
+    }
+
+    /// The internal variants 5..=19 are wire format too (appended only): pinned one by one.
+    #[test]
+    fn internal_variant_indices_are_fixed() {
+        use crate::state::fixtures::{actor, coll};
+        let (position, nonce) = (id(1), 2);
+        let internals = [
+            EngineMsg::Seized {
+                position,
+                owner: id(2),
+                collateral: 3,
+                normalized_debt: 4,
+                nominal_debt: 5,
+            },
+            EngineMsg::LiqCtx {
+                position,
+                nonce,
+                keeper: id(3),
+                now_ms: 4,
+                price_ray: 5,
+                collateral: Box::new(coll()),
+            },
+            EngineMsg::Bump { position, nonce },
+            EngineMsg::Open {
+                position,
+                nonce,
+                keeper: id(3),
+                host: actor(4, 5),
+                token: id(6),
+                stable_def: id(7),
+                now_ms: 8,
+                price_ray: 9,
+                collateral: Box::new(coll()),
+                global_cap: 10,
+                global_reserved: 11,
+            },
+            EngineMsg::Reserve {
+                position,
+                nonce,
+                amount: 3,
+            },
+            EngineMsg::Release {
+                position,
+                nonce,
+                amount: 3,
+            },
+            EngineMsg::Settled {
+                config: id(3),
+                position,
+                nonce,
+                debt_raised: 4,
+                penalty_raised: 5,
+                shortfall: 6,
+                release: 7,
+                leftover: 8,
+            },
+            EngineMsg::Finish,
+            EngineMsg::BidCtx {
+                bidder: id(3),
+                position,
+                nonce,
+                max_debt_in: 4,
+                min_collateral_out: 5,
+                price_ray: 6,
+                now_ms: 7,
+                paused_total_ms: 8,
+                min_bid: 9,
+                chost: 10,
+            },
+            EngineMsg::Proceed,
+            EngineMsg::Configure {
+                collateral_def: id(3),
+                args: CollateralArgs::defaults_for_tests(),
+                ctx: ObserveCtx {
+                    host: actor(4, 5),
+                    oracle: actor(6, 7),
+                    clock: actor(8, 9),
+                    slack_ms: 10,
+                },
+            },
+            EngineMsg::Probe {
+                kind: ProbeKind::Config,
+            },
+            EngineMsg::InitReads,
+            EngineMsg::Observe { now_ms: 3 },
+            EngineMsg::SettleEmpty {
+                config: id(3),
+                position,
+                nonce,
+            },
+        ];
+        assert_eq!(internals.len(), 15, "variants 5..=19");
+        assert_indices(&internals, usize::from(SEIZED_INDEX));
+    }
+
+    #[test]
+    fn probe_kind_indices_are_fixed() {
+        assert_indices(
+            &[ProbeKind::Config, ProbeKind::Collateral, ProbeKind::Auction],
+            0,
+        );
     }
 
     #[test]

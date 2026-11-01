@@ -370,6 +370,11 @@ fn liquidate_refused_while_safe() {
     assert_eq!(w.chain.raw_state(engine), None, "no report was sent");
 }
 
+/// The bound engine (a relay sink that stores what it receives) liquidates an unsafe position:
+/// custody holds the whole vault, the position is zeroed and the stored report is the `Seized`
+/// of the position. This checks content and final balances only; the Transfer-before-`Seized`
+/// order is pinned by `liquidate_opens_an_auction_and_pays_the_keeper` (liquidate.rs), whose
+/// keeper reward is paid from the auction vault inside the `Seized` subtree (ADR-060).
 #[test]
 fn liquidate_sweeps_to_custody_then_reports_seized() {
     let mut w = World::with_position(true);
@@ -397,4 +402,148 @@ fn liquidate_sweeps_to_custody_then_reports_seized() {
 
     // The position is empty now; a second liquidation finds nothing unsafe.
     expect_revert(w.liquidate(engine), "host: PositionSafe");
+}
+
+/// An attacker's own params actor `P'` under the same host program: its own oracle (with its own
+/// publisher) and its own relay bound as `P'`'s engine.
+struct RogueParams {
+    params: Actor,
+    oracle: Actor,
+    engine: Actor,
+}
+
+impl RogueParams {
+    /// Inits `P'` with the victim world's token and definitions, the attacker's oracle publishing
+    /// `price_ray`, and binds the attacker's relay as `P'`'s engine.
+    fn new(w: &mut World, price_ray: u128) -> Self {
+        let (params_key, params_account) = w.chain.key("rogue-params");
+        let (oracle_key, oracle_account) = w.chain.key("rogue-oracle");
+        let (_, publisher_account) = w.chain.key("rogue-publisher");
+        let (_, engine_account) = w.chain.key("rogue-engine");
+        for account in [params_account, publisher_account, engine_account] {
+            w.chain.fund(account, 1);
+        }
+        let relay = w.chain.program("relay");
+        let params = Actor::new(params_account, w.host);
+        let oracle = Actor::new(oracle_account, w.chain.program("oracle"));
+        let publisher = Actor::new(publisher_account, relay);
+        let engine = Actor::new(engine_account, relay);
+
+        w.chain
+            .send(
+                oracle,
+                &[oracle],
+                &[&oracle_key],
+                &OracleMsg::Init { publisher },
+            )
+            .expect("the rogue oracle is initialised");
+        let publish = OracleMsg::Publish {
+            price_ray,
+            timestamp_ms: 1,
+            confidence: 0,
+        };
+        w.chain
+            .send(
+                publisher,
+                &[publisher, oracle],
+                &[],
+                &forward(oracle, &publish),
+            )
+            .expect("the rogue publisher publishes");
+
+        let token = w.owner_holding.program_account_id;
+        let init = HostMsg::Init {
+            admin: params,
+            token,
+            stable_def: w.stable_def.account_id,
+            collateral_def: w.collateral_def.account_id,
+            oracle,
+            redemption_price_ray: RAY,
+            min_cr_ray: MIN_CR_RAY,
+        };
+        w.chain
+            .send(params, &[params], &[&params_key], &init)
+            .expect("the rogue params actor is initialised");
+        let bind = HostMsg::SetLiquidationEngine {
+            engine_actor: engine,
+        };
+        w.chain
+            .send(params, &[params], &[&params_key], &bind)
+            .expect("the rogue engine is bound to P'");
+        Self {
+            params,
+            oracle,
+            engine,
+        }
+    }
+}
+
+/// A position obeys only the `P` that created it: a `Seize` that a foreign params actor `P'` of
+/// the same host program sends (after its own bound engine asked and its own oracle called the
+/// position unsafe) fails `host: NotItsParams`, and the victim's position and vault are untouched.
+#[test]
+fn seize_from_another_params_actor_reverts() {
+    let mut w = World::with_position(true);
+    // Safe under P's oracle; P' reads its own oracle, which calls it unsafe.
+    let rogue = RogueParams::new(&mut w, 1);
+    let msg = HostMsg::LiquidatePosition {
+        position: w.position.account_id,
+        custody: w.custody.account_id,
+        reply_to: rogue.engine,
+    };
+    let actors = [
+        rogue.engine,
+        rogue.params,
+        rogue.oracle,
+        w.position,
+        w.vault,
+        w.custody,
+    ];
+    expect_revert(
+        w.chain
+            .send(rogue.engine, &actors, &[], &forward(rogue.params, &msg)),
+        "host: NotItsParams",
+    );
+
+    assert_eq!(
+        w.position_state(),
+        Some(w.expected_position(COLLATERAL, DEBT))
+    );
+    assert_eq!(w.balance(w.vault, w.collateral_def), COLLATERAL);
+    assert_eq!(w.balance(w.custody, w.collateral_def), 0);
+    assert_eq!(w.chain.raw_state(rogue.engine), None, "no report was sent");
+}
+
+/// The same guard on `AddDebt`: an owner action routed through a foreign `P'` (here the victim
+/// signs a `GenerateDebt` naming `P'`) reaches the victim's position from `P'` and fails
+/// `host: NotItsParams`; no debt is added and nothing is minted.
+#[test]
+fn add_debt_from_another_params_actor_reverts() {
+    let mut w = World::with_position(true);
+    let rogue = RogueParams::new(&mut w, SAFE_PRICE);
+    let msg = HostMsg::Proxy {
+        params: rogue.params.account_id,
+        message: Box::new(HostMsg::GenerateDebt {
+            normalized_debt: DEBT,
+        }),
+    };
+    let actors = [
+        w.proxy,
+        rogue.params,
+        w.position,
+        w.stable_def,
+        w.owner_holding,
+    ];
+    let (proxy, key) = (w.proxy, w.owner_key.clone());
+    expect_revert(
+        w.chain.send(proxy, &actors, &[&key], &msg),
+        "host: NotItsParams",
+    );
+
+    assert_eq!(
+        w.position_state(),
+        Some(w.expected_position(COLLATERAL, DEBT))
+    );
+    assert_eq!(w.balance(w.owner_holding, w.stable_def), DEBT);
+    assert_eq!(w.balance(w.vault, w.collateral_def), COLLATERAL);
 }

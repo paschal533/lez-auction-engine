@@ -360,6 +360,64 @@ fn liquidate_needs_the_keeper_signature_and_a_configured_collateral() {
     invariants::check(&w);
 }
 
+/// Ruling R-F2: a collateral type must be the one the bound host holds. The Observe block fails
+/// `HostMismatch` unless the host's `params.collateral_def` is the type's definition, so a second
+/// type on the same config (here the stablecoin definition) can never be configured, and so never
+/// liquidated: otherwise the engine would price and auction the host's collateral under another
+/// type's parameters. The check sits in the Observe reply branch every `SetCollateral` and
+/// `Liquidate` runs; it fires first at `SetCollateral`, before a mismatched type can exist.
+#[test]
+fn collateral_type_the_host_does_not_hold_is_refused() {
+    let (mut w, position) = world_with_position();
+    let second = w.stable_def;
+    let other = engine_core::actors::collateral_actor(w.engine, w.config.account_id, second);
+    let key = w.admin_key.clone();
+    let set = EngineMsg::SetCollateral {
+        salt: harness::world::SALT,
+        collateral_def: second,
+        args: World::collateral_args(),
+        now_ms: T,
+    };
+    expect_revert(
+        w.send_engine(w.admin, &[&key], &set),
+        &fail_text(EngineError::HostMismatch),
+    );
+    assert_eq!(w.chain.raw_state(other), None);
+    invariants::check(&w);
+
+    let liquidate = EngineMsg::Liquidate {
+        config: w.config.account_id,
+        collateral_def: second,
+        position,
+        nonce: 0,
+        now_ms: T,
+    };
+    let mut actors = w.proxy_actors(w.keeper, &liquidate);
+    actors.push(other);
+    let evidence = w.liquidate_evidence(position, 0);
+    let keeper_key = w.keeper_key.clone();
+    let before = position_state(&w, position);
+    let vault_before = w.collateral_balance(w.host_vault(position).account_id);
+    expect_revert(
+        w.chain.send_with_evidence(
+            Actor::new(w.keeper, w.engine),
+            &actors,
+            &[&keeper_key],
+            &evidence,
+            &liquidate,
+        ),
+        &fail_text(EngineError::WrongAccount("coll_config")),
+    );
+    assert_eq!(w.chain.raw_state(other), None);
+    assert_eq!(position_state(&w, position), before);
+    assert_eq!(
+        w.collateral_balance(w.host_vault(position).account_id),
+        vault_before
+    );
+    assert_eq!(auction_state(&w, position, 0), None);
+    invariants::check(&w);
+}
+
 /// Design note §4.3 c, guard 5 (ruling R-8b): the collateral actor's PDA grant must not be
 /// inherited into the host's subtree. The engine is bound to a `grant_probe` host stand-in whose
 /// `params.admin` is the probe actor at the collateral actor's account; on `LiquidatePosition` the

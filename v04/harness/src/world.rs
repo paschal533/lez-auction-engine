@@ -113,6 +113,7 @@ impl World {
             ("relay", methods::RELAY_ELF),
             ("engine", methods::ENGINE_ELF),
             ("grant_probe", methods::GRANT_PROBE_ELF),
+            ("impostor", methods::IMPOSTOR_ELF),
         ]);
         let (token, host_prog, engine) = (
             chain.program("token"),

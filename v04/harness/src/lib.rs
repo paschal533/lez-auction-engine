@@ -21,6 +21,7 @@ use lee_core::{BlockId, Timestamp, program::TransactionEvent};
 use sha2::{Digest as _, Sha256};
 
 pub mod bidding;
+pub mod impostor;
 pub mod invariants;
 pub mod world;
 pub use world::World;

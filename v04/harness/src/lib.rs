@@ -37,6 +37,8 @@ pub struct Chain {
     keys: BTreeMap<String, PrivateKey>,
     block: BlockId,
     now_ms: Timestamp,
+    /// The declared actors whose state the last `send` changed.
+    last_changed: Vec<Actor>,
 }
 
 impl Chain {
@@ -73,6 +75,7 @@ impl Chain {
             keys: BTreeMap::new(),
             block: 1,
             now_ms: 0,
+            last_changed: Vec::new(),
         };
         chain.set_now_ms(0);
         chain
@@ -129,12 +132,38 @@ impl Chain {
         evidence: &[PublicAccountEvidence],
         msg: &impl BorshSerialize,
     ) -> Result<Vec<TransactionEvent>, LeeError> {
+        self.last_changed.clear();
         let tx = self.transaction(root, actors, signers, evidence, msg)?;
+        let declared: Vec<Actor> = tx.message().public_context.actors.iter().copied().collect();
+        let before: Vec<Option<Vec<u8>>> = declared.iter().map(|a| self.raw_state(*a)).collect();
         let result = self
             .state
             .transition_from_public_transaction(&tx, self.block, self.now_ms);
         self.block = self.block.checked_add(1).expect("block id overflow");
+        self.last_changed = declared
+            .into_iter()
+            .zip(before)
+            .filter(|(actor, was)| self.raw_state(*actor) != *was)
+            .map(|(actor, _)| actor)
+            .collect();
         result
+    }
+
+    /// The actors whose state differs after the last `send` (created, rewritten or removed);
+    /// empty after a revert. Only declared actors can change, so these are the declared ones
+    /// whose state bytes moved.
+    pub fn changed_actors(&self) -> Vec<Actor> {
+        self.last_changed.clone()
+    }
+
+    /// Whether `account` exists in state, the condition settlement admits it on.
+    pub fn account_exists(&self, account: AccountId) -> bool {
+        self.state.get_account_by_id_ref(account).is_some()
+    }
+
+    /// Every installed program, keyed by the account it is deployed at, as simulation takes it.
+    pub fn catalog(&self) -> &ProgramCatalog {
+        &self.catalog
     }
 
     /// Sets chain time: the next transactions run at `ms`, and the clock accounts hold `ms`,

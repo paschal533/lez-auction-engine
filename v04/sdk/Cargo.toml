@@ -1,0 +1,22 @@
+[package]
+name = "sdk"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lee.workspace = true
+lee_core.workspace = true
+borsh.workspace = true
+engine_core.workspace = true
+auction_engine_params.workspace = true
+# The live-sequencer half (`live`): RPC client, transaction wire type, wallet keys and program loader.
+common.workspace = true
+sequencer_service_rpc.workspace = true
+wallet.workspace = true
+
+[dev-dependencies]
+harness.workspace = true

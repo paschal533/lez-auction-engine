@@ -7,6 +7,7 @@ pub mod builder;
 pub mod decode;
 pub mod live;
 pub mod simulate;
+pub mod system;
 
 use std::fmt;
 
@@ -16,6 +17,11 @@ pub use builder::{
 };
 pub use live::{Sent, Snapshot, confirm, max_fee, send, send_signed, simulate};
 pub use simulate::{MAX_GAS_EXEC, StateSource, fit_gas, simulate_with};
+pub use system::{
+    SetEngineParamsArgs, TakeArgs, buffer_evidence, plan_check_solvency, plan_close_debt,
+    plan_close_surplus, plan_observe_feed, plan_set_engine_params, plan_settle_debt,
+    plan_start_debt, plan_start_surplus, plan_take_debt, plan_take_surplus,
+};
 
 /// What can go wrong building, simulating or sending a plan.
 #[derive(Debug, Clone, PartialEq, Eq)]

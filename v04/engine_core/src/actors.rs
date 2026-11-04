@@ -1,7 +1,10 @@
 //! Actor and PDA helpers (design note §3). Seed bytes come from `auction_engine_params::seeds`
 //! with the v0.2.4 literals (ADR-020); `engine` is the deployed engine program's address, in place
 //! of the v0.2.4 image id. A `*_seed` is what the engine must grant when it moves or creates the
-//! actor; an actor is the derived account under the engine (or, for holdings, the token program).
+//! actor; an actor is the derived account under the engine (or, for the vaults' and the buffer's
+//! token actors, the token program). Since ADR-062 those token actors are stateless proxies: the
+//! balance of `owner` in `definition` lives in its own token actor `token_core::holding_actor(T,
+//! owner, definition)`, which a debit through the proxy reaches by one more hop.
 
 use auction_engine_params::seeds::{combine_seeds, seed_from_str, u64_seed};
 use lee_core::{
@@ -119,13 +122,15 @@ pub fn auction_actor(
     actor_at(engine, engine, &auction_seed(config, position, nonce))
 }
 
-/// An auction's vault `(pda(E, VAULT), T)`: a token holding at an engine-derived account.
+/// An auction's vault `(pda(E, VAULT), T)`, the owner token actor the engine debits through (its
+/// `VAULT` seed); its collateral is `holding_actor(T, vault.account_id, collateral_def)`.
 #[must_use]
 pub fn vault_holding(engine: AccountId, token: AccountId, auction: AccountId) -> Actor {
     actor_at(token, engine, &vault_seed(auction))
 }
 
-/// The surplus buffer `(pda(E, BUFFER), T)`.
+/// The surplus buffer `(pda(E, BUFFER), T)`, the owner token actor the engine debits through (its
+/// `BUFFER` seed); its stablecoin is `holding_actor(T, buffer.account_id, stable_def)`.
 #[must_use]
 pub fn buffer_holding(engine: AccountId, token: AccountId, config: AccountId) -> Actor {
     actor_at(token, engine, &buffer_seed(config))

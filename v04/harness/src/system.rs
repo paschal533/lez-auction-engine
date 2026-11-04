@@ -296,14 +296,13 @@ impl World {
     }
 
     /// The evidence a system root of the world's config needs: `Pda` for the buffer's stablecoin
-    /// holding (the token program's `HOLDING` seed) while that holding is absent, else none.
+    /// holding (the token program's `HOLDING` seed) while that holding's *account* is absent,
+    /// else none (settlement admits an existing account, even one an evidenced read left without
+    /// token state; the SDK's `buffer_evidence` uses the same rule).
     pub fn buffer_evidence(&self) -> Vec<PublicAccountEvidence> {
         let buffer = self.buffer().account_id;
-        if self
-            .chain
-            .raw_state(self.holding(buffer, self.stable_def))
-            .is_some()
-        {
+        let holding = self.holding(buffer, self.stable_def).account_id;
+        if self.chain.account_exists(holding) {
             return Vec::new();
         }
         vec![PublicAccountEvidence::Pda {

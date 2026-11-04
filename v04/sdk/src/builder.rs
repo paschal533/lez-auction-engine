@@ -5,7 +5,8 @@
 //! and every per-definition holding `holding_actor(T, owner, definition)` it debits or credits.
 //!
 //! Evidence rule (settlement admits signers ∪ accounts that exist ∪ accounts a message's PDA seed
-//! grants ∪ accounts proven public by evidence): no plan in this slice carries evidence. A fresh
+//! grants ∪ accounts proven public by evidence): no plan in this module carries evidence (the
+//! system plans in [`crate::system`] carry one `Pda`, for an absent buffer holding). A fresh
 //! holding is a token PDA that the token program's `Credit` grants with its `HOLDING` seed; the
 //! engine's vault and buffer token actors are granted by the engine's own seeds on the messages
 //! that debit them; engine actors written by their own seed-granted messages need none (S9). No
@@ -15,7 +16,8 @@ use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use engine_core::{
     actors::{
         accounting_actor, auction_actor, buffer_holding, collateral_actor, config_actor,
-        protocol_def, record_actor, vault_holding,
+        debt_actor, protocol_def, record_actor, surplus_actor, surplus_vault_holding,
+        vault_holding,
     },
     msg::{EngineMsg, ProtocolGenesis},
     state::ConfigState,
@@ -41,7 +43,7 @@ pub struct Plan {
 }
 
 impl Plan {
-    fn new(
+    pub(crate) fn new(
         root: Actor,
         actors: Vec<Actor>,
         signers: Vec<AccountId>,
@@ -77,6 +79,11 @@ pub struct Deployment {
     pub clock: Actor,
     /// `accounting_actor(E, config)`.
     pub accounting: Actor,
+    /// The protocol token's definition `protocol_def(E, config)` (the config names it only while
+    /// the protocol token is enabled).
+    pub protocol_def: AccountId,
+    /// The reference oracle the config names, if any.
+    pub ref_oracle: Option<Actor>,
 }
 
 impl Deployment {
@@ -112,6 +119,8 @@ impl Deployment {
             oracle: state.oracle,
             clock: state.clock,
             accounting: accounting_actor(engine, config),
+            protocol_def: protocol_def(engine, config),
+            ref_oracle: state.protocol_token_oracle,
         })
     }
 
@@ -140,6 +149,25 @@ impl Deployment {
     #[must_use]
     pub fn buffer(&self) -> Actor {
         buffer_holding(self.engine, self.token, self.config.account_id)
+    }
+
+    /// The surplus auction `surplus_actor(E, config, nonce)`.
+    #[must_use]
+    pub fn surplus(&self, nonce: u64) -> Actor {
+        surplus_actor(self.engine, self.config.account_id, nonce)
+    }
+
+    /// The surplus auction `nonce`'s vault token actor (its stablecoin is
+    /// `holding_of(surplus_vault.account_id, stable_def)`).
+    #[must_use]
+    pub fn surplus_vault(&self, nonce: u64) -> Actor {
+        surplus_vault_holding(self.engine, self.token, self.surplus(nonce).account_id)
+    }
+
+    /// The debt auction `debt_actor(E, config, nonce)`.
+    #[must_use]
+    pub fn debt(&self, nonce: u64) -> Actor {
+        debt_actor(self.engine, self.config.account_id, nonce)
     }
 
     /// `account`'s own token actor `(account, T)`, the stateless proxy its debits go through.

@@ -15,10 +15,10 @@ use auction_engine_params::EngineError;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::{AccountId, Actor};
 
-use crate::msg::ProtocolGenesis;
 pub use crate::scratch::{
     AuctionScratch, BidRequestRec, ObserveThen, OracleReadingRec, PendingObserve, QuoteCtx,
 };
+use crate::{msg::ProtocolGenesis, system_state::SystemPending};
 
 pub const TAG_CONFIG: [u8; 8] = *b"AECONFIG";
 pub const TAG_COLL: [u8; 8] = *b"AECOLLAT";
@@ -290,6 +290,9 @@ pub struct AccountingState {
     pub total_surplus_returned: u128,
     /// When the last debt auction ended (close or final take), ms; 0 before the first one (ADR-039).
     pub last_debt_end_ms: u64,
+    /// System Read-block scratch (row 9 on): set by `System`, cleared by `Proceed`, so `None` in
+    /// every committed state.
+    pub pending: Option<SystemPending>,
 }
 tagged_state!(AccountingState, TAG_ACCOUNTING);
 
@@ -320,6 +323,7 @@ impl AccountingState {
             total_surplus_lots_out: 0,
             total_surplus_returned: 0,
             last_debt_end_ms: 0,
+            pending: None,
         }
     }
 

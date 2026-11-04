@@ -23,6 +23,7 @@ use sha2::{Digest as _, Sha256};
 pub mod bidding;
 pub mod impostor;
 pub mod invariants;
+pub mod system;
 pub mod world;
 pub use world::World;
 

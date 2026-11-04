@@ -7,7 +7,10 @@ use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::{AccountId, Actor};
 
-use crate::state::{CollateralState, ObserveCtx};
+use crate::{
+    state::{CollateralState, ObserveCtx},
+    system_state::{SystemCtx, SystemOp},
+};
 
 /// Borsh variant index of [`EngineMsg::Seized`] (ruling R-P1); the mock host encodes the same.
 pub const SEIZED_INDEX: u8 = 5;
@@ -202,6 +205,18 @@ pub enum EngineMsg {
     /// 23. Config to accounting: no surplus or debt auction may be live
     ///     (`ProtocolTokenLocked`). Sends nothing.
     AssertSystemIdle,
+    /// 24. Root at the config `K = (config, E)`, permissionless (row 9; v0.2.4 `settle_debt`):
+    ///     `K` sends `System { SettleDebt }` to its accounting, which reads the buffer and burns
+    ///     `min(amount, buffer, unbacked - debt_on_auction)` from it.
+    SettleDebt { config: AccountId, amount: u128 },
+    /// 25. Config to its accounting `accounting_actor(E, config)`: run `op` with the config's
+    ///     context at the clock claim `now_ms` (asserted by `K` for every op but `SettleDebt`).
+    ///     The accounting reads the buffer (and the reference oracle), then acts at `Proceed`.
+    System {
+        op: SystemOp,
+        now_ms: u64,
+        ctx: Box<SystemCtx>,
+    },
 }
 
 /// The protocol token's genesis at `Init`: `supply` credited to `to`'s holding.
@@ -310,7 +325,7 @@ mod tests {
         }
     }
 
-    /// The variants 5..=23 are wire format too (appended only): pinned one by one.
+    /// The variants 5..=25 are wire format too (appended only): pinned one by one.
     #[test]
     fn internal_variant_indices_are_fixed() {
         use crate::state::fixtures::{actor, coll};
@@ -411,8 +426,20 @@ mod tests {
             },
             EngineMsg::AssertCapAtMost { global_cap: 3 },
             EngineMsg::AssertSystemIdle,
+            EngineMsg::SettleDebt {
+                config: id(3),
+                amount: 4,
+            },
+            EngineMsg::System {
+                op: SystemOp::CheckSolvency,
+                now_ms: 5,
+                ctx: Box::new(SystemCtx::from_config(
+                    id(3),
+                    &crate::state::fixtures::config(),
+                )),
+            },
         ];
-        assert_eq!(internals.len(), 19, "variants 5..=23");
+        assert_eq!(internals.len(), 21, "variants 5..=25");
         assert_indices(&internals, usize::from(SEIZED_INDEX));
     }
 
@@ -420,6 +447,19 @@ mod tests {
     fn probe_kind_indices_are_fixed() {
         assert_indices(
             &[ProbeKind::Config, ProbeKind::Collateral, ProbeKind::Auction],
+            0,
+        );
+    }
+
+    #[test]
+    fn system_op_indices_are_fixed() {
+        assert_indices(
+            &[
+                SystemOp::SettleDebt { amount: 1 },
+                SystemOp::StartSurplus { nonce: 2 },
+                SystemOp::StartDebt { nonce: 3 },
+                SystemOp::CheckSolvency,
+            ],
             0,
         );
     }

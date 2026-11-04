@@ -18,6 +18,8 @@
 //!   moves, chain end) and the accounting's `Settled`.
 //! - `claim`: the auction's `ClaimLeftover`, forwarded by the owner's proxy.
 //! - `settle`: the auction's `SettleEmpty`, forwarded by its config (permissionless root).
+//! - `system`: root `SettleDebt` at the config and the accounting's system Read block (buffer
+//!   and reference-oracle reads, `Proceed`).
 //!
 //! Errors are panics with the v0.2.4 text (`engine_core::check::fail`).
 
@@ -40,6 +42,8 @@ mod proxy;
 mod read;
 #[path = "engine/settle.rs"]
 mod settle;
+#[path = "engine/system.rs"]
+mod system;
 
 use borsh::BorshDeserialize;
 use engine_core::{
@@ -264,5 +268,7 @@ fn handle_message(input: &ReceiveInput) -> Response {
             admin::on_assert_cap_at_most(input, global_cap)
         }
         EngineMsg::AssertSystemIdle => admin::on_assert_system_idle(input),
+        EngineMsg::SettleDebt { config, amount } => system::on_settle_debt(input, config, amount),
+        EngineMsg::System { op, now_ms, ctx } => system::on_system(input, op, now_ms, *ctx),
     }
 }

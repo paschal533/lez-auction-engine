@@ -12,6 +12,9 @@
 //! - `SettleEmpty` (permissionless, row 7) is rooted at the named config itself, which forwards it
 //!   to the auction.
 //!
+//! The system roots (`SettleDebt`, row 9) are rooted at the named config too, and handled by
+//! `system` (the config hands them to its accounting, not to an auction).
+//!
 //! Every forward to an auction goes behind a seeded `Probe { Auction }` (ruling R-9b).
 //!
 //! Seeded probes (ruling R-8b): LEZ hands a message's grants down to every message its receiver

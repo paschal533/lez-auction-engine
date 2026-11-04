@@ -95,6 +95,7 @@ impl World {
             min_cr_ray: MIN_CR_RAY,
             engine_actor: None,
             pending: None,
+            is_frozen: false,
         };
         self.impostor_with_state(label, encode(&params))
     }

@@ -1,7 +1,8 @@
 //! Pure system-operation computations (design note §4.2 rows 9-16), each a call into
 //! `auction_core` as v0.2.4 makes it: the implicit settle against the buffer's actual balance
 //! (v0.2.4 `settle::implicit_settle`) and the protocol token's reference price (v0.2.4
-//! `system::ref_price`).
+//! `system::ref_price`). `check_solvency` (row 16) lives in `crate::solvency` (file size) and is
+//! re-exported here.
 
 use auction_core::{
     error::PauseReason,
@@ -10,6 +11,7 @@ use auction_core::{
 };
 use auction_engine_params::{EngineError, args::DEBT_RELIST_DELAY_MS};
 
+pub use crate::solvency::check_solvency_op;
 use crate::{
     state::AccountingState,
     system_state::{

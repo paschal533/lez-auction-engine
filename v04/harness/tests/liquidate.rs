@@ -458,6 +458,7 @@ fn collateral_grant_does_not_reach_the_host() {
         min_cr_ray: harness::world::MIN_CR_RAY,
         engine_actor: Some(w.config),
         pending: None,
+        is_frozen: false,
     };
     w.chain
         .send(host, &[host], &[&host_key], &params)

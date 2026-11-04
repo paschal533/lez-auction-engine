@@ -7,8 +7,9 @@
 //! Each accepts only its own config: the sender must be an actor of the receiver's program whose
 //! account re-derives the receiver (ADR-057). Neither writes nor sends anything.
 //!
-//! Also the config's sender check of the debt auction's `Mint` (row 14), whose account half (an
-//! engine actor that is not this config's debt auction) no transaction can reach.
+//! Also the config's sender checks of the debt auction's `Mint` (row 14) and the accounting's
+//! `Freeze` (row 16), whose account halves (an engine actor that is not this config's debt auction
+//! or accounting) no transaction can reach.
 
 use auction_engine_params::EngineError;
 use lee_core::{
@@ -74,6 +75,19 @@ pub fn mint_sender(input: &ReceiveInput, nonce: u64) -> Result<(), EngineError> 
         return Err(EngineError::WrongAccount("debt_auction"));
     }
     Ok(())
+}
+
+/// `Freeze` at a config `K` (row 16): the receiver holds a config state, returned
+/// (`WrongAccount("config")`), and the sender is exactly `accounting_actor(E, K)`, the accounting
+/// this config derives (`WrongAccount("accounting")`, ADR-057).
+pub fn freeze_sender(input: &ReceiveInput) -> Result<ConfigState, EngineError> {
+    let config =
+        ConfigState::decode(input.pre_state.as_ref()).ok_or(EngineError::WrongAccount("config"))?;
+    let k = input.receiver;
+    if input.from != Some(accounting_actor(k.program_account_id, k.account_id)) {
+        return Err(EngineError::WrongAccount("accounting"));
+    }
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -200,6 +214,38 @@ mod tests {
         assert_eq!(mint_sender(&delivery(k, Some(d), config), 3), Ok(()));
         assert_eq!(
             mint_sender(&delivery(k, Some(d), Vec::new()), 3),
+            Err(EngineError::WrongAccount("config"))
+        );
+    }
+
+    /// `Freeze` at `K`: only `accounting_actor(E, K)`; not another config's accounting, not an
+    /// impostor program at the accounting's account, not `K` itself, not a root delivery.
+    #[test]
+    fn freeze_is_accepted_only_from_this_configs_accounting() {
+        let (admin, k, k2) = actors();
+        let config = crate::state::fixtures::config();
+        let acc = accounting_actor(engine(), k.account_id);
+        let others = [
+            None,
+            Some(admin),
+            Some(k),
+            Some(k2),
+            Some(accounting_actor(engine(), k2.account_id)),
+            Some(Actor::new(acc.account_id, id(77))),
+        ];
+        for from in others {
+            assert_eq!(
+                freeze_sender(&delivery(k, from, config.encode())),
+                Err(EngineError::WrongAccount("accounting")),
+                "{from:?}"
+            );
+        }
+        assert_eq!(
+            freeze_sender(&delivery(k, Some(acc), config.encode())),
+            Ok(config)
+        );
+        assert_eq!(
+            freeze_sender(&delivery(k, Some(acc), Vec::new())),
             Err(EngineError::WrongAccount("config"))
         );
     }

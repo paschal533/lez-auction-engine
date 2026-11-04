@@ -18,23 +18,28 @@
 //!    `min(amount, buffer, unbacked - debt_on_auction)` from the buffer under its `BUFFER` seed;
 //!    `StartSurplus` (its nonce checked before the reads) starts a surplus auction
 //!    (`surplus::start`); `StartDebt` (its nonce and relist delay checked before the reads)
-//!    starts a debt auction (`debt::start`).
+//!    starts a debt auction (`debt::start`); `CheckSolvency` settles, then refuses while a debt
+//!    auction is live or, on a `Freeze` decision, sends `Freeze` to the config, which sends
+//!    `EngineFreezeNewDebt` to its bound host ([`on_freeze`]).
 
 use auction_engine_params::EngineError;
 use borsh::BorshDeserialize;
 use engine_core::{
     SystemCtx, SystemOp, SystemPending,
     actors::{accounting_actor, buffer_holding, buffer_seed},
+    assertions::freeze_sender,
     check::{expect_root, fail},
     msg::{ClockMsg, EngineMsg},
+    solvency::SolvencyDecision,
     state::{AccountingState, ConfigState, OracleReadingRec},
-    system::debt_precheck,
+    system::{check_solvency_op, debt_precheck, ref_price},
     system_state::RefReading,
 };
 use lee_core::{
     account::{AccountId, Actor},
     program::{ReceiveInput, Response, StateReply, SyncMessage},
 };
+use mock_host_core::HostMsg;
 use oracle_core::{OracleMsg, OracleState};
 use token_core::{Holding, TokenMsg, holding_actor};
 
@@ -44,6 +49,19 @@ use crate::{admin::engine, debt, surplus};
 pub fn on_settle_debt(input: &ReceiveInput, config: AccountId, amount: u128) -> Response {
     expect_root(input);
     root(input, config, SystemOp::SettleDebt { amount }, 0)
+}
+
+/// Root `CheckSolvency` at the named config (row 16).
+pub fn on_check_solvency(input: &ReceiveInput, config: AccountId, now_ms: u64) -> Response {
+    expect_root(input);
+    root(input, config, SystemOp::CheckSolvency, now_ms)
+}
+
+/// `Freeze` at the config, from exactly its accounting (`freeze_sender`): `EngineFreezeNewDebt`
+/// to the config's bound host, which accepts it only from this config actor.
+pub fn on_freeze(input: &ReceiveInput) -> Response {
+    let c = freeze_sender(input).unwrap_or_else(|err| fail(err));
+    Response::keep_state().send_sync(c.host, &HostMsg::EngineFreezeNewDebt)
 }
 
 /// A system root at the config `config`: asserts the clock claim `now_ms` (except for
@@ -135,10 +153,10 @@ pub fn on_system(input: &ReceiveInput, op: SystemOp, now_ms: u64, ctx: SystemCtx
 
 /// The op's checks before any read: a surplus start names the accounting's next nonce
 /// (`NonceMismatch`); a debt start too, and its relist delay has elapsed at the claimed time
-/// `now_ms` (`DelayNotElapsed`, ADR-039). Op 3 arrives with Task 6.
+/// `now_ms` (`DelayNotElapsed`, ADR-039); `SettleDebt` and `CheckSolvency` check nothing.
 fn precheck(op: SystemOp, now_ms: u64, acc: &AccountingState) {
     match op {
-        SystemOp::SettleDebt { .. } => {}
+        SystemOp::SettleDebt { .. } | SystemOp::CheckSolvency => {}
         SystemOp::StartSurplus { nonce } => {
             if nonce != acc.surplus_nonce {
                 fail(EngineError::NonceMismatch);
@@ -147,7 +165,6 @@ fn precheck(op: SystemOp, now_ms: u64, acc: &AccountingState) {
         SystemOp::StartDebt { nonce } => {
             debt_precheck(acc, nonce, now_ms).unwrap_or_else(|err| fail(err));
         }
-        SystemOp::CheckSolvency => panic!("engine: BadMessage"),
     }
 }
 
@@ -230,13 +247,11 @@ pub fn proceed(input: &ReceiveInput) -> Response {
             surplus::start(input, &cleared, &pending, (buffer, nonce))
         }
         SystemOp::StartDebt { nonce } => debt::start(input, &cleared, &pending, (buffer, nonce)),
-        SystemOp::CheckSolvency => panic!("engine: BadMessage"),
+        SystemOp::CheckSolvency => check_solvency(input, &cleared, &pending, buffer),
     }
 }
 
-/// v0.2.4 `settle_debt`: books the burn, then `Burn` at the buffer's token actor (`BUFFER` seed,
-/// R-8b's token exception) if anything burns; a `Burn` on an absent holding would write a fresh
-/// state the transaction cannot admit.
+/// v0.2.4 `settle_debt`: books the burn, then the buffer's `Burn` ([`buffer_burn`]).
 fn settle_debt(
     input: &ReceiveInput,
     acc: &AccountingState,
@@ -245,6 +260,39 @@ fn settle_debt(
 ) -> Response {
     let (next, burned) = acc.core().settle_debt(amount, buffer);
     let response = Response::set_state(AccountingState::with_core(acc, &next).encode());
+    buffer_burn(input, ctx, response, burned)
+}
+
+/// v0.2.4 `check_solvency` at the accounting's `Proceed`: books the implicit settle (and, on a
+/// `Freeze`, `host_frozen_by_engine`), sends the buffer's `Burn` first, then on a `Freeze`
+/// decision `Freeze` to the config, which asks the host. `RecoveryInProgress` reverts the whole
+/// transaction, settle included; so does a host that refuses the freeze (Review Focus 4).
+fn check_solvency(
+    input: &ReceiveInput,
+    acc: &AccountingState,
+    pending: &SystemPending,
+    buffer: u128,
+) -> Response {
+    let (ctx, now_ms) = (&pending.ctx, pending.now_ms);
+    let reference = ref_price(ctx, pending.reference, now_ms);
+    let (next, burned, decision) =
+        check_solvency_op(acc, ctx, buffer, reference, now_ms).unwrap_or_else(|err| fail(err));
+    let response = buffer_burn(input, ctx, Response::set_state(next.encode()), burned);
+    if decision != SolvencyDecision::Freeze {
+        return response;
+    }
+    response.send_sync(Actor::new(ctx.config, engine(input)), &EngineMsg::Freeze)
+}
+
+/// Appends the buffer's `Burn` of `burned` at its token actor (`BUFFER` seed, R-8b's token
+/// exception) if anything burns; a `Burn` on an absent holding would write a fresh state the
+/// transaction cannot admit.
+fn buffer_burn(
+    input: &ReceiveInput,
+    ctx: &SystemCtx,
+    response: Response,
+    burned: u128,
+) -> Response {
     if burned == 0 {
         return response;
     }

@@ -9,6 +9,8 @@
 //!   oracle (pending request in its own state), relays `Seize` on the reply, and ends with a
 //!   **Sentinel** `Finish` that fails the transaction if the read never completed.
 //! - `Seize`: the vault is swept to custody first, then `Seized` goes to `reply_to`.
+//! - `EngineFreezeNewDebt`, only from exactly the bound engine actor, freezes new debt:
+//!   `GenerateDebt` then fails `host: Frozen`. There is no unfreeze message.
 //!
 //! The mock sends nothing to caller-chosen code except the `Seized` report and `StateReply`.
 //! Errors are panics `host: <reason>`.
@@ -78,6 +80,7 @@ fn handle_message(input: &ReceiveInput) -> Response {
                 min_cr_ray,
                 engine_actor: None,
                 pending: None,
+                is_frozen: false,
             }))
         }
         HostMsg::SetLiquidationEngine { engine_actor } => {
@@ -119,6 +122,7 @@ fn handle_message(input: &ReceiveInput) -> Response {
             assert!(load_params(input).pending.is_none(), "host: ReadIncomplete");
             Response::keep_state()
         }
+        HostMsg::EngineFreezeNewDebt => engine_freeze(input),
     }
 }
 
@@ -168,6 +172,7 @@ fn open_position(input: &ReceiveInput, owner: AccountId, collateral: u128) -> Re
 
 fn generate_debt(input: &ReceiveInput, normalized_debt: u128) -> Response {
     let params = load_params(input);
+    assert!(!params.is_frozen, "host: Frozen");
     let owner = proxied_owner(input);
     let host = input.receiver.program_account_id;
     let add = HostMsg::AddDebt { normalized_debt };
@@ -209,6 +214,20 @@ fn create_position(
         collateral,
         normalized_debt: 0,
         vault,
+    }))
+}
+
+/// The engine's freeze (`check_solvency`, ADR-017): only from exactly the bound engine actor;
+/// sets `is_frozen` (idempotent) and sends nothing. Nothing in the mock unfreezes.
+fn engine_freeze(input: &ReceiveInput) -> Response {
+    let params = load_params(input);
+    assert!(
+        params.engine_actor.is_some() && input.from == params.engine_actor,
+        "host: NotEngine"
+    );
+    Response::set_state(encode(&Params {
+        is_frozen: true,
+        ..params
     }))
 }
 

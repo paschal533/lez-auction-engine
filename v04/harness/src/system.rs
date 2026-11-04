@@ -13,6 +13,9 @@
 //! The debt auction (rows 13-15): `StartDebt` / `TakeDebt` / `CloseDebt`, roots at the config
 //! ([`World::start_debt`], [`World::take_debt`], [`World::close_debt`]); a take burns the taker's
 //! stablecoin and mints protocol tokens through the config, the definition's minter.
+//!
+//! `check_solvency` (row 16): `CheckSolvency`, a root at the config ([`World::check_solvency`]);
+//! a `Freeze` decision freezes new debt at the bound host ([`World::host_frozen`]).
 
 use auction_engine_params::args::EngineParamsArgs;
 use engine_core::{
@@ -104,7 +107,9 @@ impl World {
     ///   actor and the stablecoin definition (burn);
     /// - `StartSurplus`: those, the clock, the reference oracle (if the config names one), the
     ///   surplus auction and its vault's stablecoin holding (the lot's credit);
-    /// - `TakeSurplus` / `CloseSurplus`: see [`World::surplus_actors`].
+    /// - `TakeSurplus` / `CloseSurplus`: see [`World::surplus_actors`];
+    /// - the debt roots: see [`World::debt_actors`];
+    /// - `CheckSolvency`: see [`World::solvency_actors`].
     ///
     /// # Panics
     /// For a message that is not a system root.
@@ -114,6 +119,9 @@ impl World {
         }
         if let Some(actors) = self.debt_actors(msg) {
             return actors;
+        }
+        if let EngineMsg::CheckSolvency { config, .. } = msg {
+            return self.solvency_actors(*config);
         }
         let EngineMsg::StartSurplus { config, nonce, .. } = msg else {
             return self.surplus_actors(msg);
@@ -173,6 +181,18 @@ impl World {
             ]);
         }
         Some(actors)
+    }
+
+    /// The actors a `CheckSolvency` at `config` touches, the config (root) first: those of
+    /// `SettleDebt`, the clock, the reference oracle (if the config names one) and the config's
+    /// bound host `P` (a `Freeze` decision's `EngineFreezeNewDebt`).
+    pub fn solvency_actors(&self, config: AccountId) -> Vec<Actor> {
+        let c = self.config_state_of(config);
+        let mut actors = self.settle_actors(config);
+        actors.push(self.chain.clock());
+        actors.extend(c.protocol_token_oracle);
+        actors.push(c.host);
+        actors
     }
 
     fn settle_actors(&self, config: AccountId) -> Vec<Actor> {
@@ -508,5 +528,37 @@ impl World {
             now_ms: self.now_ms,
         };
         self.send_system(&msg, "", &[])
+    }
+}
+
+/// `check_solvency` on the [`World`] (row 16).
+impl World {
+    /// `CheckSolvency` at the world's config, claiming the world's time.
+    pub fn check_solvency_msg(&self) -> EngineMsg {
+        EngineMsg::CheckSolvency {
+            config: self.config.account_id,
+            now_ms: self.now_ms,
+        }
+    }
+
+    /// Anyone (no signature) checks the world's config's solvency, claiming the world's time,
+    /// with the buffer's evidence.
+    pub fn check_solvency(&mut self) -> Result<Vec<TransactionEvent>, LeeError> {
+        let msg = self.check_solvency_msg();
+        let evidence = self.buffer_evidence();
+        self.send_system(&msg, "", &evidence)
+    }
+
+    /// The host's params state at `P`.
+    pub fn host_params(&self) -> Params {
+        self.chain
+            .raw_state(self.params)
+            .and_then(|bytes| Params::decode(&bytes))
+            .expect("the host's params")
+    }
+
+    /// Whether the host refuses new debt (`EngineFreezeNewDebt` was accepted).
+    pub fn host_frozen(&self) -> bool {
+        self.host_params().is_frozen
     }
 }

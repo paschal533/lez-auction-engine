@@ -18,8 +18,8 @@
 //!   moves, chain end) and the accounting's `Settled`.
 //! - `claim`: the auction's `ClaimLeftover`, forwarded by the owner's proxy.
 //! - `settle`: the auction's `SettleEmpty`, forwarded by its config (permissionless root).
-//! - `system`: root `SettleDebt` at the config and the accounting's system Read block (buffer
-//!   and reference-oracle reads, `Proceed`).
+//! - `system`: roots `SettleDebt` / `CheckSolvency` at the config, the accounting's system Read
+//!   block (buffer and reference-oracle reads, `Proceed`) and the config's `Freeze`.
 //! - `surplus`: roots `StartSurplus` / `TakeSurplus` / `CloseSurplus` at the config, the surplus
 //!   auction's `SurplusOpen` / `SurplusTake` / `SurplusClose` (vault read, `Proceed`) and the
 //!   accounting's `SurplusTaken` / `SurplusReturned`.
@@ -353,5 +353,9 @@ fn handle_message(input: &ReceiveInput) -> Response {
         | EngineMsg::DebtTaken { .. }
         | EngineMsg::DebtClosed { .. }
         | EngineMsg::Mint { .. }) => debt::dispatch(input, message),
+        EngineMsg::CheckSolvency { config, now_ms } => {
+            system::on_check_solvency(input, config, now_ms)
+        }
+        EngineMsg::Freeze => system::on_freeze(input),
     }
 }

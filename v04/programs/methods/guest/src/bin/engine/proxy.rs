@@ -14,7 +14,9 @@
 //!
 //! The system roots (`SettleDebt`, row 9; `StartSurplus`, row 10) are rooted at the named config
 //! too, and handled by `system` (the config hands them to its accounting, not to an auction);
-//! `TakeSurplus` / `CloseSurplus` (rows 11-12) by `surplus`, behind a seeded `Probe { Surplus }`.
+//! `TakeSurplus` / `CloseSurplus` (rows 11-12) by `surplus`, behind a seeded `Probe { Surplus }`;
+//! `StartDebt` (row 13) by `debt` through `system`, and `TakeDebt` / `CloseDebt` (rows 14-15) by
+//! `debt`, behind a seeded `Probe { Debt }`.
 //!
 //! Every forward to an auction goes behind a seeded `Probe { Auction }` (ruling R-9b).
 //!
@@ -28,12 +30,12 @@ use auction_engine_params::EngineError;
 use engine_core::{
     actors::{
         auction_actor, auction_seed, collateral_actor, collateral_seed, config_actor, config_seed,
-        surplus_actor, surplus_seed,
+        debt_actor, debt_seed, surplus_actor, surplus_seed,
     },
     check::fail,
     msg::{EngineMsg, ProbeKind},
     state::{AuctionState, CollateralState, ConfigState},
-    system_state::SurplusAuctionState,
+    system_state::{DebtAuctionState, SurplusAuctionState},
 };
 use lee_core::{
     account::{AccountId, Actor},
@@ -153,6 +155,18 @@ pub fn surplus_probe(engine: AccountId, config: AccountId, nonce: u64) -> (Actor
     (surplus, seeded)
 }
 
+/// The seeded leaf `Probe { Debt }` for `debt_actor(engine, config, nonce)`: an absent debt
+/// auction fails with v0.2.4's `WrongAccount("debt_auction")`. The caller sends the real message
+/// unseeded as the next sibling.
+pub fn debt_probe(engine: AccountId, config: AccountId, nonce: u64) -> (Actor, SyncMessage) {
+    let debt = debt_actor(engine, config, nonce);
+    let probe = EngineMsg::Probe {
+        kind: ProbeKind::Debt,
+    };
+    let seeded = SyncMessage::new(debt, &probe).with_pda_seeds([debt_seed(config, nonce)]);
+    (debt, seeded)
+}
+
 /// Forwards the owner's root `ClaimLeftover` to the auction (v0.2.4: the owner must sign,
 /// `NotOwner`), behind the seeded auction probe; the auction checks the sender is exactly
 /// `(owner, E)`.
@@ -211,8 +225,13 @@ pub fn probe(input: &ReceiveInput, kind: ProbeKind) -> Response {
         ProbeKind::Surplus if SurplusAuctionState::decode(state).is_none() => {
             fail(EngineError::WrongAccount("surplus_auction"))
         }
-        ProbeKind::Config | ProbeKind::Collateral | ProbeKind::Auction | ProbeKind::Surplus => {
-            Response::keep_state()
+        ProbeKind::Debt if DebtAuctionState::decode(state).is_none() => {
+            fail(EngineError::WrongAccount("debt_auction"))
         }
+        ProbeKind::Config
+        | ProbeKind::Collateral
+        | ProbeKind::Auction
+        | ProbeKind::Surplus
+        | ProbeKind::Debt => Response::keep_state(),
     }
 }

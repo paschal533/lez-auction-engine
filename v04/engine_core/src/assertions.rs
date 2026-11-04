@@ -6,6 +6,9 @@
 //!
 //! Each accepts only its own config: the sender must be an actor of the receiver's program whose
 //! account re-derives the receiver (ADR-057). Neither writes nor sends anything.
+//!
+//! Also the config's sender check of the debt auction's `Mint` (row 14), whose account half (an
+//! engine actor that is not this config's debt auction) no transaction can reach.
 
 use auction_engine_params::EngineError;
 use lee_core::{
@@ -14,8 +17,8 @@ use lee_core::{
 };
 
 use crate::{
-    actors::{accounting_actor, collateral_actor},
-    state::{AccountingState, CollateralState},
+    actors::{accounting_actor, collateral_actor, debt_actor},
+    state::{AccountingState, CollateralState, ConfigState},
 };
 
 /// The sending config's account: the sender must be an actor of the receiver's program, else
@@ -55,6 +58,20 @@ pub fn system_idle(input: &ReceiveInput) -> Result<(), EngineError> {
         .ok_or(EngineError::WrongAccount("accounting"))?;
     if accounting.surplus_live || accounting.debt_live {
         return Err(EngineError::ProtocolTokenLocked);
+    }
+    Ok(())
+}
+
+/// `Mint { nonce, .. }` at a config `K` (row 14): the receiver holds a config state
+/// (`WrongAccount("config")`) and the sender is exactly `debt_actor(E, K, nonce)`, the auction
+/// this config derives for that nonce (`WrongAccount("debt_auction")`, ADR-057).
+pub fn mint_sender(input: &ReceiveInput, nonce: u64) -> Result<(), EngineError> {
+    if ConfigState::decode(input.pre_state.as_ref()).is_none() {
+        return Err(EngineError::WrongAccount("config"));
+    }
+    let k = input.receiver;
+    if input.from != Some(debt_actor(k.program_account_id, k.account_id, nonce)) {
+        return Err(EngineError::WrongAccount("debt_auction"));
     }
     Ok(())
 }
@@ -154,6 +171,36 @@ mod tests {
         assert_eq!(
             system_idle(&delivery(acc, Some(k), Vec::new())),
             Err(EngineError::WrongAccount("accounting"))
+        );
+    }
+
+    /// `Mint` at `K`: only `debt_actor(E, K, nonce)`; not another nonce's auction, not another
+    /// config's `D'`, not an impostor program at `D`'s account, not a root delivery.
+    #[test]
+    fn mint_is_accepted_only_from_this_configs_debt_actor() {
+        let (admin, k, k2) = actors();
+        let config = crate::state::fixtures::config().encode();
+        let d = debt_actor(engine(), k.account_id, 3);
+        let impostor = Actor::new(d.account_id, id(77));
+        let others = [
+            None,
+            Some(admin),
+            Some(k2),
+            Some(debt_actor(engine(), k.account_id, 4)),
+            Some(debt_actor(engine(), k2.account_id, 3)),
+            Some(impostor),
+        ];
+        for from in others {
+            assert_eq!(
+                mint_sender(&delivery(k, from, config.clone()), 3),
+                Err(EngineError::WrongAccount("debt_auction")),
+                "{from:?}"
+            );
+        }
+        assert_eq!(mint_sender(&delivery(k, Some(d), config), 3), Ok(()));
+        assert_eq!(
+            mint_sender(&delivery(k, Some(d), Vec::new()), 3),
+            Err(EngineError::WrongAccount("config"))
         );
     }
 }

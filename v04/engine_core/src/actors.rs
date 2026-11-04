@@ -156,6 +156,18 @@ pub fn surplus_vault_holding(engine: AccountId, token: AccountId, surplus: Accou
     actor_at(token, engine, &surplus_vault_seed(surplus))
 }
 
+/// `["DEBT", config, nonce]`: debt auction `nonce` of `config`.
+#[must_use]
+pub fn debt_seed(config: AccountId, nonce: u64) -> PdaSeed {
+    seed(&[&seed_from_str("DEBT"), config.value(), &u64_seed(nonce)])
+}
+
+/// Debt auction actor `(pda(E, DEBT), E)`.
+#[must_use]
+pub fn debt_actor(engine: AccountId, config: AccountId, nonce: u64) -> Actor {
+    actor_at(engine, engine, &debt_seed(config, nonce))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,6 +240,10 @@ mod tests {
                 surplus_vault_seed(auction),
                 sha(&[&lit("SURPVAULT"), auction.value()]),
             ),
+            (
+                debt_seed(config, 7),
+                sha(&[&lit("DEBT"), config.value(), &le(7)]),
+            ),
         ];
         for (seed, expected) in cases {
             assert_eq!(seed.as_bytes(), &expected);
@@ -278,5 +294,9 @@ mod tests {
             surplus_vault_holding(engine, token, s.account_id),
             Actor::new(derive(surplus_vault_seed(s.account_id)), token)
         );
+        let d = debt_actor(engine, config, 3);
+        assert_eq!(d, Actor::new(derive(debt_seed(config, 3)), engine));
+        assert_ne!(d, debt_actor(engine, config, 4));
+        assert_ne!(d, debt_actor(engine, id(5), 3));
     }
 }

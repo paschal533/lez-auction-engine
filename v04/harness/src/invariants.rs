@@ -14,6 +14,9 @@
 //! - **Surplus (rows 10-12):** every started surplus auction exists with its close scratch
 //!   cleared; one is live iff the accounting's `surplus_live`; a live one's vault holding holds
 //!   at least `lot_left` (donations may add to it).
+//! - **Debt (rows 13-15, ADR-024):** every started debt auction exists; one is live iff the
+//!   accounting's `debt_live`, and then `debt_on_auction == lot_left`; `debt_on_auction == 0`
+//!   when none is live; the reservation never exceeds `unbacked_debt`.
 
 use engine_core::{
     actors::collateral_actor,
@@ -21,7 +24,7 @@ use engine_core::{
         AccountingState, AuctionPhase, AuctionState, CollateralState, ConfigState,
         LiquidationRecordState,
     },
-    system_state::{SurplusAuctionState, SystemPhase},
+    system_state::{DebtAuctionState, SurplusAuctionState, SystemPhase},
 };
 use lee::Actor;
 
@@ -57,6 +60,7 @@ pub fn check(w: &World) {
     if let Some(accounting) = decoded(w, w.accounting, AccountingState::decode) {
         assert_eq!(accounting.pending, None, "F6: accounting scratch cleared");
         check_surplus(w, &accounting);
+        check_debt(w, &accounting);
     }
     if let Some(config) = decoded(w, w.config, ConfigState::decode) {
         assert_eq!(config.pending_read, None, "F6: config scratch cleared");
@@ -129,6 +133,41 @@ fn check_surplus(w: &World, acc: &AccountingState) {
         live == 1,
         acc.surplus_live,
         "a live surplus auction iff surplus_live"
+    );
+}
+
+/// Every debt auction the accounting has started exists; a live one exists iff `debt_live` (at
+/// most one) and its lot is exactly the reservation (ADR-024 pairing); none live, none reserved.
+fn check_debt(w: &World, acc: &AccountingState) {
+    assert!(
+        acc.debt_on_auction <= acc.unbacked_debt,
+        "debt_on_auction {} > unbacked_debt {}",
+        acc.debt_on_auction,
+        acc.unbacked_debt
+    );
+    let mut live = Vec::new();
+    for nonce in 0..acc.debt_nonce {
+        let d = decoded(w, w.debt(nonce), DebtAuctionState::decode)
+            .unwrap_or_else(|| panic!("debt auction {nonce} of a counted nonce exists"));
+        assert_eq!(
+            (d.config, d.nonce),
+            (w.config.account_id, nonce),
+            "debt identity"
+        );
+        if d.phase == SystemPhase::Live {
+            live.push(d.lot_left);
+        }
+    }
+    assert!(live.len() <= 1, "at most one live debt auction");
+    assert_eq!(
+        !live.is_empty(),
+        acc.debt_live,
+        "a live debt auction iff debt_live"
+    );
+    assert_eq!(
+        acc.debt_on_auction,
+        live.first().copied().unwrap_or(0),
+        "debt_on_auction == the live debt auction's lot_left, else 0"
     );
 }
 

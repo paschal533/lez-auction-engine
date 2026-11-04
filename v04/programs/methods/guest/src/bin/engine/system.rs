@@ -17,7 +17,8 @@
 //! 4. [`proceed`] needs every reading, clears the scratch and runs the op: `SettleDebt` burns
 //!    `min(amount, buffer, unbacked - debt_on_auction)` from the buffer under its `BUFFER` seed;
 //!    `StartSurplus` (its nonce checked before the reads) starts a surplus auction
-//!    (`surplus::start`).
+//!    (`surplus::start`); `StartDebt` (its nonce and relist delay checked before the reads)
+//!    starts a debt auction (`debt::start`).
 
 use auction_engine_params::EngineError;
 use borsh::BorshDeserialize;
@@ -27,6 +28,7 @@ use engine_core::{
     check::{expect_root, fail},
     msg::{ClockMsg, EngineMsg},
     state::{AccountingState, ConfigState, OracleReadingRec},
+    system::debt_precheck,
     system_state::RefReading,
 };
 use lee_core::{
@@ -36,7 +38,7 @@ use lee_core::{
 use oracle_core::{OracleMsg, OracleState};
 use token_core::{Holding, TokenMsg, holding_actor};
 
-use crate::{admin::engine, surplus};
+use crate::{admin::engine, debt, surplus};
 
 /// Root `SettleDebt` at the named config (row 9).
 pub fn on_settle_debt(input: &ReceiveInput, config: AccountId, amount: u128) -> Response {
@@ -107,7 +109,7 @@ pub fn on_system(input: &ReceiveInput, op: SystemOp, now_ms: u64, ctx: SystemCtx
     if acc.pending.is_some() {
         fail(EngineError::WrongAccount("pending"));
     }
-    precheck(op, &acc);
+    precheck(op, now_ms, &acc);
     let pending = SystemPending {
         op,
         now_ms,
@@ -132,8 +134,9 @@ pub fn on_system(input: &ReceiveInput, op: SystemOp, now_ms: u64, ctx: SystemCtx
 }
 
 /// The op's checks before any read: a surplus start names the accounting's next nonce
-/// (`NonceMismatch`). Ops 2-3 arrive with Tasks 5-6.
-fn precheck(op: SystemOp, acc: &AccountingState) {
+/// (`NonceMismatch`); a debt start too, and its relist delay has elapsed at the claimed time
+/// `now_ms` (`DelayNotElapsed`, ADR-039). Op 3 arrives with Task 6.
+fn precheck(op: SystemOp, now_ms: u64, acc: &AccountingState) {
     match op {
         SystemOp::SettleDebt { .. } => {}
         SystemOp::StartSurplus { nonce } => {
@@ -141,7 +144,10 @@ fn precheck(op: SystemOp, acc: &AccountingState) {
                 fail(EngineError::NonceMismatch);
             }
         }
-        SystemOp::StartDebt { .. } | SystemOp::CheckSolvency => panic!("engine: BadMessage"),
+        SystemOp::StartDebt { nonce } => {
+            debt_precheck(acc, nonce, now_ms).unwrap_or_else(|err| fail(err));
+        }
+        SystemOp::CheckSolvency => panic!("engine: BadMessage"),
     }
 }
 
@@ -223,7 +229,8 @@ pub fn proceed(input: &ReceiveInput) -> Response {
         SystemOp::StartSurplus { nonce } => {
             surplus::start(input, &cleared, &pending, (buffer, nonce))
         }
-        SystemOp::StartDebt { .. } | SystemOp::CheckSolvency => panic!("engine: BadMessage"),
+        SystemOp::StartDebt { nonce } => debt::start(input, &cleared, &pending, (buffer, nonce)),
+        SystemOp::CheckSolvency => panic!("engine: BadMessage"),
     }
 }
 

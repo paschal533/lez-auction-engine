@@ -280,6 +280,73 @@ pub enum EngineMsg {
         amount: u128,
         now_ms: u64,
     },
+    /// 34. Root at `K`, permissionless (row 13; v0.2.4 `start_debt_auction`): `K` asserts the
+    ///     clock and sends `System { StartDebt { nonce } }`; the accounting reads the buffer (and
+    ///     the reference oracle), settles, reserves the lot and opens `debt_actor(E, K, nonce)`.
+    StartDebt {
+        config: AccountId,
+        nonce: u64,
+        now_ms: u64,
+    },
+    /// 35. Root at `K` (row 14; v0.2.4 `take_debt`): `taker` burns up to `amount_coin` of its own
+    ///     stablecoin (so it signs) for at least `min_protocol_out` freshly minted protocol tokens.
+    TakeDebt {
+        taker: AccountId,
+        config: AccountId,
+        nonce: u64,
+        amount_coin: u128,
+        min_protocol_out: u128,
+        now_ms: u64,
+    },
+    /// 36. Root at `K`, permissionless (row 15; v0.2.4 `close_debt_auction`): after the TTL the
+    ///     untaken lot's reservation is released.
+    CloseDebt {
+        config: AccountId,
+        nonce: u64,
+        now_ms: u64,
+    },
+    /// 37. Accounting to `debt_actor(E, config, nonce)` (DEBT seed, empty state; a leaf).
+    DebtOpen {
+        config: AccountId,
+        nonce: u64,
+        lot: u128,
+        start_amount: u128,
+        start_ms: u64,
+    },
+    /// 38. Config to its debt auction: a take with the config's context.
+    DebtTake {
+        taker: AccountId,
+        amount_coin: u128,
+        min_protocol_out: u128,
+        now_ms: u64,
+        ctx: Box<SystemCtx>,
+    },
+    /// 39. Config to its debt auction: a close with the config's context.
+    DebtClose { now_ms: u64, ctx: Box<SystemCtx> },
+    /// 40. Debt auction to its accounting: `filled` burned, `minted` minted; `ended` if the lot
+    ///     is gone.
+    DebtTaken {
+        config: AccountId,
+        nonce: u64,
+        filled: u128,
+        minted: u128,
+        ended: bool,
+        now_ms: u64,
+    },
+    /// 41. Debt auction to its accounting: closed, `lot_left` released.
+    DebtClosed {
+        config: AccountId,
+        nonce: u64,
+        lot_left: u128,
+        now_ms: u64,
+    },
+    /// 42. Debt auction `nonce` to its config: mint `amount` to `to`. `K` accepts it only from
+    ///     `debt_actor(E, K, nonce)` and sends `MintTo` to its protocol definition (minter `K`).
+    Mint {
+        nonce: u64,
+        to: AccountId,
+        amount: u128,
+    },
 }
 
 /// The protocol token's genesis at `Init`: `supply` credited to `to`'s holding.
@@ -300,6 +367,8 @@ pub enum ProbeKind {
     Auction,
     /// A surplus auction; otherwise `WrongAccount("surplus_auction")` (v0.2.4 `load_surplus`).
     Surplus,
+    /// A debt auction; otherwise `WrongAccount("debt_auction")` (v0.2.4 `load_debt`).
+    Debt,
 }
 
 /// The clock program's message set (`clock_core::Message` at LEZ v0.4.0-rc1), mirrored so the
@@ -577,9 +646,78 @@ mod tests {
                 ProbeKind::Collateral,
                 ProbeKind::Auction,
                 ProbeKind::Surplus,
+                ProbeKind::Debt,
             ],
             0,
         );
+    }
+
+    /// The debt auction's variants 34..=42 (Plan 6 Task 5), pinned one by one.
+    #[test]
+    fn debt_variant_indices_are_fixed() {
+        let (config, nonce, now_ms) = (id(1), 2, 3);
+        let ctx = || {
+            Box::new(SystemCtx::from_config(
+                config,
+                &crate::state::fixtures::config(),
+            ))
+        };
+        let (taker, amount_coin, min_protocol_out) = (id(4), 5, 6);
+        let debt = [
+            EngineMsg::StartDebt {
+                config,
+                nonce,
+                now_ms,
+            },
+            EngineMsg::TakeDebt {
+                taker,
+                config,
+                nonce,
+                amount_coin,
+                min_protocol_out,
+                now_ms,
+            },
+            EngineMsg::CloseDebt {
+                config,
+                nonce,
+                now_ms,
+            },
+            EngineMsg::DebtOpen {
+                config,
+                nonce,
+                lot: 4,
+                start_amount: 5,
+                start_ms: 6,
+            },
+            EngineMsg::DebtTake {
+                taker,
+                amount_coin,
+                min_protocol_out,
+                now_ms,
+                ctx: ctx(),
+            },
+            EngineMsg::DebtClose { now_ms, ctx: ctx() },
+            EngineMsg::DebtTaken {
+                config,
+                nonce,
+                filled: 4,
+                minted: 5,
+                ended: true,
+                now_ms,
+            },
+            EngineMsg::DebtClosed {
+                config,
+                nonce,
+                lot_left: 4,
+                now_ms,
+            },
+            EngineMsg::Mint {
+                nonce,
+                to: id(4),
+                amount: 5,
+            },
+        ];
+        assert_indices(&debt, 34);
     }
 
     #[test]

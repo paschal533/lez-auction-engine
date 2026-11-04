@@ -3,7 +3,7 @@
 //! scratch. Kept apart from `state.rs` (ruling R-3a, file size); the surplus and debt auctions'
 //! states join them here.
 
-use auction_core::system::SurplusAuction;
+use auction_core::system::{DebtAuction, SurplusAuction};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::{AccountId, Actor};
 
@@ -160,10 +160,96 @@ impl SurplusAuctionState {
     }
 }
 
+pub const TAG_DEBT: [u8; 8] = *b"AEDEBT__";
+
+/// `debt_actor(E, config, nonce)` (v0.2.4 `DebtAuctionState`; `phase` replaces `live`). The
+/// reference price is snapshotted into `start_amount` at start.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct DebtAuctionState {
+    pub tag: [u8; 8],
+    pub config: AccountId,
+    pub nonce: u64,
+    pub lot_left: u128,
+    pub start_amount: u128,
+    pub start_ms: u64,
+    pub phase: SystemPhase,
+}
+crate::state::tagged_state!(DebtAuctionState, TAG_DEBT);
+
+impl DebtAuctionState {
+    /// The `auction_core` view: `live ⇔ phase == Live`.
+    #[must_use]
+    pub fn core(&self) -> DebtAuction {
+        DebtAuction {
+            lot_left: self.lot_left,
+            start_amount: self.start_amount,
+            start_ms: self.start_ms,
+            live: self.phase == SystemPhase::Live,
+        }
+    }
+
+    #[must_use]
+    pub fn with_core(&self, a: &DebtAuction) -> Self {
+        Self {
+            lot_left: a.lot_left,
+            start_amount: a.start_amount,
+            start_ms: a.start_ms,
+            phase: if a.live {
+                SystemPhase::Live
+            } else {
+                SystemPhase::Ended
+            },
+            ..self.clone()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::fixtures::{actor, config, id};
+
+    fn debt(phase: SystemPhase) -> DebtAuctionState {
+        DebtAuctionState {
+            tag: TAG_DEBT,
+            config: id(40),
+            nonce: 3,
+            lot_left: 500,
+            start_amount: 250,
+            start_ms: 7,
+            phase,
+        }
+    }
+
+    #[test]
+    fn debt_core_maps_live_to_the_phase() {
+        let live = debt(SystemPhase::Live);
+        let core = live.core();
+        assert_eq!(
+            (core.lot_left, core.start_amount, core.start_ms, core.live),
+            (500, 250, 7, true)
+        );
+        assert!(!debt(SystemPhase::Ended).core().live);
+        let taken = live.with_core(&DebtAuction {
+            lot_left: 0,
+            live: false,
+            ..core
+        });
+        assert_eq!((taken.lot_left, taken.phase), (0, SystemPhase::Ended));
+        assert_eq!((taken.config, taken.nonce), (id(40), 3));
+        assert_eq!(live.with_core(&core), live);
+    }
+
+    #[test]
+    fn debt_state_round_trips_with_its_own_tag() {
+        let d = debt(SystemPhase::Ended);
+        let bytes = d.encode();
+        assert_eq!(bytes.get(..8), Some(&TAG_DEBT[..]));
+        assert_eq!(DebtAuctionState::decode(&bytes), Some(d));
+        let surplus = surplus(SystemPhase::Live).encode();
+        assert_eq!(DebtAuctionState::decode(&surplus), None);
+        assert_eq!(DebtAuctionState::decode(&[]), None);
+    }
 
     fn surplus(phase: SystemPhase) -> SurplusAuctionState {
         SurplusAuctionState {

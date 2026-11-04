@@ -9,15 +9,20 @@
 //! The surplus auction (rows 10-12): [`World::with_system`] enables the protocol token with a
 //! genesis for the [`TAKER`] signer; `StartSurplus` / `TakeSurplus` / `CloseSurplus` are roots at
 //! the config too ([`World::start_surplus`], [`World::take_surplus`], [`World::close_surplus`]).
+//!
+//! The debt auction (rows 13-15): `StartDebt` / `TakeDebt` / `CloseDebt`, roots at the config
+//! ([`World::start_debt`], [`World::take_debt`], [`World::close_debt`]); a take burns the taker's
+//! stablecoin and mints protocol tokens through the config, the definition's minter.
 
 use auction_engine_params::args::EngineParamsArgs;
 use engine_core::{
     actors::{
-        accounting_actor, buffer_holding, protocol_def, surplus_actor, surplus_vault_holding,
+        accounting_actor, buffer_holding, debt_actor, protocol_def, surplus_actor,
+        surplus_vault_holding,
     },
     msg::{EngineMsg, ProtocolGenesis},
     state::{AccountingState, ConfigState},
-    system_state::SurplusAuctionState,
+    system_state::{DebtAuctionState, SurplusAuctionState},
 };
 use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence, error::LeeError};
 use lee_core::program::TransactionEvent;
@@ -107,6 +112,9 @@ impl World {
         if let EngineMsg::SettleDebt { config, .. } = msg {
             return self.settle_actors(*config);
         }
+        if let Some(actors) = self.debt_actors(msg) {
+            return actors;
+        }
         let EngineMsg::StartSurplus { config, nonce, .. } = msg else {
             return self.surplus_actors(msg);
         };
@@ -117,6 +125,54 @@ impl World {
         let vault = surplus_vault_holding(self.engine, self.token, surplus.account_id);
         actors.extend([surplus, self.holding(vault.account_id, self.stable_def)]);
         actors
+    }
+
+    /// The actors a debt root touches, the config (root) first, or `None` for another message:
+    ///
+    /// - `StartDebt`: those of `SettleDebt`, the clock, the reference oracle (if the config names
+    ///   one) and the debt auction;
+    /// - `TakeDebt`: the clock, the debt auction, the accounting, the taker's token actor and
+    ///   stablecoin holding, the stablecoin definition (burn), the protocol definition and the
+    ///   taker's protocol holding (mint);
+    /// - `CloseDebt`: the clock, the debt auction and the accounting.
+    pub fn debt_actors(&self, msg: &EngineMsg) -> Option<Vec<Actor>> {
+        if let EngineMsg::StartDebt { config, nonce, .. } = msg {
+            let mut actors = self.settle_actors(*config);
+            actors.push(self.chain.clock());
+            actors.extend(self.config_state_of(*config).protocol_token_oracle);
+            actors.push(debt_actor(self.engine, *config, *nonce));
+            return Some(actors);
+        }
+        let (config, nonce, taker) = if let EngineMsg::TakeDebt {
+            taker,
+            config,
+            nonce,
+            ..
+        } = msg
+        {
+            (*config, *nonce, Some(*taker))
+        } else if let EngineMsg::CloseDebt { config, nonce, .. } = msg {
+            (*config, *nonce, None)
+        } else {
+            return None;
+        };
+        let mut actors = vec![
+            Actor::new(config, self.engine),
+            self.chain.clock(),
+            debt_actor(self.engine, config, nonce),
+            accounting_actor(self.engine, config),
+        ];
+        if let Some(taker) = taker {
+            let definition = protocol_def(self.engine, config);
+            actors.extend([
+                Actor::new(taker, self.token),
+                self.holding(taker, self.stable_def),
+                Actor::new(self.stable_def, self.token),
+                Actor::new(definition, self.token),
+                self.holding(taker, definition),
+            ]);
+        }
+        Some(actors)
     }
 
     fn settle_actors(&self, config: AccountId) -> Vec<Actor> {
@@ -374,5 +430,83 @@ impl World {
         };
         let evidence = self.buffer_evidence();
         self.send_system(&msg, "", &evidence)
+    }
+}
+
+/// The debt auction on the [`World`] (rows 13-15).
+impl World {
+    /// The debt auction `debt_actor(E, config, nonce)`.
+    pub fn debt(&self, nonce: u64) -> Actor {
+        debt_actor(self.engine, self.config.account_id, nonce)
+    }
+
+    /// The state of debt auction `nonce`.
+    pub fn debt_state(&self, nonce: u64) -> DebtAuctionState {
+        self.chain
+            .raw_state(self.debt(nonce))
+            .and_then(|bytes| DebtAuctionState::decode(&bytes))
+            .expect("a debt auction state")
+    }
+
+    /// Anyone (no signature) starts debt auction `nonce`, claiming the world's time, with the
+    /// buffer's evidence.
+    pub fn start_debt(&mut self, nonce: u64) -> Result<Vec<TransactionEvent>, LeeError> {
+        self.start_debt_at(nonce, self.now_ms)
+    }
+
+    /// Anyone starts debt auction `nonce`, claiming `now_ms` (the clock accepts a claim up to
+    /// `slack_ms` behind its time).
+    pub fn start_debt_at(
+        &mut self,
+        nonce: u64,
+        now_ms: u64,
+    ) -> Result<Vec<TransactionEvent>, LeeError> {
+        let msg = EngineMsg::StartDebt {
+            config: self.config.account_id,
+            nonce,
+            now_ms,
+        };
+        let evidence = self.buffer_evidence();
+        self.send_system(&msg, "", &evidence)
+    }
+
+    /// The `"taker"` signer takes `amount_coin` from debt auction `nonce` for at least
+    /// `min_protocol_out`, claiming the world's time.
+    pub fn take_debt(
+        &mut self,
+        nonce: u64,
+        amount_coin: u128,
+        min_protocol_out: u128,
+    ) -> Result<Vec<TransactionEvent>, LeeError> {
+        self.take_debt_as(TAKER, nonce, amount_coin, min_protocol_out)
+    }
+
+    /// The signer `label` takes from debt auction `nonce`, claiming the world's time.
+    pub fn take_debt_as(
+        &mut self,
+        label: &str,
+        nonce: u64,
+        amount_coin: u128,
+        min_protocol_out: u128,
+    ) -> Result<Vec<TransactionEvent>, LeeError> {
+        let msg = EngineMsg::TakeDebt {
+            taker: self.chain.key(label).1,
+            config: self.config.account_id,
+            nonce,
+            amount_coin,
+            min_protocol_out,
+            now_ms: self.now_ms,
+        };
+        self.send_system(&msg, label, &[])
+    }
+
+    /// Anyone (no signature) closes debt auction `nonce`, claiming the world's time.
+    pub fn close_debt(&mut self, nonce: u64) -> Result<Vec<TransactionEvent>, LeeError> {
+        let msg = EngineMsg::CloseDebt {
+            config: self.config.account_id,
+            nonce,
+            now_ms: self.now_ms,
+        };
+        self.send_system(&msg, "", &[])
     }
 }

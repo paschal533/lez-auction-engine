@@ -6,13 +6,16 @@
 use auction_core::{
     error::PauseReason,
     price::{FeedParams, MAX_CONF_BPS, OracleScale, effective_ref_price, validate_feed},
-    system::{close_surplus, start_surplus, take_surplus},
+    system::{close_debt, close_surplus, start_debt, start_surplus, take_debt, take_surplus},
 };
-use auction_engine_params::EngineError;
+use auction_engine_params::{EngineError, args::DEBT_RELIST_DELAY_MS};
 
 use crate::{
     state::AccountingState,
-    system_state::{RefReading, SurplusAuctionState, SystemCtx, SystemPhase, TAG_SURPLUS},
+    system_state::{
+        DebtAuctionState, RefReading, SurplusAuctionState, SystemCtx, SystemPhase, TAG_DEBT,
+        TAG_SURPLUS,
+    },
 };
 
 /// `settle_debt(u128::MAX)` against the buffer's actual balance: the new state and the amount to
@@ -145,6 +148,163 @@ pub fn close_surplus_op(
 ) -> Result<SurplusAuctionState, EngineError> {
     let (next, _remainder) = close_surplus(&s.core(), &ctx.system.to_core()?, now_ms)?;
     Ok(s.with_core(&next))
+}
+
+/// The debt start's checks before any read (v0.2.4 `start_debt_auction`): `nonce` is the
+/// accounting's next debt nonce, and the relist delay since the last debt auction's end has
+/// elapsed at the claimed time `now_ms` (ADR-039; the sum saturates, so an overflow blocks).
+///
+/// # Errors
+/// `NonceMismatch`, `DelayNotElapsed`.
+pub fn debt_precheck(acc: &AccountingState, nonce: u64, now_ms: u64) -> Result<(), EngineError> {
+    if nonce != acc.debt_nonce {
+        return Err(EngineError::NonceMismatch);
+    }
+    let relist_at = acc.last_debt_end_ms.saturating_add(DEBT_RELIST_DELAY_MS);
+    if acc.last_debt_end_ms > 0 && now_ms < relist_at {
+        return Err(EngineError::DelayNotElapsed);
+    }
+    Ok(())
+}
+
+/// v0.2.4 `start_debt_auction` against the buffer's actual balance `buffer`: the pre-checks, the
+/// implicit settle, then `auction_core`'s start rules on `buffer − burned` (one live auction,
+/// token configured, `unbacked − buffer ≥ debt_lot`, a usable start amount at `reference`), then
+/// the booking (`record_debt_start(lot)`, `debt_live`, the next nonce). Returns the accounting,
+/// the new auction and the amount the settle burns from the buffer.
+///
+/// `token_ok` / `mint_authority_ok` are `true` by construction: the protocol definition is the
+/// engine's PDA, created at `Init` with minter `(K, E)`, and a minter cannot change, so
+/// `ProtocolTokenMismatch` / `MintAuthorityMissing` are unreachable.
+///
+/// # Errors
+/// [`debt_precheck`]'s; `auction_core`'s start errors; `Math` on overflow.
+pub fn start_debt_op(
+    acc: &AccountingState,
+    ctx: &SystemCtx,
+    buffer: u128,
+    reference: u128,
+    now_ms: u64,
+    nonce: u64,
+) -> Result<(AccountingState, DebtAuctionState, u128), EngineError> {
+    debt_precheck(acc, nonce, now_ms)?;
+    let (settled, burned) = implicit_settle(acc, buffer);
+    let buffer_after = buffer.checked_sub(burned).ok_or(EngineError::Math)?;
+    let started = start_debt(
+        &settled.core(),
+        buffer_after,
+        ctx.protocol_token.is_some(),
+        true,
+        true,
+        reference,
+        &ctx.system.to_core()?,
+        now_ms,
+        acc.debt_live,
+    )?;
+    let state = DebtAuctionState {
+        tag: TAG_DEBT,
+        config: ctx.config,
+        nonce,
+        lot_left: 0,
+        start_amount: 0,
+        start_ms: 0,
+        phase: SystemPhase::Live,
+    }
+    .with_core(&started);
+    let booked = settled.core().record_debt_start(started.lot_left);
+    let next = AccountingState {
+        debt_live: true,
+        debt_nonce: nonce.checked_add(1).ok_or(EngineError::Math)?,
+        ..AccountingState::with_core(&settled, &booked)
+    };
+    Ok((next, state, burned))
+}
+
+/// v0.2.4 `take_debt` on the auction `d`: the next state, the protocol tokens minted and the
+/// stablecoin filled (`old.lot_left − new.lot_left`, at most `amount_coin`, which the taker burns).
+///
+/// # Errors
+/// `auction_core`'s take errors (`NotLive`, `ZeroFill`, `DustRemainder`, `Slippage`); the
+/// stored system parameters' validation errors.
+pub fn take_debt_op(
+    d: &DebtAuctionState,
+    ctx: &SystemCtx,
+    (amount_coin, min_protocol_out): (u128, u128),
+    now_ms: u64,
+) -> Result<(DebtAuctionState, u128, u128), EngineError> {
+    let sys = ctx.system.to_core()?;
+    let (next, minted) = take_debt(&d.core(), amount_coin, min_protocol_out, &sys, now_ms)?;
+    let filled = d
+        .lot_left
+        .checked_sub(next.lot_left)
+        .ok_or(EngineError::Math)?;
+    Ok((d.with_core(&next), minted, filled))
+}
+
+/// v0.2.4 `close_debt_auction` on the auction `d` (after `system_ttl_ms`): the ended state and
+/// the released (untaken) lot.
+///
+/// # Errors
+/// `NotLive`, `DelayNotElapsed`; the stored system parameters' validation errors.
+pub fn close_debt_op(
+    d: &DebtAuctionState,
+    ctx: &SystemCtx,
+    now_ms: u64,
+) -> Result<(DebtAuctionState, u128), EngineError> {
+    let (next, released) = close_debt(&d.core(), &ctx.system.to_core()?, now_ms)?;
+    Ok((d.with_core(&next), released))
+}
+
+/// The accounting's booking of a debt take (v0.2.4 `take_debt`): `record_debt_take(filled)`,
+/// `minted` added to `total_protocol_minted`; a take that emptied the lot (`ended`) ends the
+/// auction at `now_ms` (ADR-039).
+///
+/// # Errors
+/// `Math` if `filled` exceeds the reservation (ADR-024 pairing) or a total overflows.
+pub fn book_debt_take(
+    acc: &AccountingState,
+    (filled, minted): (u128, u128),
+    ended: bool,
+    now_ms: u64,
+) -> Result<AccountingState, EngineError> {
+    if filled > acc.debt_on_auction {
+        return Err(EngineError::Math);
+    }
+    let booked = AccountingState {
+        total_protocol_minted: acc
+            .total_protocol_minted
+            .checked_add(minted)
+            .ok_or(EngineError::Math)?,
+        ..AccountingState::with_core(acc, &acc.core().record_debt_take(filled))
+    };
+    if !ended {
+        return Ok(booked);
+    }
+    Ok(AccountingState {
+        debt_live: false,
+        last_debt_end_ms: now_ms,
+        ..booked
+    })
+}
+
+/// The accounting's booking of a debt close (v0.2.4 `close_debt_auction`):
+/// `record_debt_close(released)`, the auction ended at `now_ms` (ADR-039).
+///
+/// # Errors
+/// `Math` if `released` exceeds the reservation.
+pub fn book_debt_close(
+    acc: &AccountingState,
+    released: u128,
+    now_ms: u64,
+) -> Result<AccountingState, EngineError> {
+    if released > acc.debt_on_auction {
+        return Err(EngineError::Math);
+    }
+    Ok(AccountingState {
+        debt_live: false,
+        last_debt_end_ms: now_ms,
+        ..AccountingState::with_core(acc, &acc.core().record_debt_close(released))
+    })
 }
 
 #[cfg(test)]
@@ -361,5 +521,200 @@ mod tests {
             close_surplus_op(&closed, &c, NOW + ttl),
             Err(EngineError::NotLive)
         );
+    }
+
+    /// The fixture context with v0.2.4's test growth `[0, 0, 1_000, 3_000]`.
+    fn debt_ctx() -> SystemCtx {
+        let mut c = ctx(false);
+        c.system.debt_growth = vec![
+            SchedulePointRec {
+                elapsed_ms: 0,
+                discount_bps: 0,
+            },
+            SchedulePointRec {
+                elapsed_ms: 1_000,
+                discount_bps: 3_000,
+            },
+        ];
+        c
+    }
+
+    fn indebted() -> AccountingState {
+        AccountingState {
+            unbacked_debt: 2_000,
+            ..AccountingState::new()
+        }
+    }
+
+    /// v0.2.4 `start_debt_auction`: implicit settle, the core start rules, then the reservation.
+    #[test]
+    fn start_debt_settles_then_reserves_the_lot() {
+        let c = debt_ctx();
+        let (next, d, burned) =
+            start_debt_op(&indebted(), &c, 1_400, 2 * RAY, NOW, 0).expect("starts");
+        assert_eq!(burned, 1_400, "the buffer settles what it can first");
+        assert_eq!((next.unbacked_debt, next.total_debt_settled), (600, 1_400));
+        assert_eq!(
+            (next.debt_on_auction, next.debt_live, next.debt_nonce),
+            (500, true, 1)
+        );
+        assert_eq!(
+            (d.config, d.nonce, d.lot_left, d.start_amount, d.start_ms),
+            (c.config, 0, 500, 250, NOW)
+        );
+        assert_eq!(d.phase, SystemPhase::Live);
+    }
+
+    #[test]
+    fn start_debt_rejections() {
+        let c = debt_ctx();
+        let start = |acc: &AccountingState, ctx: &SystemCtx, buffer, reference, now, nonce| {
+            start_debt_op(acc, ctx, buffer, reference, now, nonce).map(|_| ())
+        };
+        let acc = indebted();
+        assert_eq!(
+            start(&acc, &c, 0, 2 * RAY, NOW, 1),
+            Err(EngineError::NonceMismatch)
+        );
+        assert_eq!(
+            start(&acc, &c, 1_501, 2 * RAY, NOW, 0),
+            Err(EngineError::InsufficientBadDebt)
+        );
+        assert_eq!(
+            start(&acc, &c, 0, 2 * RAY / 100, NOW, 0),
+            Err(EngineError::MintCapConfig)
+        );
+        let no_token = SystemCtx {
+            protocol_token: None,
+            ..c.clone()
+        };
+        assert_eq!(
+            start(&acc, &no_token, 0, 2 * RAY, NOW, 0),
+            Err(EngineError::TokenNotConfigured)
+        );
+        let live = AccountingState {
+            debt_live: true,
+            ..acc.clone()
+        };
+        assert_eq!(
+            start(&live, &c, 0, 2 * RAY, NOW, 0),
+            Err(EngineError::DebtAuctionAlreadyLive)
+        );
+    }
+
+    /// ADR-039 at the claimed time: `last_end + 600_000 − 1` is refused, `+ 600_000` starts; the
+    /// sum saturates; no delay before the first auction ever ended.
+    #[test]
+    fn debt_relist_delay_boundary() {
+        let ended = AccountingState {
+            last_debt_end_ms: NOW,
+            ..indebted()
+        };
+        let delay = DEBT_RELIST_DELAY_MS;
+        assert_eq!(
+            debt_precheck(&ended, 0, NOW + delay - 1),
+            Err(EngineError::DelayNotElapsed)
+        );
+        assert_eq!(debt_precheck(&ended, 0, NOW + delay), Ok(()));
+        assert_eq!(debt_precheck(&indebted(), 0, 0), Ok(()));
+        let saturated = AccountingState {
+            last_debt_end_ms: u64::MAX - 1,
+            ..indebted()
+        };
+        assert_eq!(
+            debt_precheck(&saturated, 0, u64::MAX - 1),
+            Err(EngineError::DelayNotElapsed)
+        );
+    }
+
+    fn started_debt() -> (DebtAuctionState, SystemCtx) {
+        let c = debt_ctx();
+        let (_, d, _) = start_debt_op(&indebted(), &c, 0, 2 * RAY, NOW, 0).expect("starts");
+        (d, c)
+    }
+
+    /// v0.2.4 `take_debt_guards` and `multi_take` numbers.
+    #[test]
+    fn take_debt_mints_pro_rata_and_guards() {
+        let (d, c) = started_debt();
+        let take = |d: &DebtAuctionState, amounts, now| take_debt_op(d, &c, amounts, now);
+        assert_eq!(
+            take(&d, (500, 251), NOW).map(|_| ()),
+            Err(EngineError::Slippage)
+        );
+        assert_eq!(
+            take(&d, (495, 0), NOW).map(|_| ()),
+            Err(EngineError::DustRemainder)
+        );
+        assert_eq!(
+            take(&d, (0, 0), NOW).map(|_| ()),
+            Err(EngineError::ZeroFill)
+        );
+        let (part, minted, filled) = take(&d, (300, 150), NOW).expect("a partial take");
+        assert_eq!((minted, filled), (150, 300));
+        assert_eq!((part.lot_left, part.phase), (200, SystemPhase::Live));
+        // t = 1_000: offered floor(250 x 1.3) = 325; floor(325 x 200 / 500) = 130.
+        let (done, minted, filled) = take(&part, (u128::MAX, 0), NOW + 1_000).expect("the rest");
+        assert_eq!((minted, filled), (130, 200));
+        assert_eq!((done.lot_left, done.phase), (0, SystemPhase::Ended));
+        assert_eq!(
+            take(&done, (1, 0), NOW).map(|_| ()),
+            Err(EngineError::NotLive)
+        );
+    }
+
+    #[test]
+    fn close_debt_after_the_ttl_releases_the_rest() {
+        let (d, c) = started_debt();
+        let ttl = c.system.system_ttl_ms;
+        assert_eq!(
+            close_debt_op(&d, &c, NOW + ttl - 1),
+            Err(EngineError::DelayNotElapsed)
+        );
+        let (closed, released) = close_debt_op(&d, &c, NOW + ttl).expect("closes");
+        assert_eq!(released, 500);
+        assert_eq!((closed.lot_left, closed.phase), (0, SystemPhase::Ended));
+        assert_eq!(
+            close_debt_op(&closed, &c, NOW + ttl),
+            Err(EngineError::NotLive)
+        );
+    }
+
+    /// ADR-024 pairing at the accounting: a take burns and releases exactly the filled amount; the
+    /// reservation can only release what it reserved.
+    #[test]
+    fn debt_bookings_pair_with_the_reservation() {
+        let (acc, _, _) = start_debt_op(&indebted(), &debt_ctx(), 0, 2 * RAY, NOW, 0).expect("ok");
+        let part = book_debt_take(&acc, (300, 150), false, NOW).expect("books");
+        assert_eq!(
+            (
+                part.unbacked_debt,
+                part.debt_on_auction,
+                part.total_debt_auctioned
+            ),
+            (1_700, 200, 300)
+        );
+        assert_eq!((part.total_protocol_minted, part.debt_live), (150, true));
+        let done = book_debt_take(&part, (200, 130), true, NOW + 5).expect("books");
+        assert_eq!((done.debt_on_auction, done.debt_live), (0, false));
+        assert_eq!(
+            (done.last_debt_end_ms, done.total_protocol_minted),
+            (NOW + 5, 280)
+        );
+        assert_eq!(
+            book_debt_take(&part, (201, 0), true, NOW),
+            Err(EngineError::Math)
+        );
+        let closed = book_debt_close(&part, 200, NOW + 9).expect("books");
+        assert_eq!(
+            (
+                closed.unbacked_debt,
+                closed.debt_on_auction,
+                closed.debt_live
+            ),
+            (1_700, 0, false)
+        );
+        assert_eq!(closed.last_debt_end_ms, NOW + 9);
+        assert_eq!(book_debt_close(&part, 201, NOW), Err(EngineError::Math));
     }
 }

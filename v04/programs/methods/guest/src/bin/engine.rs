@@ -23,6 +23,9 @@
 //! - `surplus`: roots `StartSurplus` / `TakeSurplus` / `CloseSurplus` at the config, the surplus
 //!   auction's `SurplusOpen` / `SurplusTake` / `SurplusClose` (vault read, `Proceed`) and the
 //!   accounting's `SurplusTaken` / `SurplusReturned`.
+//! - `debt`: roots `StartDebt` / `TakeDebt` / `CloseDebt` at the config, the debt auction's
+//!   `DebtOpen` / `DebtTake` / `DebtClose`, the accounting's `DebtTaken` / `DebtClosed` and the
+//!   config's `Mint` (variants 34-42, one [`debt::dispatch`] call).
 //!
 //! Errors are panics with the v0.2.4 text (`engine_core::check::fail`).
 
@@ -35,6 +38,8 @@ mod auction;
 mod bid;
 #[path = "engine/claim.rs"]
 mod claim;
+#[path = "engine/debt.rs"]
+mod debt;
 #[path = "engine/liquidate.rs"]
 mod liquidate;
 #[path = "engine/observe.rs"]
@@ -339,5 +344,14 @@ fn handle_message(input: &ReceiveInput) -> Response {
             amount,
             now_ms,
         } => surplus::on_returned(input, (config, nonce), amount, now_ms),
+        message @ (EngineMsg::StartDebt { .. }
+        | EngineMsg::TakeDebt { .. }
+        | EngineMsg::CloseDebt { .. }
+        | EngineMsg::DebtOpen { .. }
+        | EngineMsg::DebtTake { .. }
+        | EngineMsg::DebtClose { .. }
+        | EngineMsg::DebtTaken { .. }
+        | EngineMsg::DebtClosed { .. }
+        | EngineMsg::Mint { .. }) => debt::dispatch(input, message),
     }
 }

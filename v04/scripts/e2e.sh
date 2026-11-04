@@ -6,9 +6,11 @@
 #   4. import the public dev key A (genesis-funded) into a fresh wallet: the fee payer,
 #   5. deploy token, oracle, mock_host, relay and engine with `wallet program-loader deploy`,
 #   6. run `cargo run -p sdk --example slice` against it (expects "slice complete"),
-#   7. stop the sequencer by its exact process name.
-# `e2e.sh` (or `e2e.sh all`) runs every step; `up`, `deploy`, `slice`, `down` run them in stages.
-# Exits non-zero on any failed step. Local only (no CI): it needs a few GB of LEZ build and
+#   7. run `cargo run -p sdk --example system` (Plan 6: settle_debt, one debt auction, one surplus
+#      auction, check_solvency; expects "system complete"),
+#   8. stop the sequencer by its exact process name.
+# `e2e.sh` (or `e2e.sh all`) runs every step; `up`, `deploy`, `slice`, `system`, `down` run them in
+# stages. Exits non-zero on any failed step. Local only (no CI): it needs a few GB of LEZ build and
 # about 25 minutes of 15 s blocks.
 #
 # Environment (all optional):
@@ -64,7 +66,7 @@ build_lez() {
 }
 
 build_v04() {
-  ( cd "$V04" && cargo build -p methods && cargo build -p sdk --example slice )
+  ( cd "$V04" && cargo build -p methods && cargo build -p sdk --example slice --example system )
   for g in token oracle mock_host relay engine; do
     [[ -f "$GUESTS/$g.bin" ]] || die "missing guest $GUESTS/$g.bin"
   done
@@ -131,11 +133,15 @@ deploy_all() {
     | tee "$E2E_HOME/programs.env"
 }
 
-run_slice() {
-  local log="$E2E_HOME/slice.log"
-  ( cd "$V04" && cargo run -q -p sdk --example slice ) 2>&1 | tee "$log"
-  [[ ${PIPESTATUS[0]} -eq 0 ]] || die "the slice example failed (log $log)"
-  grep -q '^slice complete$' "$log" || die "no 'slice complete' in $log"
+# run_example <name>: runs the SDK example <name>, which must print "<name> complete".
+run_example() {
+  local log="$E2E_HOME/$1.log"
+  # Tested by `if !`, so `set -e` does not abort here and the message is printed (`pipefail`
+  # makes a failed example fail the pipeline even though `tee` succeeds).
+  if ! ( cd "$V04" && cargo run -q -p sdk --example "$1" ) 2>&1 | tee "$log"; then
+    die "the $1 example failed (log $log)"
+  fi
+  grep -q "^$1 complete\$" "$log" || die "no '$1 complete' in $log"
 }
 
 load_env() {
@@ -145,7 +151,7 @@ load_env() {
 
 up() {
   step "LEZ $LEZ_TAG binaries"; build_lez
-  step "v04 guests and the slice example"; build_v04
+  step "v04 guests and the SDK examples"; build_v04
   step "standalone sequencer"; start_sequencer
   step "wallet and payer"; setup_wallet
 }
@@ -154,14 +160,16 @@ case "${1:-all}" in
   all)
     up
     step "deploy the guests"; deploy_all
-    step "the slice"; run_slice
+    step "the slice"; run_example slice
+    step "the system instructions"; run_example system
     step "stop the sequencer"; stop_sequencer; trap - EXIT
-    echo "e2e: slice complete" ;;
+    echo "e2e: slice complete, system complete" ;;
   # Stages, for a session that cannot hold one long command: the sequencer keeps running between
   # them (no EXIT trap); `down` stops it.
   up) up; trap - EXIT; printf 'PAYER=%s\n' "$PAYER" > "$E2E_HOME/programs.env" ;;
   deploy) load_env; step "deploy the guests"; deploy_all ;;
-  slice) load_env; step "the slice"; run_slice; echo "e2e: slice complete" ;;
+  slice) load_env; step "the slice"; run_example slice; echo "e2e: slice complete" ;;
+  system) load_env; step "the system instructions"; run_example system; echo "e2e: system complete" ;;
   down) step "stop the sequencer"; stop_sequencer ;;
-  *) echo "usage: $0 [all|up|deploy|slice|down]" >&2; exit 2 ;;
+  *) echo "usage: $0 [all|up|deploy|slice|system|down]" >&2; exit 2 ;;
 esac

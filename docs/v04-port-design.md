@@ -3,7 +3,9 @@
 ## 1. Status and scope
 
 Written 2026-10-31 from code reading only. Nothing was built. Update 2026-11-01: Plan 5 built the liquidation slice in `v04/`
-(status in the §8 task table; decisions in ADR-056 to ADR-061). Baseline: this repo on LEZ v0.2.4 (ADR-001).
+(status in the §8 task table; decisions in ADR-056 to ADR-061). Update 2026-11-04: Plan 6 built holdings per
+(owner, definition), `set_engine_params`, `observe_feed`, `settle_debt`, both system auctions and `check_solvency`
+(ADR-062, ADR-063; §4.2 "As built (Plan 6)", §6, §8). Baseline: this repo on LEZ v0.2.4 (ADR-001).
 Target: LEZ **v0.4.0-rc1** (`1806e873`). Every LEZ claim below cites a file at that tag; paths are relative
 to `logos-blockchain/logos-execution-zone`. Claims I could not check in source are marked **[unverified]**.
 Background and upstream status: `docs/research/2026-10-31-lez-0.4-port-research.md` (the "research").
@@ -98,7 +100,7 @@ today's seed encoding (ADR-020, `auction_engine_core::pda`), only with `E` in pl
 | `UnusedSlot(k)` (ADR-030) | retired | — | no account lists exist; `None` in the config is enough |
 | Oracle account | `(oracle, O)` | oracle | read by `ReadState` |
 | Host `ProtocolParameters`, position, accumulator, redemption-price state, `LiquidationEngineState` | `(.., H)` each | host | read by the host itself, not the engine (§5); redemption-price state read by `ReadState` for bids |
-| Token holdings, definitions | `(holding, T)`, `(definition, T)` | token | one holding per account, as today (§6) |
+| Token holdings, definitions | `(pda(T, ["HOLDING", owner, def]), T)`, `(definition, T)` | token | one holding actor per `(owner, definition)`; the owner's `(owner, T)` is a stateless signer proxy (§6, ADR-062). The protocol definition is the engine PDA `pda(E, ["PROTOCOL", config])`, created at `init_config` with minter `(K, E)` (ADR-063) |
 | `CLOCK_01` | `(CLOCK_01, clock)` | system | asserted, not read (§4.1 time) |
 
 Consequences:
@@ -201,6 +203,18 @@ Notes on the table:
   underfunded bid fails with the token's error, and `VaultBelowBook` surfaces as the token's `Sweep` floor
   (unreachable: only `E` debits `V`). `settle_empty` is rooted at `K`, not `A`, so an absent auction reports
   the engine's error (rulings R-9a, R-9c, R-9d; ADR-059; THREAT_MODEL "LEZ 0.4 port").
+- **As built (Plan 6), rows 1, 3, 9-16** (ADR-063). Every system root (rows 9-16) is a permissionless
+  message at `K`, not `Acc`/`S`/`D`, for the reason of R-9d: `Acc` does not store its config, and an
+  absent `S`/`D` could not report the engine's error. `K` asserts the clock (every op but `settle_debt`)
+  and relays a `SystemCtx` snapshot: `System { op }` to `Acc` for settle, starts and `check_solvency`; a
+  seeded `Probe`, then the take or close, to `S`/`D`. One Read block at `Acc` (buffer holding, plus the
+  reference oracle on timed ops) replaces the separate `K` and `Acc` reads of rows 10, 13 and 16; an
+  absent buffer holding reads 0, an empty or foreign oracle reply falls back to the admin price. The
+  protocol definition is created at `init_config` with minter `(K, E)` (row 0), so row 13/16's definition
+  read is dropped (`MintAuthorityMissing` unreachable). A debt take mints through `K` (`D → K Mint → def
+  MintTo`); `Freeze` goes `Acc → K → host EngineFreezeNewDebt`. Row 1's `set_engine_params` checks the
+  config's recorded collateral type's cap (R-2a) and asserts `Acc` idle only when a locked field changes;
+  row 3's `observe_feed` is a root at `C`. Executions and cycles per row: `v04/CYCLES.md`.
 - **Executions grow.** `liquidate` goes from 5 executions (ADR-036) to roughly 15-20; `bid` from 3-4 to
   about 10-12. P1/P3 ("in one block") still hold because it is one transaction, but gas and fees must be
   re-measured (CYCLES.md, ADR-048) before the design is frozen.
@@ -325,40 +339,54 @@ may mint (`lez/programs/wrapped_token/core/src/lib.rs:1-4`).
 | Protocol token | minted by the engine (F4), burned by takers (F5) | `T` |
 | Collateral | transfers only | `T` for the PoC (one code path, `Sweep` available); native collateral is a later option: custody works with a seeded native `Transfer`, but there is no sweep, so sweeps become Read + exact Transfer |
 
-**What the vendored token program becomes.** A port of today's `programs/token` to actors, keeping its
-model with one change: a holding is `T`'s actor state on an account, a map `{ balances: definition -> balance }`
-(an entry at zero is removed), so one account can hold any number of tokens; definition = `T`'s actor state on the definition account, `{ supply, minter: Option<Actor>, .. }`.
+**What the vendored token program becomes.** A port of today's `programs/token` to actors. As first built
+(Plan 5), a holding was `T`'s actor state on the owner's account, a map `{ balances: definition -> balance }`.
+**As built since Plan 6 (ADR-062, the correction below):** the holding of `owner` for `definition` is its own
+token actor at `pda(T, ["HOLDING", owner, definition])`, state `{ owner, definition, balance }` (kept at zero),
+and the owner's own token actor `(owner, T)` is a stateless signer proxy. A definition is `T`'s actor state on
+the definition account, `{ supply, minter: Option<Actor> }`. The table is the as-built message set.
 
 | Message (at) | Check | Effect |
 |---|---|---|
 | `NewDefinition { minter, initial_to, initial_supply }` (definition) | `is_authorized`; empty state | creates the definition |
-| `Transfer { definition, to, amount }` (holding) | `is_authorized` (signature or PDA seed) | debit that entry, then sync `Credit` → `(to, T)` |
-| `Sweep { definition, to, at_least }` (holding) | `is_authorized`; entry `>= at_least` | moves that entry's whole balance (ADR-033) |
-| `Burn { definition, amount }` (holding) | `is_authorized` | debit that entry, then sync `SupplyDown` → `(definition, T)` |
-| `MintTo { to, amount }` (definition) | `from == minter` (whole actor) | supply up, then `Credit` → `(to, T)` |
-| `Credit { definition, amount }` (holding) | `from_own_program()` | adds to that definition's entry, creating it |
+| `Transfer { definition, to, amount }` (owner's `(owner, T)`) | `is_authorized` (signature or PDA seed) | forwards an unseeded `Debit { definition, Transfer }` to the owner's holding |
+| `Sweep { definition, to, at_least }` (owner's `(owner, T)`) | `is_authorized` | forwards `Debit { definition, Sweep }`: the holding moves its whole balance if `>= at_least` (ADR-033) |
+| `Burn { definition, amount }` (owner's `(owner, T)`) | `is_authorized` | forwards `Debit { definition, Burn }`: the holding debits, then sync `SupplyDown` → `(definition, T)` |
+| `Debit { definition, action }` (holding) | `from == (o, T)` with the receiver re-derived from `o` and `definition`; balance | debits, then `Credit` → `to`'s holding (transfer, sweep) or `SupplyDown` (burn) |
+| `MintTo { to, amount }` (definition) | `from == minter` (whole actor) | supply up, then `Credit` → `to`'s holding |
+| `Credit { owner, definition, amount }` (holding) | from a token actor, with `T`'s `HOLDING` seed (a leaf); receiver re-derived | adds, creating the holding; a fresh holding self-admits, no evidence |
 | `ReadState` (any) | `from` is set | `StateReply` → `from` |
 
 Two deliberate differences from v0.2.4: credits are **sync**, so a whole engine conversation settles in one
 transaction without relying on async promotion; and a fresh holding needs no signature from its owner. Only
 `T` can write `T`'s actor states, and `RecipientMustSign` (spec, S7) is dropped [I]. Squatting is closed two
-ways: a holding keeps one entry per definition, so a junk token credited to an account (or to a predictable
-vault PDA) cannot lock out the real one, and `NewDefinition` needs the definition account's authorisation, so
-nobody can claim someone else's account as a definition. The token must send nothing but `Credit`,
-`SupplyDown` and `StateReply` (§4.3 (c) point 5). Whether an undeclared fresh account is admitted is decided by
+ways: each `(owner, definition)` pair is its own holding actor (ADR-062), so a junk token credited to an
+account (or to a predictable vault PDA) lands in another actor and can neither lock out nor weigh down the real
+one, and `NewDefinition` needs the definition account's authorisation, so nobody can claim someone else's
+account as a definition. The token must send nothing but `Credit`, `Debit` (the proxy's unseeded message to
+the owner's holding), `SupplyDown` and `StateReply` (§4.3 (c) point 5). Whether an undeclared fresh account is admitted is decided by
 the sequencer (`admit`, EX:1190-1210): a declared, unsigned, nonexistent key account needs
 `PublicAccountEvidence` (found in the Task 3 tests), so the SDK declares recipients and attaches it.
+(Plan 6, ADR-062: junk now lands in other actors, and a fresh holding self-admits through `T`'s `HOLDING`
+seed. The only evidence left is the buffer holding's `Pda`, on a system op that reads it while its account is
+absent, and the reference oracle's evidence, on a timed system op while the oracle's account is absent: an
+oracle sits at a key account whose public key the chain does not record, so the SDK attaches the evidence
+its caller supplies.)
 
 **Correction to the squatting note above (final review, Plan 5).** One entry per definition stops a junk
-token from *locking out* the real one, but two gaps remain, both fixed in Plan 6:
+token from *locking out* the real one, but two gaps remained, both fixed in Plan 6:
 - **The unbounded holding map is a liquidation-blocking vector.** Any `Transfer` may credit any account, so an
   owner can stuff junk definitions into their own host vault until the seizure's `Sweep`, whose cost grows with
   the whole map, exceeds the 10M gas cap; the position then cannot be liquidated. Auction vaults and the
-  surplus buffer are exposed the same way. Planned fix: one holding account per `(owner, definition)`, or debits
-  whose cost does not depend on the map's size.
+  surplus buffer are exposed the same way. **Fixed by ADR-062** (Plan 6, Task 1): one holding actor per
+  `(owner, definition)`; debits whose cost does not depend on the map are not achievable on 0.4 (a handler
+  commits its whole state). Tests: `junk_definitions_in_a_host_vault_do_not_change_liquidation_cost`,
+  `junk_in_the_buffer_and_an_auction_vault_does_not_change_bid_cost`.
 - **A PDA definition address can be pre-blocked without being published.** Its address is derivable, and a
-  `Credit` creates a holding state there, after which `NewDefinition` (empty state required) fails. Plan 6 must
-  create PDA definitions (e.g. the protocol token's) at initialisation, before use.
+  `Credit` creates a holding state there, after which `NewDefinition` (empty state required) fails. **Fixed**:
+  a credit now writes only holding PDAs, never `(X, T)` (ADR-062), and the protocol definition is created at
+  `init_config` (ADR-063). Tests: `a_credit_cannot_pre_block_a_definition_address`,
+  `protocol_definition_cannot_be_pre_blocked`.
 
 **Flows** (seed = the PDA seed the engine attaches so `T` sees `is_authorized` on an engine holding):
 
@@ -373,7 +401,9 @@ token from *locking out* the real one, but two gaps remain, both fixed in Plan 6
 | Debt take | taker stable Burn [taker signs]; K → `(protocol_def, T)` MintTo → taker protocol |
 
 The mint authority (`["MINT_AUTH", config]`, ADR-021) becomes `minter = (K, E)` in the protocol-token
-definition; `start_debt_auction` reads the definition and checks it (`MintAuthorityMissing`). The vendored
+definition; `start_debt_auction` reads the definition and checks it (`MintAuthorityMissing`). As built (ADR-063),
+the definition is the engine's PDA `pda(E, ["PROTOCOL", config])`, created at `init_config` with that minter, so
+no read is needed and `MintAuthorityMissing` is unreachable. The vendored
 `twap_oracle` gets the same treatment: an actor port with a `ReadState` answer, or, for the first milestone,
 a minimal oracle actor whose publisher sets `(price, timestamp, confidence)` (ADR-050's role).
 
@@ -433,13 +463,13 @@ moves to transaction-status polling (ADR-053 already polls `txStatus` through `l
 | 1 | Review this note; record ADRs: actor layout and retired PDAs, the five building blocks, claimed time, one bid message, host interface v2 | 1-2 d | done: ADR-056 to ADR-061 (Plan 5, Task 13) |
 | 2 | Refactor on v0.2.4 first: split each handler into a pure step function (state in, state out, effects list) and a thin I/O shell; existing tests stay green | 3-4 d | not done as a separate step: the slice was written directly as pure `engine_core` code plus a guest shell |
 | 3 | Rust 1.98.1, edition 2024 where needed; pin `lee`/`lee_core` to v0.4.0-rc1 in a new workspace member | 1 d | done: `v04/` workspace (Plan 5, Task 1) |
-| 4 | Token actor port (§6) and a minimal oracle actor | 4-6 d | done: multi-definition holdings (R-3b), oracle with relay publisher (Plan 5, Tasks 3-4) |
+| 4 | Token actor port (§6) and a minimal oracle actor | 4-6 d | done: oracle with relay publisher (Plan 5, Tasks 3-4); holdings moved from one map per account (R-3b) to one actor per `(owner, definition)` (Plan 6, Task 1, ADR-062) |
 | 5 | Mock CDP host implementing the F7 interface (§5 option B) | 3-5 d | done (Plan 5, Task 5) |
-| 6 | Engine guest on `actor_entrypoint!`: messages, building blocks, all 17 instructions; hand-kept SPEL-schema IDL with a drift test | 2-3 wk | partial: the liquidation slice (Init, SetCollateral, Liquidate, Bid, SettleEmpty, ClaimLeftover; Plan 5, Tasks 6-9); the other 11 instructions and the IDL are Plan 6 |
-| 7 | In-process harness on `lee` v0.4; port security (§4.3 (c)), invariant (R6, inv 2/7/9-11/17) and two-instance tests | 1-1.5 wk | done for the slice: `harness`, security and invariant tests (Plan 5, Tasks 2, 10) |
-| 8 | Measure cycles and gas per instruction; new CYCLES.md baseline (ADR-048) | 2-3 d | done for the slice: `v04/CYCLES.md` (Plan 5, Task 11) |
-| 9 | SDK: tx builder, decoders, PDA math, simulate-then-send with fitted `gas_limit`, scanner, confirmation | 1.5-2 wk | partial: plans, decoders, simulate-then-send, block-level confirmation (Plan 5, Tasks 12-13); the scanner is Plan 6 |
-| 10 | Scripts and CI: bootstrap from the v0.4 tag, e2e on a standalone sequencer with `RISC0_DEV_MODE=0`, no reliance on events | 3-5 d | partial: `v04/scripts/e2e.sh` (local) and the `v04` CI workflow (Plan 5, Task 13) |
+| 6 | Engine guest on `actor_entrypoint!`: messages, building blocks, all 17 instructions; hand-kept SPEL-schema IDL with a drift test | 2-3 wk | done except the IDL: the liquidation slice (Plan 5, Tasks 6-9); `set_engine_params`, `observe_feed`, `settle_debt`, surplus and debt auctions (start, take, close), `check_solvency` with the host freeze (Plan 6, Tasks 2-6, ADR-063). The hand-kept IDL with a drift test is deferred: no SPEL for 0.4, and a drift test over 45 borsh variants needs a schema derive the crates do not have |
+| 7 | In-process harness on `lee` v0.4; port security (§4.3 (c)), invariant (R6, inv 2/7/9-11/17) and two-instance tests | 1-1.5 wk | done: `harness`, security and invariant tests (Plan 5, Tasks 2, 10); system-message impostor, rogue-config and read-window tests, system-auction invariants after every step (Plan 6, Tasks 3-7b) |
+| 8 | Measure cycles and gas per instruction; new CYCLES.md baseline (ADR-048) | 2-3 d | done: `v04/CYCLES.md`, slice rows re-measured after ADR-062 and system rows (Plan 5, Task 11; Plan 6, Task 8) |
+| 9 | SDK: tx builder, decoders, PDA math, simulate-then-send with fitted `gas_limit`, scanner, confirmation | 1.5-2 wk | partial: plans, decoders, simulate-then-send, block-level confirmation (Plan 5, Tasks 12-13); system plans with may-touch actors and buffer evidence (Plan 6, Task 8, ruling R-8b); the scanner is not built |
+| 10 | Scripts and CI: bootstrap from the v0.4 tag, e2e on a standalone sequencer with `RISC0_DEV_MODE=0`, no reliance on events | 3-5 d | partial: `v04/scripts/e2e.sh` (local; stages `slice` and, since Plan 6 Task 9, `system`) and the `v04` CI workflow (Plan 5, Task 13) |
 | 11 | CLI, `auction_ffi`, Basecamp module on `lez_core` 0.6.0 | 1 wk | blocked: lez_core #72 |
 | 12 | Replace the mock host with upstream's port (or our own, §5 option A) | 1 wk after upstream; 3-4 wk alone | blocked upstream |
 | 13 | Reproducible guests, ImageIDs, immutable deploys, DEPLOYMENTS.md (ADR-047), real proofs (ADR-045) | 3-5 d | after 12 |
@@ -454,6 +484,12 @@ debt and one surplus auction, run against our token actor, the minimal oracle an
 the reservation invariants hold after every step; the ported security tests pass (impostor `from`, replies
 outside a pending phase, a host that never replies); and a cycle/gas table exists. This proves the
 conversation design and the invariants, and turns §5's interface into an executable spec for upstream.
+
+**Status (2026-11-04): met.** Plan 5 ran the slice; Plan 6 added `settle_debt`, both system auctions and
+`check_solvency`, in-process with R6, the reservation and the system-auction invariants checked after every
+step, ported security tests and CYCLES.md rows, and on a standalone sequencer (`v04/sdk/examples/system.rs`:
+one debt auction, `settle_debt`, one surplus auction and `check_solvency`, run recorded in `v04/README.md`).
+Still open from tasks 0-10: the IDL (task 6), the SDK scanner (task 9) and CI for the e2e (task 10).
 
 ## 9. Open questions for Logos
 

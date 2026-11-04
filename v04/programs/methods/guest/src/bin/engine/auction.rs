@@ -6,8 +6,8 @@
 //!   `expected_seized_sender` = `(requested position, H)`. Quotes the REPORTED amounts with v0.2.4's
 //!   code (ruling R-5e), moves to `Auctioning`, then sends: the keeper reward from the vault (VAULT
 //!   seed) to the keeper's own holding (ruling R-3a), `Reserve` to the collateral actor and the
-//!   config, and `ReadState` to the vault.
-//! - The vault's `StateReply`: the vault must hold at least `seized − reward` (R6 as a floor).
+//!   config, and `ReadState` to the vault's collateral holding (ADR-062).
+//! - The holding's `StateReply`: the vault must hold at least `seized − reward` (R6 as a floor).
 //! - `Finish` (from `K`, the conversation's last message): the auction must be `Auctioning` with
 //!   its vault check done; a host that never reported or a vault that never answered fails here.
 
@@ -24,7 +24,7 @@ use lee_core::{
     account::{AccountId, Actor},
     program::{ReceiveInput, Response, StateReply, SyncMessage},
 };
-use token_core::{Holding, TokenMsg};
+use token_core::{Holding, TokenMsg, holding_actor};
 
 use crate::admin::{engine, engine_sender};
 
@@ -103,9 +103,10 @@ pub fn on_seized(
     let (e, me) = (engine(input), input.receiver.account_id);
     let vault = vault_holding(e, a.token, me);
     let definition = a.collateral_def;
+    let vault_collateral = holding_actor(a.token, vault.account_id, definition);
     let state = AuctionState {
         scratch: Some(AuctionScratch::VaultRead {
-            vault,
+            vault: vault_collateral,
             definition,
             at_least: quote.lot,
         }),
@@ -128,16 +129,14 @@ pub fn on_seized(
     response
         .send_sync(collateral_actor(e, a.config, definition), &reserve)
         .send_sync(Actor::new(a.config, e), &reserve)
-        .send_sync(vault, &TokenMsg::ReadState)
+        .send_sync(vault_collateral, &TokenMsg::ReadState)
 }
 
-/// The vault's balance, from exactly the vault, while the check is pending.
+/// The vault's collateral balance, from exactly its holding, while the check is pending.
 pub fn on_vault_reply(input: &ReceiveInput) -> Option<Response> {
     let a = AuctionState::decode(input.pre_state.as_ref())?;
     let Some(AuctionScratch::VaultRead {
-        vault,
-        definition,
-        at_least,
+        vault, at_least, ..
     }) = a.scratch
     else {
         return None;
@@ -152,7 +151,7 @@ pub fn on_vault_reply(input: &ReceiveInput) -> Option<Response> {
     } else {
         Holding::decode(reply.state.as_ref())
             .unwrap_or_else(|| fail(EngineError::VaultBelowBook))
-            .balance(definition)
+            .balance
     };
     if held < at_least {
         fail(EngineError::VaultBelowBook);

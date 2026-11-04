@@ -65,6 +65,8 @@ fn expected_config(w: &World) -> ConfigState {
         bad_debt_freeze_threshold: p.bad_debt_freeze_threshold,
         system: SystemParamsRec::from_core(&system),
         pending_read: None,
+        pending_genesis: None,
+        collateral_def: None,
     }
 }
 
@@ -337,10 +339,11 @@ fn invalid_params_revert_with_v024_error_codes() {
             },
             EngineError::InvalidConfig,
         ),
-        // `Init` carries no protocol-token definition, so enabling one names a zero id.
+        // An enabled reference-oracle slot without its actor names a zero id (v0.2.4
+        // `optional_slot`).
         (
             EngineParamsArgs {
-                protocol_token_enabled: true,
+                ref_oracle_enabled: true,
                 ..ok.clone()
             },
             EngineError::ZeroId,
@@ -421,7 +424,14 @@ fn invalid_params_revert_with_v024_error_codes() {
 #[test]
 fn world_binds_the_config_and_opens_an_unsafe_position() {
     let mut w = World::new();
-    assert_eq!(config_state(&w, w.config), Some(expected_config(&w)));
+    // The first `SetCollateral` recorded the config's one collateral type (R-F3).
+    assert_eq!(
+        config_state(&w, w.config),
+        Some(ConfigState {
+            collateral_def: Some(w.collateral_def),
+            ..expected_config(&w)
+        })
+    );
     assert_eq!(collateral_state(&w), Some(expected_collateral(&w)));
     let params = w
         .chain

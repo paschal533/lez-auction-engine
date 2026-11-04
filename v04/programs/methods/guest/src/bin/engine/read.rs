@@ -4,20 +4,25 @@
 //!   `Proceed` to itself. The oracle's `StateReply` is accepted only from exactly the pending actor
 //!   and must hold an oracle state; `Proceed`, run after every earlier subtree, fails the
 //!   transaction if the read never completed.
-//! - Collateral (`observe`) and auction (`auction`) keep their own pending reads; a reply reaches
-//!   them by the receiver's state tag. A message that is not an awaited reply is left to the
+//! - Collateral (`observe`), auction (`auction`), accounting (`system`) and surplus auction
+//!   (`surplus`, its close's vault read) keep their own pending
+//!   reads; a reply reaches them by the receiver's state tag. A message that is not an awaited reply is left to the
 //!   message dispatch.
 
 use auction_engine_params::EngineError;
 use borsh::BorshDeserialize;
 use engine_core::{
     check::{expect_from, fail},
-    state::{CollateralState, ConfigState, TAG_AUCTION, TAG_COLL, TAG_CONFIG},
+    state::{
+        AccountingState, CollateralState, ConfigState, TAG_ACCOUNTING, TAG_AUCTION, TAG_COLL,
+        TAG_CONFIG,
+    },
+    system_state::{SurplusAuctionState, TAG_SURPLUS},
 };
 use lee_core::program::{ReceiveInput, Response, StateReply};
 use oracle_core::OracleState;
 
-use crate::{auction, observe};
+use crate::{auction, observe, surplus, system};
 
 /// The awaited reply's handling, if `input` is one, chosen by the receiver's state tag.
 pub fn route_reply(input: &ReceiveInput) -> Option<Response> {
@@ -29,6 +34,10 @@ pub fn route_reply(input: &ReceiveInput) -> Option<Response> {
         observe::on_reply(input)
     } else if tag == TAG_AUCTION {
         auction::on_vault_reply(input)
+    } else if tag == TAG_ACCOUNTING {
+        system::on_reply(input)
+    } else if tag == TAG_SURPLUS {
+        surplus::on_reply(input)
     } else {
         None
     }
@@ -54,11 +63,18 @@ fn on_config_reply(input: &ReceiveInput) -> Option<Response> {
 }
 
 /// The `Proceed` sentinel, only from the receiver itself: at a collateral actor it ends an
-/// observation; at the config, only once its read has been answered.
+/// observation, at the accounting a system op, at a surplus auction its close; at the config,
+/// only once its read has been answered.
 pub fn proceed(input: &ReceiveInput) -> Response {
     expect_from(input, input.receiver, EngineError::WrongAccount("proceed"));
     if CollateralState::decode(input.pre_state.as_ref()).is_some() {
         return observe::proceed(input);
+    }
+    if AccountingState::decode(input.pre_state.as_ref()).is_some() {
+        return system::proceed(input);
+    }
+    if SurplusAuctionState::decode(input.pre_state.as_ref()).is_some() {
+        return surplus::proceed(input);
     }
     let config = ConfigState::decode(input.pre_state.as_ref())
         .unwrap_or_else(|| fail(EngineError::WrongAccount("config")));

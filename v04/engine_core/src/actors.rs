@@ -1,7 +1,10 @@
 //! Actor and PDA helpers (design note §3). Seed bytes come from `auction_engine_params::seeds`
 //! with the v0.2.4 literals (ADR-020); `engine` is the deployed engine program's address, in place
 //! of the v0.2.4 image id. A `*_seed` is what the engine must grant when it moves or creates the
-//! actor; an actor is the derived account under the engine (or, for holdings, the token program).
+//! actor; an actor is the derived account under the engine (or, for the vaults' and the buffer's
+//! token actors, the token program). Since ADR-062 those token actors are stateless proxies: the
+//! balance of `owner` in `definition` lives in its own token actor `token_core::holding_actor(T,
+//! owner, definition)`, which a debit through the proxy reaches by one more hop.
 
 use auction_engine_params::seeds::{combine_seeds, seed_from_str, u64_seed};
 use lee_core::{
@@ -69,6 +72,21 @@ pub fn vault_seed(auction: AccountId) -> PdaSeed {
     seed(&[&seed_from_str("VAULT"), auction.value()])
 }
 
+/// `["PROTOCOL", config]`: the protocol token's definition account. New in the port (v0.2.4's
+/// `MINT_AUTH` is retired by ADR-056); the config grants it on the `NewDefinition` it sends at
+/// `Init`.
+#[must_use]
+pub fn protocol_def_seed(config: AccountId) -> PdaSeed {
+    seed(&[&seed_from_str("PROTOCOL"), config.value()])
+}
+
+/// The protocol token's definition account `pda(E, ["PROTOCOL", config])`; its definition state
+/// is the token actor `(protocol_def, T)`, minter `(config, E)`.
+#[must_use]
+pub fn protocol_def(engine: AccountId, config: AccountId) -> AccountId {
+    AccountId::for_public_pda(&engine, &protocol_def_seed(config))
+}
+
 /// Config actor `(pda(E, CONFIG), E)`.
 #[must_use]
 pub fn config_actor(engine: AccountId, admin: AccountId, salt: u64) -> Actor {
@@ -104,16 +122,55 @@ pub fn auction_actor(
     actor_at(engine, engine, &auction_seed(config, position, nonce))
 }
 
-/// An auction's vault `(pda(E, VAULT), T)`: a token holding at an engine-derived account.
+/// An auction's vault `(pda(E, VAULT), T)`, the owner token actor the engine debits through (its
+/// `VAULT` seed); its collateral is `holding_actor(T, vault.account_id, collateral_def)`.
 #[must_use]
 pub fn vault_holding(engine: AccountId, token: AccountId, auction: AccountId) -> Actor {
     actor_at(token, engine, &vault_seed(auction))
 }
 
-/// The surplus buffer `(pda(E, BUFFER), T)`.
+/// The surplus buffer `(pda(E, BUFFER), T)`, the owner token actor the engine debits through (its
+/// `BUFFER` seed); its stablecoin is `holding_actor(T, buffer.account_id, stable_def)`.
 #[must_use]
 pub fn buffer_holding(engine: AccountId, token: AccountId, config: AccountId) -> Actor {
     actor_at(token, engine, &buffer_seed(config))
+}
+
+/// `["SURP", config, nonce]`: surplus auction `nonce` of `config`.
+#[must_use]
+pub fn surplus_seed(config: AccountId, nonce: u64) -> PdaSeed {
+    seed(&[&seed_from_str("SURP"), config.value(), &u64_seed(nonce)])
+}
+
+/// `["SURPVAULT", surplus]`: the surplus auction's lot vault.
+#[must_use]
+pub fn surplus_vault_seed(surplus: AccountId) -> PdaSeed {
+    seed(&[&seed_from_str("SURPVAULT"), surplus.value()])
+}
+
+/// Surplus auction actor `(pda(E, SURP), E)`.
+#[must_use]
+pub fn surplus_actor(engine: AccountId, config: AccountId, nonce: u64) -> Actor {
+    actor_at(engine, engine, &surplus_seed(config, nonce))
+}
+
+/// A surplus auction's vault `(pda(E, SURPVAULT), T)`, the owner actor the engine debits; its
+/// stablecoin is `holding_actor(T, vault.account_id, stable_def)`.
+#[must_use]
+pub fn surplus_vault_holding(engine: AccountId, token: AccountId, surplus: AccountId) -> Actor {
+    actor_at(token, engine, &surplus_vault_seed(surplus))
+}
+
+/// `["DEBT", config, nonce]`: debt auction `nonce` of `config`.
+#[must_use]
+pub fn debt_seed(config: AccountId, nonce: u64) -> PdaSeed {
+    seed(&[&seed_from_str("DEBT"), config.value(), &u64_seed(nonce)])
+}
+
+/// Debt auction actor `(pda(E, DEBT), E)`.
+#[must_use]
+pub fn debt_actor(engine: AccountId, config: AccountId, nonce: u64) -> Actor {
+    actor_at(engine, engine, &debt_seed(config, nonce))
 }
 
 #[cfg(test)]
@@ -175,6 +232,23 @@ mod tests {
                 sha(&[&lit("AUCTION"), config.value(), position.value(), &le(7)]),
             ),
             (vault_seed(auction), sha(&[&lit("VAULT"), auction.value()])),
+            // New in the 0.4 port (v0.2.4's `MINT_AUTH` is retired by ADR-056).
+            (
+                protocol_def_seed(config),
+                sha(&[&lit("PROTOCOL"), config.value()]),
+            ),
+            (
+                surplus_seed(config, 7),
+                sha(&[&lit("SURP"), config.value(), &le(7)]),
+            ),
+            (
+                surplus_vault_seed(auction),
+                sha(&[&lit("SURPVAULT"), auction.value()]),
+            ),
+            (
+                debt_seed(config, 7),
+                sha(&[&lit("DEBT"), config.value(), &le(7)]),
+            ),
         ];
         for (seed, expected) in cases {
             assert_eq!(seed.as_bytes(), &expected);
@@ -214,5 +288,20 @@ mod tests {
             buffer_holding(engine, token, config),
             Actor::new(derive(buffer_seed(config)), token)
         );
+        assert_eq!(
+            protocol_def(engine, config),
+            derive(protocol_def_seed(config))
+        );
+        let s = surplus_actor(engine, config, 3);
+        assert_eq!(s, Actor::new(derive(surplus_seed(config, 3)), engine));
+        assert_ne!(s, surplus_actor(engine, config, 4));
+        assert_eq!(
+            surplus_vault_holding(engine, token, s.account_id),
+            Actor::new(derive(surplus_vault_seed(s.account_id)), token)
+        );
+        let d = debt_actor(engine, config, 3);
+        assert_eq!(d, Actor::new(derive(debt_seed(config, 3)), engine));
+        assert_ne!(d, debt_actor(engine, config, 4));
+        assert_ne!(d, debt_actor(engine, id(5), 3));
     }
 }

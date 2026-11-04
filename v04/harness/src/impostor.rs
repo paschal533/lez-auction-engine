@@ -2,17 +2,16 @@
 //! program that speaks as whichever actor `(account, Impostor)` it sits at, stands in as a bound
 //! host, or replays a script (see `programs/methods/guest/src/bin/impostor.rs`).
 
+use auction_engine_params::args::EngineParamsArgs;
 use borsh::BorshSerialize;
 use engine_core::{
-    actors::{
-        auction_actor, collateral_actor, config_actor, record_actor, vault_holding, vault_seed,
-    },
+    actors::{auction_actor, collateral_actor, config_actor, record_actor, vault_holding},
     msg::EngineMsg,
 };
-use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence, error::LeeError};
+use lee::{AccountId, Actor, PrivateKey, error::LeeError};
 use lee_core::program::TransactionEvent;
 use mock_host_core::{Params, TAG_PARAMS};
-use token_core::TokenMsg;
+use token_core::{TokenMsg, holding_actor};
 
 use crate::{
     World,
@@ -80,6 +79,46 @@ impl World {
         actor
     }
 
+    /// The impostor at `account`, storing `state` if given (unsigned). An actor can only sit at an
+    /// existing account, so an absent `account` is force-created first; an existing one is kept.
+    pub fn impostor_at(&mut self, account: AccountId, state: Option<Vec<u8>>) -> Actor {
+        if !self.chain.account_exists(account) {
+            self.chain.fund(account, 1);
+        }
+        let actor = self.impostor(account);
+        if let Some(state) = state {
+            self.chain
+                .send(actor, &[actor], &[], &ImpostorMsg::SetState(state))
+                .expect("the impostor stores its state");
+        }
+        actor
+    }
+
+    /// An attacker's own config of the engine whose token program is the impostor: the signer
+    /// `label`'s `Init` (salt [`SALT`]) with `params`, the world's host, oracle and stablecoin.
+    /// Every holding its system ops read is then an impostor actor the attacker scripts
+    /// ([`World::impostor_holding`]), which lets a test answer the engine's reads at will.
+    /// Returns the config actor.
+    pub fn impostor_token_config(&mut self, label: &str, params: EngineParamsArgs) -> Actor {
+        let (key, admin) = self.chain.key(label);
+        if !self.chain.account_exists(admin) {
+            self.chain.fund(admin, 1);
+        }
+        let mut init = self.init_msg_with(params);
+        if let EngineMsg::Init { token, .. } = &mut init {
+            *token = self.chain.program("impostor");
+        }
+        self.send_engine(admin, &[&key], &init)
+            .expect("the attacker's config with an impostor token");
+        config_actor(self.engine, admin, SALT)
+    }
+
+    /// `owner`'s stablecoin holding under the impostor token program,
+    /// `holding_actor(Impostor, owner, stable_def)`.
+    pub fn impostor_holding(&self, owner: AccountId) -> Actor {
+        holding_actor(self.chain.program("impostor"), owner, self.stable_def)
+    }
+
     /// An impostor host stand-in at `label`'s account: mock `Params` with the world's token,
     /// definitions and oracle and redemption price 1 RAY. On `LiquidatePosition` it pings `admin`;
     /// with `admin = None` it pings nobody (a host that never replies).
@@ -97,6 +136,7 @@ impl World {
             min_cr_ray: MIN_CR_RAY,
             engine_actor: None,
             pending: None,
+            is_frozen: false,
         };
         self.impostor_with_state(label, encode(&params))
     }
@@ -109,7 +149,19 @@ impl World {
         admin_key: &PrivateKey,
         host: Actor,
     ) -> Actor {
-        let mut init = self.init_msg();
+        let init = self.init_msg();
+        self.configure_init_with_host(admin, admin_key, host, init)
+    }
+
+    /// [`World::configure_with_host`] with the given `Init` (its host replaced by `host`), e.g.
+    /// one that enables the protocol token.
+    pub fn configure_init_with_host(
+        &mut self,
+        admin: AccountId,
+        admin_key: &PrivateKey,
+        host: Actor,
+        mut init: EngineMsg,
+    ) -> Actor {
         if let EngineMsg::Init { host: bound, .. } = &mut init {
             *bound = host;
         }
@@ -155,42 +207,35 @@ impl World {
         self.impostor_with_state(label, script(&[(auction, encode(&seized))]))
     }
 
-    /// The vault of auction 0 of `(config, position)`.
+    /// The vault's token actor of auction 0 of `(config, position)`.
     pub fn vault_of(&self, config: AccountId, position: AccountId) -> Actor {
         let auction = auction_actor(self.engine, config, position, 0);
         vault_holding(self.engine, self.token, auction.account_id)
     }
 
-    /// The fresh-vault evidence of auction 0 of `(config, position)`, if the vault is absent.
-    fn vault_evidence(&self, config: AccountId, position: AccountId) -> Vec<PublicAccountEvidence> {
-        if self
-            .chain
-            .raw_state(self.vault_of(config, position))
-            .is_some()
-        {
-            return Vec::new();
-        }
-        let auction = auction_actor(self.engine, config, position, 0);
-        vec![PublicAccountEvidence::Pda {
-            program: self.engine,
-            seed: vault_seed(auction.account_id),
-        }]
+    /// The collateral holding of the vault of auction 0 of `(config, position)`.
+    fn vault_collateral_of(&self, config: AccountId, position: AccountId) -> Actor {
+        let vault = self.vault_of(config, position).account_id;
+        self.holding(vault, self.collateral_def)
     }
 
     /// The whale funds the vault of auction 0 of `(config, position)` with `amount` collateral,
     /// so a scripted seizure is really in custody.
     pub fn fund_vault(&mut self, config: AccountId, position: AccountId, amount: u128) {
         let whale = Actor::new(self.whale, self.token);
-        let vault = self.vault_of(config, position);
         let donate = TokenMsg::Transfer {
             definition: self.collateral_def,
-            to: vault.account_id,
+            to: self.vault_of(config, position).account_id,
             amount,
         };
-        let evidence = self.vault_evidence(config, position);
+        let actors = [
+            whale,
+            self.holding(self.whale, self.collateral_def),
+            self.vault_collateral_of(config, position),
+        ];
         let key = self.whale_key.clone();
         self.chain
-            .send_with_evidence(whale, &[whale, vault], &[&key], &evidence, &donate)
+            .send(whale, &actors, &[&key], &donate)
             .expect("the vault is funded");
     }
 
@@ -222,11 +267,10 @@ impl World {
             auction_actor(e, config, p, 0),
             position,
             self.vault_of(config, p),
-            Actor::new(self.keeper, self.token),
+            self.vault_collateral_of(config, p),
+            self.holding(self.keeper, self.collateral_def),
         ];
-        let evidence = self.vault_evidence(config, p);
         let key = self.keeper_key.clone();
-        self.chain
-            .send_with_evidence(keeper_root, &actors, &[&key], &evidence, &msg)
+        self.chain.send(keeper_root, &actors, &[&key], &msg)
     }
 }

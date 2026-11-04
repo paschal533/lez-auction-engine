@@ -2,20 +2,30 @@
 //! message is for follows from the message, its sender and the receiver's address, never from a
 //! caller-supplied account list.
 //!
-//! - `proxy`: root `Init` / `SetCollateral` / `Liquidate` / `ClaimLeftover` at the signer's own engine actor
-//!   `(signer, E)`, forwarded only if the signer signed (Proxy block).
-//! - `admin`: the config, accounting and collateral handlers of `Init` / `SetCollateral`, each
-//!   accepting only the one actor that may send it (Relay block, whole-actor checks).
+//! - `proxy`: root `Init` / `SetEngineParams` / `SetCollateral` / `Liquidate` / `ClaimLeftover` at
+//!   the signer's own engine actor `(signer, E)`, forwarded only if the signer signed (Proxy
+//!   block).
+//! - `admin`: the config, accounting and collateral handlers of `Init` / `SetEngineParams` /
+//!   `SetCollateral` (with the protocol definition, `AssertCapAtMost` and `AssertSystemIdle`),
+//!   each accepting only the one actor that may send it (Relay block, whole-actor checks).
 //! - `read`: the config's oracle read at `Init` (Read block), the `Proceed` sentinels, and the
 //!   routing of every `StateReply` to the actor kind awaiting it.
 //! - `observe`: the collateral actor's Observe block (host and oracle reads, clock assert,
-//!   `Proceed`), run by `SetCollateral` and `Liquidate`.
+//!   `Proceed`), run by `SetCollateral`, root `ObserveFeed`, `Liquidate` and `Bid`.
 //! - `liquidate`: the config's liquidation context, the record's `Bump`, and the reservations.
 //! - `auction`: the auction's `Open`, `Seized` (the quote), vault check and `Finish` sentinel.
 //! - `bid`: root `Bid` at the collateral actor (Observe), the auction's `BidCtx` (quote, token
 //!   moves, chain end) and the accounting's `Settled`.
 //! - `claim`: the auction's `ClaimLeftover`, forwarded by the owner's proxy.
 //! - `settle`: the auction's `SettleEmpty`, forwarded by its config (permissionless root).
+//! - `system`: roots `SettleDebt` / `CheckSolvency` at the config, the accounting's system Read
+//!   block (buffer and reference-oracle reads, `Proceed`) and the config's `Freeze`.
+//! - `surplus`: roots `StartSurplus` / `TakeSurplus` / `CloseSurplus` at the config, the surplus
+//!   auction's `SurplusOpen` / `SurplusTake` / `SurplusClose` (vault read, `Proceed`) and the
+//!   accounting's `SurplusTaken` / `SurplusReturned`.
+//! - `debt`: roots `StartDebt` / `TakeDebt` / `CloseDebt` at the config, the debt auction's
+//!   `DebtOpen` / `DebtTake` / `DebtClose`, the accounting's `DebtTaken` / `DebtClosed` and the
+//!   config's `Mint` (variants 34-42, one [`debt::dispatch`] call).
 //!
 //! Errors are panics with the v0.2.4 text (`engine_core::check::fail`).
 
@@ -28,6 +38,8 @@ mod auction;
 mod bid;
 #[path = "engine/claim.rs"]
 mod claim;
+#[path = "engine/debt.rs"]
+mod debt;
 #[path = "engine/liquidate.rs"]
 mod liquidate;
 #[path = "engine/observe.rs"]
@@ -38,6 +50,10 @@ mod proxy;
 mod read;
 #[path = "engine/settle.rs"]
 mod settle;
+#[path = "engine/surplus.rs"]
+mod surplus;
+#[path = "engine/system.rs"]
+mod system;
 
 use borsh::BorshDeserialize;
 use engine_core::{
@@ -252,5 +268,94 @@ fn handle_message(input: &ReceiveInput) -> Response {
             position,
             nonce,
         } => settle::on_settle_empty(input, config, position, nonce),
+        EngineMsg::SetEngineParams { .. } => admin::on_set_engine_params(input, &message),
+        EngineMsg::ObserveFeed {
+            config,
+            collateral_def,
+            now_ms,
+        } => observe::on_observe_feed(input, config, collateral_def, now_ms),
+        EngineMsg::AssertCapAtMost { global_cap } => {
+            admin::on_assert_cap_at_most(input, global_cap)
+        }
+        EngineMsg::AssertSystemIdle => admin::on_assert_system_idle(input),
+        EngineMsg::SettleDebt { config, amount } => system::on_settle_debt(input, config, amount),
+        EngineMsg::System { op, now_ms, ctx } => system::on_system(input, op, now_ms, *ctx),
+        EngineMsg::StartSurplus {
+            config,
+            nonce,
+            now_ms,
+        } => surplus::on_start(input, config, nonce, now_ms),
+        EngineMsg::TakeSurplus {
+            taker,
+            config,
+            nonce,
+            amount_coin,
+            max_protocol_in,
+            now_ms,
+        } => surplus::on_take_root(
+            input,
+            (config, nonce),
+            &surplus::TakeArgs {
+                taker,
+                amount_coin,
+                max_protocol_in,
+                now_ms,
+            },
+        ),
+        EngineMsg::CloseSurplus {
+            config,
+            nonce,
+            now_ms,
+        } => surplus::on_close_root(input, (config, nonce), now_ms),
+        EngineMsg::SurplusOpen {
+            config,
+            nonce,
+            lot,
+            start_ms,
+            ref_ray,
+        } => surplus::on_open(input, (config, nonce), lot, start_ms, ref_ray),
+        EngineMsg::SurplusTake {
+            taker,
+            amount_coin,
+            max_protocol_in,
+            now_ms,
+            ctx,
+        } => surplus::on_take(
+            input,
+            &surplus::TakeArgs {
+                taker,
+                amount_coin,
+                max_protocol_in,
+                now_ms,
+            },
+            &ctx,
+        ),
+        EngineMsg::SurplusClose { now_ms, ctx } => surplus::on_close(input, now_ms, &ctx),
+        EngineMsg::SurplusTaken {
+            config,
+            nonce,
+            protocol_burned,
+            ended,
+            now_ms,
+        } => surplus::on_taken(input, (config, nonce), protocol_burned, ended, now_ms),
+        EngineMsg::SurplusReturned {
+            config,
+            nonce,
+            amount,
+            now_ms,
+        } => surplus::on_returned(input, (config, nonce), amount, now_ms),
+        message @ (EngineMsg::StartDebt { .. }
+        | EngineMsg::TakeDebt { .. }
+        | EngineMsg::CloseDebt { .. }
+        | EngineMsg::DebtOpen { .. }
+        | EngineMsg::DebtTake { .. }
+        | EngineMsg::DebtClose { .. }
+        | EngineMsg::DebtTaken { .. }
+        | EngineMsg::DebtClosed { .. }
+        | EngineMsg::Mint { .. }) => debt::dispatch(input, message),
+        EngineMsg::CheckSolvency { config, now_ms } => {
+            system::on_check_solvency(input, config, now_ms)
+        }
+        EngineMsg::Freeze => system::on_freeze(input),
     }
 }

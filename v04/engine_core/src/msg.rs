@@ -7,7 +7,10 @@ use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::{AccountId, Actor};
 
-use crate::state::{CollateralState, ObserveCtx};
+use crate::{
+    state::{CollateralState, ObserveCtx},
+    system_state::{SystemCtx, SystemOp},
+};
 
 /// Borsh variant index of [`EngineMsg::Seized`] (ruling R-P1); the mock host encodes the same.
 pub const SEIZED_INDEX: u8 = 5;
@@ -15,7 +18,11 @@ pub const SEIZED_INDEX: u8 = 5;
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum EngineMsg {
     // Root variants (0-4): sent by a transaction, at a proxy `(signer, E)` or at the actor itself.
-    /// 0. Creates the config at the config actor, then `Accounting`.
+    /// 0. Creates the config at the config actor, then `Accounting` and the protocol token's
+    ///    definition `(protocol_def(E, K), T)` with minter `K`, its genesis supply credited to
+    ///    `protocol_genesis.to` (none without a genesis). The config names that definition only
+    ///    while `params.protocol_token_enabled`; `ref_oracle` fills the reference-oracle slot,
+    ///    present iff `params.ref_oracle_enabled`.
     Init {
         salt: u64,
         params: Box<EngineParamsArgs>,
@@ -25,6 +32,8 @@ pub enum EngineMsg {
         oracle: Actor,
         clock: Actor,
         slack_ms: u64,
+        ref_oracle: Option<Actor>,
+        protocol_genesis: Option<ProtocolGenesis>,
     },
     /// 1. Sets (or replaces) a collateral type's parameters, then observes the feed with the new
     ///    admin flag at the clock claim `now_ms` (row 2).
@@ -171,6 +180,188 @@ pub enum EngineMsg {
         position: AccountId,
         nonce: u64,
     },
+    /// 20. Root at the admin's proxy (row 1; v0.2.4 `set_engine_params`): a seeded
+    ///     `Probe { Config }`, then this message unseeded to the config, which validates and writes
+    ///     the parameters, then asks the collateral actor of its recorded type (if any, behind a
+    ///     seeded `Probe { Collateral }`) for `AssertCapAtMost`, and, if the protocol token, the
+    ///     reference oracle or the system parameters change, the accounting for
+    ///     `AssertSystemIdle`. `slack_ms` and the actors fixed at `Init` are not settable.
+    SetEngineParams {
+        salt: u64,
+        params: Box<EngineParamsArgs>,
+        ref_oracle: Option<Actor>,
+    },
+    /// 21. Root at `collateral_actor(E, config, collateral_def)`, permissionless (row 3; v0.2.4
+    ///     `observe_feed`): observes the feed at the clock claim `now_ms` and records the pause
+    ///     clock; a stale feed is recorded, not refused.
+    ObserveFeed {
+        config: AccountId,
+        collateral_def: AccountId,
+        now_ms: u64,
+    },
+    /// 22. Config to collateral actor: the type's cap must not exceed `global_cap`
+    ///     (`TypeCapAboveGlobal`). Sends nothing.
+    AssertCapAtMost { global_cap: u128 },
+    /// 23. Config to accounting: no surplus or debt auction may be live
+    ///     (`ProtocolTokenLocked`). Sends nothing.
+    AssertSystemIdle,
+    /// 24. Root at the config `K = (config, E)`, permissionless (row 9; v0.2.4 `settle_debt`):
+    ///     `K` sends `System { SettleDebt }` to its accounting, which reads the buffer and burns
+    ///     `min(amount, buffer, unbacked - debt_on_auction)` from it.
+    SettleDebt { config: AccountId, amount: u128 },
+    /// 25. Config to its accounting `accounting_actor(E, config)`: run `op` with the config's
+    ///     context at the clock claim `now_ms` (asserted by `K` for every op but `SettleDebt`).
+    ///     The accounting reads the buffer (and the reference oracle), then acts at `Proceed`.
+    System {
+        op: SystemOp,
+        now_ms: u64,
+        ctx: Box<SystemCtx>,
+    },
+    /// 26. Root at the config `K`, permissionless (row 10; v0.2.4 `start_surplus_auction`): `K`
+    ///     asserts the clock claim and sends `System { StartSurplus { nonce } }` to its
+    ///     accounting, which reads the buffer (and the reference oracle), settles, moves the lot
+    ///     into the auction's vault and opens `surplus_actor(E, config, nonce)`.
+    StartSurplus {
+        config: AccountId,
+        nonce: u64,
+        now_ms: u64,
+    },
+    /// 27. Root at `K` (row 11; v0.2.4 `take_surplus`): `taker` pays protocol tokens from its own
+    ///     holding (so it signs) for up to `amount_coin` stablecoin. `K` asserts the clock,
+    ///     probes the auction and sends it `SurplusTake`.
+    TakeSurplus {
+        taker: AccountId,
+        config: AccountId,
+        nonce: u64,
+        amount_coin: u128,
+        max_protocol_in: u128,
+        now_ms: u64,
+    },
+    /// 28. Root at `K`, permissionless (row 12; v0.2.4 `close_surplus_auction`): after the TTL
+    ///     the vault's whole balance returns to the buffer. `K` asserts the clock, probes the
+    ///     auction and sends it `SurplusClose`.
+    CloseSurplus {
+        config: AccountId,
+        nonce: u64,
+        now_ms: u64,
+    },
+    /// 29. Accounting to `surplus_actor(E, config, nonce)` (SURP seed, empty state; a leaf):
+    ///     creates the live auction.
+    SurplusOpen {
+        config: AccountId,
+        nonce: u64,
+        lot: u128,
+        start_ms: u64,
+        ref_ray: u128,
+    },
+    /// 30. Config to its surplus auction: a take with the config's context.
+    SurplusTake {
+        taker: AccountId,
+        amount_coin: u128,
+        max_protocol_in: u128,
+        now_ms: u64,
+        ctx: Box<SystemCtx>,
+    },
+    /// 31. Config to its surplus auction: a close with the config's context.
+    SurplusClose { now_ms: u64, ctx: Box<SystemCtx> },
+    /// 32. Surplus auction to its accounting: `protocol_burned` burned; `ended` if the lot is
+    ///     gone.
+    SurplusTaken {
+        config: AccountId,
+        nonce: u64,
+        protocol_burned: u128,
+        ended: bool,
+        now_ms: u64,
+    },
+    /// 33. Surplus auction to its accounting: closed, `amount` returned to the buffer.
+    SurplusReturned {
+        config: AccountId,
+        nonce: u64,
+        amount: u128,
+        now_ms: u64,
+    },
+    /// 34. Root at `K`, permissionless (row 13; v0.2.4 `start_debt_auction`): `K` asserts the
+    ///     clock and sends `System { StartDebt { nonce } }`; the accounting reads the buffer (and
+    ///     the reference oracle), settles, reserves the lot and opens `debt_actor(E, K, nonce)`.
+    StartDebt {
+        config: AccountId,
+        nonce: u64,
+        now_ms: u64,
+    },
+    /// 35. Root at `K` (row 14; v0.2.4 `take_debt`): `taker` burns up to `amount_coin` of its own
+    ///     stablecoin (so it signs) for at least `min_protocol_out` freshly minted protocol tokens.
+    TakeDebt {
+        taker: AccountId,
+        config: AccountId,
+        nonce: u64,
+        amount_coin: u128,
+        min_protocol_out: u128,
+        now_ms: u64,
+    },
+    /// 36. Root at `K`, permissionless (row 15; v0.2.4 `close_debt_auction`): after the TTL the
+    ///     untaken lot's reservation is released.
+    CloseDebt {
+        config: AccountId,
+        nonce: u64,
+        now_ms: u64,
+    },
+    /// 37. Accounting to `debt_actor(E, config, nonce)` (DEBT seed, empty state; a leaf).
+    DebtOpen {
+        config: AccountId,
+        nonce: u64,
+        lot: u128,
+        start_amount: u128,
+        start_ms: u64,
+    },
+    /// 38. Config to its debt auction: a take with the config's context.
+    DebtTake {
+        taker: AccountId,
+        amount_coin: u128,
+        min_protocol_out: u128,
+        now_ms: u64,
+        ctx: Box<SystemCtx>,
+    },
+    /// 39. Config to its debt auction: a close with the config's context.
+    DebtClose { now_ms: u64, ctx: Box<SystemCtx> },
+    /// 40. Debt auction to its accounting: `filled` burned, `minted` minted; `ended` if the lot
+    ///     is gone.
+    DebtTaken {
+        config: AccountId,
+        nonce: u64,
+        filled: u128,
+        minted: u128,
+        ended: bool,
+        now_ms: u64,
+    },
+    /// 41. Debt auction to its accounting: closed, `lot_left` released.
+    DebtClosed {
+        config: AccountId,
+        nonce: u64,
+        lot_left: u128,
+        now_ms: u64,
+    },
+    /// 42. Debt auction `nonce` to its config: mint `amount` to `to`. `K` accepts it only from
+    ///     `debt_actor(E, K, nonce)` and sends `MintTo` to its protocol definition (minter `K`).
+    Mint {
+        nonce: u64,
+        to: AccountId,
+        amount: u128,
+    },
+    /// 43. Root at `K`, permissionless (row 16; v0.2.4 `check_solvency`): `K` asserts the clock
+    ///     claim and sends `System { CheckSolvency }`; the accounting reads the buffer (and the
+    ///     reference oracle), settles what it can, then refuses while a debt auction is live
+    ///     (`RecoveryInProgress`) or, on a `Freeze` decision, sends [`EngineMsg::Freeze`].
+    CheckSolvency { config: AccountId, now_ms: u64 },
+    /// 44. Accounting to its config `K`: freeze new debt at the host. `K` accepts it only from
+    ///     `accounting_actor(E, K)` and sends `EngineFreezeNewDebt` to its bound host.
+    Freeze,
+}
+
+/// The protocol token's genesis at `Init`: `supply` credited to `to`'s holding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ProtocolGenesis {
+    pub to: AccountId,
+    pub supply: u128,
 }
 
 /// What a [`EngineMsg::Probe`] expects at its receiver.
@@ -182,6 +373,10 @@ pub enum ProbeKind {
     Collateral,
     /// An auction; otherwise `WrongAccount("auction")` (v0.2.4 `load_auction`).
     Auction,
+    /// A surplus auction; otherwise `WrongAccount("surplus_auction")` (v0.2.4 `load_surplus`).
+    Surplus,
+    /// A debt auction; otherwise `WrongAccount("debt_auction")` (v0.2.4 `load_debt`).
+    Debt,
 }
 
 /// The clock program's message set (`clock_core::Message` at LEZ v0.4.0-rc1), mirrored so the
@@ -204,210 +399,5 @@ pub enum ClockMsg {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::state::fixtures::id;
-    use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
-
-    #[test]
-    fn root_variant_indices_are_fixed() {
-        let params = Box::new(EngineParamsArgs::defaults_for_tests());
-        let roots = [
-            EngineMsg::Init {
-                salt: 1,
-                params,
-                host: Actor::new(id(1), id(2)),
-                token: id(3),
-                stable_def: id(4),
-                oracle: Actor::new(id(5), id(6)),
-                clock: Actor::new(id(7), id(8)),
-                slack_ms: 9,
-            },
-            EngineMsg::SetCollateral {
-                salt: 1,
-                collateral_def: id(1),
-                args: CollateralArgs::defaults_for_tests(),
-                now_ms: 2,
-            },
-            EngineMsg::Liquidate {
-                config: id(1),
-                collateral_def: id(2),
-                position: id(3),
-                nonce: 5,
-                now_ms: 4,
-            },
-            EngineMsg::Bid {
-                bidder: id(9),
-                config: id(1),
-                collateral_def: id(2),
-                position: id(3),
-                nonce: 4,
-                max_debt_in: 5,
-                min_collateral_out: 6,
-                now_ms: 7,
-            },
-            EngineMsg::ClaimLeftover {
-                config: id(1),
-                position: id(2),
-                nonce: 3,
-            },
-        ];
-        assert_indices(&roots, 0);
-    }
-
-    /// Every message's first byte is its variant index, counted from `first`.
-    fn assert_indices<T: BorshSerialize + core::fmt::Debug>(messages: &[T], first: usize) {
-        for (index, message) in (first..).zip(messages) {
-            let bytes = borsh::to_vec(message).expect("encodes");
-            assert_eq!(
-                usize::from(*bytes.first().expect("non-empty")),
-                index,
-                "{message:?}"
-            );
-        }
-    }
-
-    /// The internal variants 5..=19 are wire format too (appended only): pinned one by one.
-    #[test]
-    fn internal_variant_indices_are_fixed() {
-        use crate::state::fixtures::{actor, coll};
-        let (position, nonce) = (id(1), 2);
-        let internals = [
-            EngineMsg::Seized {
-                position,
-                owner: id(2),
-                collateral: 3,
-                normalized_debt: 4,
-                nominal_debt: 5,
-            },
-            EngineMsg::LiqCtx {
-                position,
-                nonce,
-                keeper: id(3),
-                now_ms: 4,
-                price_ray: 5,
-                collateral: Box::new(coll()),
-            },
-            EngineMsg::Bump { position, nonce },
-            EngineMsg::Open {
-                position,
-                nonce,
-                keeper: id(3),
-                host: actor(4, 5),
-                token: id(6),
-                stable_def: id(7),
-                now_ms: 8,
-                price_ray: 9,
-                collateral: Box::new(coll()),
-                global_cap: 10,
-                global_reserved: 11,
-            },
-            EngineMsg::Reserve {
-                position,
-                nonce,
-                amount: 3,
-            },
-            EngineMsg::Release {
-                position,
-                nonce,
-                amount: 3,
-            },
-            EngineMsg::Settled {
-                config: id(3),
-                position,
-                nonce,
-                debt_raised: 4,
-                penalty_raised: 5,
-                shortfall: 6,
-                release: 7,
-                leftover: 8,
-            },
-            EngineMsg::Finish,
-            EngineMsg::BidCtx {
-                bidder: id(3),
-                position,
-                nonce,
-                max_debt_in: 4,
-                min_collateral_out: 5,
-                price_ray: 6,
-                now_ms: 7,
-                paused_total_ms: 8,
-                min_bid: 9,
-                chost: 10,
-            },
-            EngineMsg::Proceed,
-            EngineMsg::Configure {
-                collateral_def: id(3),
-                args: CollateralArgs::defaults_for_tests(),
-                ctx: ObserveCtx {
-                    host: actor(4, 5),
-                    oracle: actor(6, 7),
-                    clock: actor(8, 9),
-                    slack_ms: 10,
-                },
-            },
-            EngineMsg::Probe {
-                kind: ProbeKind::Config,
-            },
-            EngineMsg::InitReads,
-            EngineMsg::Observe { now_ms: 3 },
-            EngineMsg::SettleEmpty {
-                config: id(3),
-                position,
-                nonce,
-            },
-        ];
-        assert_eq!(internals.len(), 15, "variants 5..=19");
-        assert_indices(&internals, usize::from(SEIZED_INDEX));
-    }
-
-    #[test]
-    fn probe_kind_indices_are_fixed() {
-        assert_indices(
-            &[ProbeKind::Config, ProbeKind::Collateral, ProbeKind::Auction],
-            0,
-        );
-    }
-
-    #[test]
-    fn clock_assert_matches_the_clock_program() {
-        let ours = ClockMsg::AssertTimestamp {
-            at_least: 5,
-            at_most: 9,
-        };
-        let theirs = clock_core::Message::AssertTimestamp {
-            at_least: 5,
-            at_most: 9,
-        };
-        assert_eq!(
-            borsh::to_vec(&ours).expect("encodes"),
-            borsh::to_vec(&theirs).expect("encodes")
-        );
-    }
-
-    #[test]
-    fn seized_index_matches_the_host_encoding() {
-        let (position, owner) = (id(1), id(2));
-        let ours = EngineMsg::Seized {
-            position,
-            owner,
-            collateral: 100,
-            normalized_debt: 60,
-            nominal_debt: 61,
-        };
-        let mut host = vec![mock_host_core::SEIZED_INDEX];
-        host.extend(
-            borsh::to_vec(&mock_host_core::Seized {
-                position,
-                owner,
-                collateral: 100,
-                normalized_debt: 60,
-                nominal_debt: 61,
-            })
-            .expect("encodes"),
-        );
-        assert_eq!(SEIZED_INDEX, mock_host_core::SEIZED_INDEX);
-        assert_eq!(borsh::to_vec(&ours).expect("encodes"), host);
-        assert_eq!(EngineMsg::try_from_slice(&host).expect("decodes"), ours);
-    }
-}
+#[path = "msg_tests.rs"]
+mod tests;

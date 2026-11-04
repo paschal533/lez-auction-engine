@@ -18,6 +18,7 @@ use lee_core::account::{AccountId, Actor};
 pub use crate::scratch::{
     AuctionScratch, BidRequestRec, ObserveThen, OracleReadingRec, PendingObserve, QuoteCtx,
 };
+use crate::{msg::ProtocolGenesis, system_state::SystemPending};
 
 pub const TAG_CONFIG: [u8; 8] = *b"AECONFIG";
 pub const TAG_COLL: [u8; 8] = *b"AECOLLAT";
@@ -46,6 +47,7 @@ macro_rules! tagged_state {
         }
     };
 }
+pub(crate) use tagged_state;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SchedulePointRec {
@@ -161,6 +163,13 @@ pub struct ConfigState {
     /// Set by the handler that sends the `ReadState`, cleared by the reply, and asserted `None`
     /// by the `Proceed` sentinel, so it is `None` in every committed state.
     pub pending_read: Option<Actor>,
+    /// `Init` scratch: the protocol token's genesis, from `Init` (which sends nothing) to
+    /// `InitReads` (which creates the definition and clears it), so `None` in every committed
+    /// state.
+    pub pending_genesis: Option<ProtocolGenesis>,
+    /// The config's one collateral type (ruling R-F3), recorded by its first `SetCollateral`;
+    /// `SetEngineParams` checks this type's cap against a new global cap.
+    pub collateral_def: Option<AccountId>,
 }
 tagged_state!(ConfigState, TAG_CONFIG);
 
@@ -282,6 +291,9 @@ pub struct AccountingState {
     pub total_surplus_returned: u128,
     /// When the last debt auction ended (close or final take), ms; 0 before the first one (ADR-039).
     pub last_debt_end_ms: u64,
+    /// System Read-block scratch (row 9 on): set by `System`, cleared by `Proceed`, so `None` in
+    /// every committed state.
+    pub pending: Option<SystemPending>,
 }
 tagged_state!(AccountingState, TAG_ACCOUNTING);
 
@@ -312,6 +324,7 @@ impl AccountingState {
             total_surplus_lots_out: 0,
             total_surplus_returned: 0,
             last_debt_end_ms: 0,
+            pending: None,
         }
     }
 
@@ -528,6 +541,8 @@ pub(crate) mod fixtures {
             bad_debt_freeze_threshold: 600,
             system: sys(),
             pending_read: None,
+            pending_genesis: None,
+            collateral_def: None,
         }
     }
 

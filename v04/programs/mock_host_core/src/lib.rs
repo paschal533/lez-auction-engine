@@ -1,6 +1,7 @@
 //! Mock CDP host types (design note §5, option B): the minimal stand-in for the stablecoin until
 //! upstream ports it to LEZ 0.4. Its engine-facing messages (`SetLiquidationEngine`,
-//! `LiquidatePosition`, the `Seized` report) are the interface the upstream port must provide.
+//! `LiquidatePosition`, the `Seized` report, `EngineFreezeNewDebt`) are the interface the
+//! upstream port must provide.
 //! The handler lives in the guest (`programs/methods/guest/src/bin/mock_host.rs`).
 //!
 //! Actors, with `H` the host program and `T` the token program:
@@ -32,7 +33,8 @@ pub const POSITION_SEED: &str = "POSITION";
 pub const VAULT_SEED: &str = "VAULT";
 
 /// What the host accepts. Variant order is part of the wire format: variants 0-5 are the
-/// interface; the variants after them are the owner proxy and host-internal messages.
+/// interface; 6-10 are the owner proxy and host-internal messages; variants are only appended
+/// (11, `EngineFreezeNewDebt`, is interface again).
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum HostMsg {
     /// At `P` (empty state); `P` signs and `admin` must be `P` itself.
@@ -82,6 +84,10 @@ pub enum HostMsg {
     Seize(SeizeOrder),
     /// `P` → `P`, the last message of `LiquidatePosition` (Sentinel): the oracle read completed.
     Finish,
+    /// 11. At `P`, only from exactly the bound engine actor (the engine's `check_solvency`
+    ///     freeze, ADR-017): sets [`Params::is_frozen`]; idempotent; sends nothing. There is no
+    ///     unfreeze message: unfreezing is the real host's freeze authority's.
+    EngineFreezeNewDebt,
 }
 
 /// What `P` tells a position to seize: where to, whom to report to, and the reading to judge by.
@@ -116,6 +122,8 @@ pub struct Params {
     pub min_cr_ray: u128,
     pub engine_actor: Option<Actor>,
     pub pending: Option<PendingLiquidation>,
+    /// Set by the engine's `EngineFreezeNewDebt`: `GenerateDebt` is refused (`host: Frozen`).
+    pub is_frozen: bool,
 }
 
 /// One owner's position. `params` is the `P` that created it, the only actor it obeys.
@@ -280,6 +288,7 @@ mod tests {
             min_cr_ray: RAY,
             engine_actor: None,
             pending: None,
+            is_frozen: false,
         };
         let position = Position {
             tag: TAG_POSITION,
@@ -296,6 +305,16 @@ mod tests {
         assert_eq!(Params::decode(&position_bytes), None);
         assert_eq!(Position::decode(&params_bytes), None);
         assert_eq!(Params::decode(&[]), None);
+    }
+
+    /// Appended after `Finish` (index 10): the engine's freeze is index 11.
+    #[test]
+    fn engine_freeze_index_is_fixed() {
+        assert_eq!(borsh::to_vec(&HostMsg::Finish).expect("encodes"), [10_u8]);
+        assert_eq!(
+            borsh::to_vec(&HostMsg::EngineFreezeNewDebt).expect("encodes"),
+            [11_u8]
+        );
     }
 
     #[test]

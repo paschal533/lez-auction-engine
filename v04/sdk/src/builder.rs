@@ -1,25 +1,31 @@
 //! Plans: the root actor, declared actors, signers, admission evidence and message bytes of one
 //! engine instruction, built from `engine_core::actors` and the deployment read from state.
 //!
-//! Evidence rule (settlement admits signers ∪ accounts that exist ∪ accounts proven public by
-//! evidence): a plan attaches `PublicAccountEvidence::Pda { program: E, seed }` only for a token
-//! holding the engine creates at one of its PDAs while that account is fresh (ruling R-5b): the
-//! auction vault on `Liquidate` (always fresh: the auction number is new) and the surplus buffer
-//! on a `Bid` while the buffer account does not exist yet (read from the `StateSource` the caller
-//! passes to [`plan_bid`]). Engine actors written by their own seed-granted messages need none
-//! (S9), nor do signers' own holdings (R-3a). No plan in this slice touches a fresh non-signer
-//! plain account, so none carries `PublicAccountEvidence::Key`.
+//! Token actors (ADR-062): a plan declares the owner token actors `(owner, T)` it debits through
+//! and every per-definition holding `holding_actor(T, owner, definition)` it debits or credits.
+//!
+//! Evidence rule (settlement admits signers ∪ accounts that exist ∪ accounts a message's PDA seed
+//! grants ∪ accounts proven public by evidence): no plan in this module carries evidence (the
+//! system plans in [`crate::system`] carry a `Pda` for an absent buffer holding and, on the timed
+//! ones, the caller-supplied evidence for an absent reference-oracle account). A fresh
+//! holding is a token PDA that the token program's `Credit` grants with its `HOLDING` seed; the
+//! engine's vault and buffer token actors are granted by the engine's own seeds on the messages
+//! that debit them; engine actors written by their own seed-granted messages need none (S9). No
+//! plan here touches a fresh non-signer plain account, so none here carries
+//! `PublicAccountEvidence::Key`.
 
 use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use engine_core::{
     actors::{
-        accounting_actor, auction_actor, buffer_holding, buffer_seed, collateral_actor,
-        config_actor, record_actor, vault_holding, vault_seed,
+        accounting_actor, auction_actor, buffer_holding, collateral_actor, config_actor,
+        debt_actor, protocol_def, record_actor, surplus_actor, surplus_vault_holding,
+        vault_holding,
     },
-    msg::EngineMsg,
+    msg::{EngineMsg, ProtocolGenesis},
     state::ConfigState,
 };
 use lee::{AccountId, Actor, PublicAccountEvidence};
+use token_core::holding_actor;
 
 use crate::{SdkError, simulate::StateSource};
 
@@ -39,7 +45,7 @@ pub struct Plan {
 }
 
 impl Plan {
-    fn new(
+    pub(crate) fn new(
         root: Actor,
         actors: Vec<Actor>,
         signers: Vec<AccountId>,
@@ -75,6 +81,17 @@ pub struct Deployment {
     pub clock: Actor,
     /// `accounting_actor(E, config)`.
     pub accounting: Actor,
+    /// The protocol token's definition `protocol_def(E, config)` (the config names it only while
+    /// the protocol token is enabled).
+    pub protocol_def: AccountId,
+    /// The reference oracle the config names, if any.
+    pub ref_oracle: Option<Actor>,
+    /// Admission evidence for the reference oracle's account, attached by the timed system plans
+    /// while that account is absent (it then reads as unpublished: the admin price). An oracle
+    /// sits at a key account, so this is `Key(public key)`, which the chain does not record: the
+    /// caller supplies it ([`Deployment::with_ref_oracle_evidence`]). `None` after
+    /// [`Deployment::load`].
+    pub ref_oracle_evidence: Option<PublicAccountEvidence>,
 }
 
 impl Deployment {
@@ -110,7 +127,20 @@ impl Deployment {
             oracle: state.oracle,
             clock: state.clock,
             accounting: accounting_actor(engine, config),
+            protocol_def: protocol_def(engine, config),
+            ref_oracle: state.protocol_token_oracle,
+            ref_oracle_evidence: None,
         })
+    }
+
+    /// This deployment with `evidence` for its reference oracle's account (see
+    /// [`Deployment::ref_oracle_evidence`]).
+    #[must_use]
+    pub fn with_ref_oracle_evidence(self, evidence: PublicAccountEvidence) -> Self {
+        Self {
+            ref_oracle_evidence: Some(evidence),
+            ..self
+        }
     }
 
     /// The collateral actor of `collateral_def`.
@@ -125,23 +155,51 @@ impl Deployment {
         auction_actor(self.engine, self.config.account_id, position, nonce)
     }
 
-    /// The vault holding of auction `nonce` of `position`.
+    /// The vault's token actor of auction `nonce` of `position` (its collateral is
+    /// `holding_of(vault.account_id, collateral_def)`).
     #[must_use]
     pub fn vault(&self, position: AccountId, nonce: u64) -> Actor {
         let auction = self.auction(position, nonce).account_id;
         vault_holding(self.engine, self.token, auction)
     }
 
-    /// The surplus buffer holding.
+    /// The surplus buffer's token actor (its stablecoin is
+    /// `holding_of(buffer.account_id, stable_def)`).
     #[must_use]
     pub fn buffer(&self) -> Actor {
         buffer_holding(self.engine, self.token, self.config.account_id)
     }
 
-    /// `account`'s own token holding `(account, T)`.
+    /// The surplus auction `surplus_actor(E, config, nonce)`.
+    #[must_use]
+    pub fn surplus(&self, nonce: u64) -> Actor {
+        surplus_actor(self.engine, self.config.account_id, nonce)
+    }
+
+    /// The surplus auction `nonce`'s vault token actor (its stablecoin is
+    /// `holding_of(surplus_vault.account_id, stable_def)`).
+    #[must_use]
+    pub fn surplus_vault(&self, nonce: u64) -> Actor {
+        surplus_vault_holding(self.engine, self.token, self.surplus(nonce).account_id)
+    }
+
+    /// The debt auction `debt_actor(E, config, nonce)`.
+    #[must_use]
+    pub fn debt(&self, nonce: u64) -> Actor {
+        debt_actor(self.engine, self.config.account_id, nonce)
+    }
+
+    /// `account`'s own token actor `(account, T)`, the stateless proxy its debits go through.
     #[must_use]
     pub fn holding(&self, account: AccountId) -> Actor {
         Actor::new(account, self.token)
+    }
+
+    /// `owner`'s holding of `definition`, `holding_actor(T, owner, definition)`: where the
+    /// balance lives (ADR-062).
+    #[must_use]
+    pub fn holding_of(&self, owner: AccountId, definition: AccountId) -> Actor {
+        holding_actor(self.token, owner, definition)
     }
 
     /// The signer's proxy `(signer, E)`.
@@ -162,6 +220,10 @@ pub struct InitArgs {
     pub oracle: Actor,
     pub clock: Actor,
     pub slack_ms: u64,
+    /// The reference oracle, present iff `params.ref_oracle_enabled`.
+    pub ref_oracle: Option<Actor>,
+    /// The protocol token's genesis supply and recipient, if any.
+    pub protocol_genesis: Option<ProtocolGenesis>,
 }
 
 /// The keeper's `Liquidate`.
@@ -190,7 +252,8 @@ pub struct BidArgs {
 }
 
 /// `Init` at the admin's proxy `(admin, E)`, signed by the admin: proxy, config, oracle,
-/// accounting.
+/// accounting, the protocol definition `(protocol_def(E, K), T)` and, with a genesis, its
+/// recipient's holding (a fresh holding is granted by the token's `Credit`, so no evidence).
 ///
 /// # Errors
 /// [`SdkError::Encode`] if the message does not encode.
@@ -198,7 +261,18 @@ pub fn plan_init(engine: AccountId, admin: AccountId, args: InitArgs) -> Result<
     let config = config_actor(engine, admin, args.salt);
     let accounting = accounting_actor(engine, config.account_id);
     let proxy = Actor::new(admin, engine);
-    let actors = vec![proxy, config, args.oracle, accounting];
+    let definition = protocol_def(engine, config.account_id);
+    let mut actors = vec![
+        proxy,
+        config,
+        args.oracle,
+        accounting,
+        Actor::new(definition, args.token),
+    ];
+    actors.extend(
+        args.protocol_genesis
+            .map(|genesis| holding_actor(args.token, genesis.to, definition)),
+    );
     let msg = EngineMsg::Init {
         salt: args.salt,
         params: Box::new(args.params),
@@ -208,6 +282,8 @@ pub fn plan_init(engine: AccountId, admin: AccountId, args: InitArgs) -> Result<
         oracle: args.oracle,
         clock: args.clock,
         slack_ms: args.slack_ms,
+        ref_oracle: args.ref_oracle,
+        protocol_genesis: args.protocol_genesis,
     };
     Plan::new(proxy, actors, vec![admin], Vec::new(), &msg)
 }
@@ -243,8 +319,9 @@ pub fn plan_set_collateral(
 
 /// `Liquidate` at the keeper's proxy, signed by the keeper. `host_actors` are the actors the
 /// bound host touches when it seizes the position (host-specific; for the mock host: the
-/// position `(position, H)` and the owner's host vault holding). Evidence: the auction vault,
-/// a fresh engine PDA the token `Credit` creates (R-5b).
+/// position `(position, H)`, the owner's host vault token actor and that vault's collateral
+/// holding). The plan adds the auction vault's token actor (the keeper reward's debit) and
+/// collateral holding, and the keeper's collateral holding.
 ///
 /// # Errors
 /// [`SdkError::Encode`] if the message does not encode.
@@ -266,11 +343,12 @@ pub fn plan_liquidate(
         auction,
     ];
     actors.extend_from_slice(host_actors);
-    actors.extend([d.vault(args.position, args.nonce), d.holding(args.keeper)]);
-    let evidence = vec![PublicAccountEvidence::Pda {
-        program: d.engine,
-        seed: vault_seed(auction.account_id),
-    }];
+    let vault = d.vault(args.position, args.nonce);
+    actors.extend([
+        vault,
+        d.holding_of(vault.account_id, args.collateral_def),
+        d.holding_of(args.keeper, args.collateral_def),
+    ]);
     let msg = EngineMsg::Liquidate {
         config: d.config.account_id,
         collateral_def: args.collateral_def,
@@ -278,23 +356,20 @@ pub fn plan_liquidate(
         nonce: args.nonce,
         now_ms: args.now_ms,
     };
-    Plan::new(proxy, actors, vec![args.keeper], evidence, &msg)
+    Plan::new(proxy, actors, vec![args.keeper], Vec::new(), &msg)
 }
 
 /// `Bid` at the collateral actor, signed by the bidder: collateral actor, host params, oracle,
-/// clock, auction, the bidder's holding (pays the charge, receives the collateral), the
-/// stablecoin definition (burn), buffer, auction vault, accounting, config. `source` says whether
-/// the buffer exists; while it does not, the plan carries its PDA evidence (R-5b).
+/// clock, auction, the bidder's token actor (pays the charge) with its stablecoin and collateral
+/// holdings, the stablecoin definition (burn), the buffer's stablecoin holding, the auction
+/// vault's token actor and collateral holding, accounting, config.
 ///
 /// # Errors
 /// [`SdkError::Encode`] if the message does not encode.
-pub fn plan_bid(
-    source: &impl StateSource,
-    d: &Deployment,
-    args: &BidArgs,
-) -> Result<Plan, SdkError> {
+pub fn plan_bid(d: &Deployment, args: &BidArgs) -> Result<Plan, SdkError> {
     let root = d.collateral(args.collateral_def);
-    let buffer = d.buffer();
+    let (cdef, sdef) = (args.collateral_def, d.stable_def);
+    let vault = d.vault(args.position, args.nonce);
     let actors = vec![
         root,
         d.host,
@@ -302,20 +377,15 @@ pub fn plan_bid(
         d.clock,
         d.auction(args.position, args.nonce),
         d.holding(args.bidder),
-        d.holding(d.stable_def),
-        buffer,
-        d.vault(args.position, args.nonce),
+        d.holding_of(args.bidder, sdef),
+        d.holding_of(args.bidder, cdef),
+        d.holding(sdef),
+        d.holding_of(d.buffer().account_id, sdef),
+        vault,
+        d.holding_of(vault.account_id, cdef),
         d.accounting,
         d.config,
     ];
-    let evidence = if source.account_exists(buffer.account_id) {
-        Vec::new()
-    } else {
-        vec![PublicAccountEvidence::Pda {
-            program: d.engine,
-            seed: buffer_seed(d.config.account_id),
-        }]
-    };
     let msg = EngineMsg::Bid {
         bidder: args.bidder,
         config: d.config.account_id,
@@ -326,26 +396,29 @@ pub fn plan_bid(
         min_collateral_out: args.min_collateral_out,
         now_ms: args.now_ms,
     };
-    Plan::new(root, actors, vec![args.bidder], evidence, &msg)
+    Plan::new(root, actors, vec![args.bidder], Vec::new(), &msg)
 }
 
-/// `ClaimLeftover` at the owner's proxy, signed by the owner: proxy, auction, its vault, the
-/// owner's holding (a signer's own holding: no evidence, R-3a).
+/// `ClaimLeftover` at the owner's proxy, signed by the owner: proxy, auction, its vault's token
+/// actor and collateral holding, the owner's collateral holding.
 ///
 /// # Errors
 /// [`SdkError::Encode`] if the message does not encode.
 pub fn plan_claim_leftover(
     d: &Deployment,
+    collateral_def: AccountId,
     owner: AccountId,
     position: AccountId,
     nonce: u64,
 ) -> Result<Plan, SdkError> {
     let proxy = d.proxy(owner);
+    let vault = d.vault(position, nonce);
     let actors = vec![
         proxy,
         d.auction(position, nonce),
-        d.vault(position, nonce),
-        d.holding(owner),
+        vault,
+        d.holding_of(vault.account_id, collateral_def),
+        d.holding_of(owner, collateral_def),
     ];
     let msg = EngineMsg::ClaimLeftover {
         config: d.config.account_id,

@@ -7,16 +7,17 @@
 use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use engine_core::{
     actors::{
-        accounting_actor, auction_actor, collateral_actor, config_actor, record_actor,
-        vault_holding, vault_seed as engine_vault_seed,
+        accounting_actor, auction_actor, collateral_actor, config_actor, protocol_def,
+        record_actor, vault_holding,
     },
-    msg::EngineMsg,
+    msg::{EngineMsg, ProtocolGenesis},
+    state::ConfigState,
 };
-use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence, error::LeeError};
+use lee::{AccountId, Actor, PrivateKey, error::LeeError};
 use lee_core::program::TransactionEvent;
-use mock_host_core::{HostMsg, is_unsafe, position_id, vault_id, vault_seed};
+use mock_host_core::{HostMsg, is_unsafe, position_id, vault_id};
 use oracle_core::OracleMsg;
-use token_core::{Holding, TokenMsg};
+use token_core::{Holding, TokenMsg, holding_actor};
 
 use crate::Chain;
 
@@ -91,11 +92,15 @@ pub struct World {
     pub whale_key: PrivateKey,
     /// Owners of the positions opened so far, in order.
     pub owners: Vec<Owner>,
-    /// The keeper that liquidates (a signer; its reward goes to its own holding `(keeper, T)`).
+    /// The keeper that liquidates (a signer; its reward goes to its own collateral holding).
     pub keeper: AccountId,
     pub keeper_key: PrivateKey,
     /// The chain time the world last set, ms.
     pub now_ms: u64,
+    /// The protocol token's genesis supply of the world's config: recorded by
+    /// [`World::send_engine`] when the config's `Init` applies, 0 before (and without a genesis).
+    /// `invariants::check` asserts the definition's supply against it.
+    pub protocol_genesis: u128,
 }
 
 impl World {
@@ -155,6 +160,7 @@ impl World {
             keeper,
             keeper_key,
             now_ms: 0,
+            protocol_genesis: 0,
             chain,
         };
 
@@ -164,7 +170,7 @@ impl World {
             initial_to: Some(whale),
             initial_supply: WHALE_COLLATERAL,
         };
-        let whale_holding = Actor::new(whale, token);
+        let whale_holding = w.holding(whale, collateral_def);
         w.chain
             .send(cdef, &[cdef, whale_holding], &[&cdef_key], &new_collateral)
             .expect("the collateral definition is created");
@@ -237,8 +243,19 @@ impl World {
         self.init_msg_with(Self::engine_params())
     }
 
-    /// `Init` for salt [`SALT`] with `params`.
+    /// `Init` for salt [`SALT`] with `params`, no reference oracle and no protocol genesis.
     pub fn init_msg_with(&self, params: EngineParamsArgs) -> EngineMsg {
+        self.init_msg_full(params, None, None)
+    }
+
+    /// `Init` for salt [`SALT`] with `params`, the reference oracle `ref_oracle` and the protocol
+    /// token's genesis `genesis`.
+    pub fn init_msg_full(
+        &self,
+        params: EngineParamsArgs,
+        ref_oracle: Option<Actor>,
+        genesis: Option<ProtocolGenesis>,
+    ) -> EngineMsg {
         EngineMsg::Init {
             salt: SALT,
             params: Box::new(params),
@@ -248,7 +265,40 @@ impl World {
             oracle: self.oracle,
             clock: self.chain.clock(),
             slack_ms: SLACK_MS,
+            ref_oracle,
+            protocol_genesis: genesis,
         }
+    }
+
+    /// `SetEngineParams` for salt [`SALT`] with `params` and the reference oracle `ref_oracle`.
+    pub fn set_engine_params_msg(
+        &self,
+        params: EngineParamsArgs,
+        ref_oracle: Option<Actor>,
+    ) -> EngineMsg {
+        EngineMsg::SetEngineParams {
+            salt: SALT,
+            params: Box::new(params),
+            ref_oracle,
+        }
+    }
+
+    /// The protocol token's definition account of the world's config, `protocol_def(E, K)`.
+    pub fn protocol_def(&self) -> AccountId {
+        protocol_def(self.engine, self.config.account_id)
+    }
+
+    /// The permissionless root `ObserveFeed` of the world's collateral at the collateral actor,
+    /// claiming `now_ms`: collateral actor, host params, oracle, clock; no signer.
+    pub fn observe_feed(&mut self, now_ms: u64) -> Result<Vec<TransactionEvent>, LeeError> {
+        let msg = EngineMsg::ObserveFeed {
+            config: self.config.account_id,
+            collateral_def: self.collateral_def,
+            now_ms,
+        };
+        let root = self.collateral;
+        let actors = [root, self.params, self.oracle, self.chain.clock()];
+        self.chain.send(root, &actors, &[], &msg)
     }
 
     /// `SetCollateral` of the world's collateral definition for salt [`SALT`], claiming the
@@ -268,10 +318,44 @@ impl World {
     /// For a message that is not sent through the proxy.
     pub fn proxy_actors(&self, proxy: AccountId, msg: &EngineMsg) -> Vec<Actor> {
         let at = Actor::new(proxy, self.engine);
-        if let EngineMsg::Init { salt, oracle, .. } = msg {
+        if let EngineMsg::Init {
+            salt,
+            oracle,
+            token,
+            protocol_genesis,
+            ..
+        } = msg
+        {
             let config = config_actor(self.engine, proxy, *salt);
             let accounting = accounting_actor(self.engine, config.account_id);
-            return vec![at, config, *oracle, accounting];
+            // The protocol definition, and the genesis holding its supply is credited to.
+            let definition = protocol_def(self.engine, config.account_id);
+            let mut actors = vec![
+                at,
+                config,
+                *oracle,
+                accounting,
+                Actor::new(definition, *token),
+            ];
+            actors.extend(
+                protocol_genesis.map(|genesis| holding_actor(*token, genesis.to, definition)),
+            );
+            return actors;
+        }
+        if let EngineMsg::SetEngineParams { salt, .. } = msg {
+            // The accounting (`AssertSystemIdle`) and the config's recorded collateral type
+            // (`AssertCapAtMost`), read from the config's state.
+            let config = config_actor(self.engine, proxy, *salt);
+            let accounting = accounting_actor(self.engine, config.account_id);
+            let mut actors = vec![at, config, accounting];
+            let recorded = self
+                .chain
+                .raw_state(config)
+                .and_then(|bytes| ConfigState::decode(&bytes))
+                .and_then(|state| state.collateral_def);
+            actors
+                .extend(recorded.map(|def| collateral_actor(self.engine, config.account_id, def)));
+            return actors;
         }
         if let EngineMsg::SetCollateral {
             salt,
@@ -313,7 +397,17 @@ impl World {
     ) -> Result<Vec<TransactionEvent>, LeeError> {
         let actors = self.proxy_actors(proxy, msg);
         let root = Actor::new(proxy, self.engine);
-        self.chain.send(root, &actors, signers, msg)
+        let sent = self.chain.send(root, &actors, signers, msg)?;
+        if let EngineMsg::Init {
+            salt,
+            protocol_genesis,
+            ..
+        } = msg
+            && config_actor(self.engine, proxy, *salt) == self.config
+        {
+            self.protocol_genesis = protocol_genesis.map_or(0, |genesis| genesis.supply);
+        }
+        Ok(sent)
     }
 
     /// Binds the host to the config actor `(config, E)`.
@@ -386,49 +480,49 @@ impl World {
     ) -> (PrivateKey, AccountId, AccountId) {
         let (key, owner) = self.chain.key(label);
         self.chain.fund(owner, 1);
-        let (token, host) = (self.token, self.host_prog);
-        let (owner_holding, proxy) = (Actor::new(owner, token), Actor::new(owner, host));
+        let (token, host, cdef) = (self.token, self.host_prog, self.collateral_def);
+        let (owner_actor, proxy) = (Actor::new(owner, token), Actor::new(owner, host));
+        let owner_collateral = self.holding(owner, cdef);
         let position = Actor::new(position_id(host, owner), host);
 
-        let whale_holding = Actor::new(self.whale, token);
+        let whale = Actor::new(self.whale, token);
         let fund = TokenMsg::Transfer {
-            definition: self.collateral_def,
+            definition: cdef,
             to: owner,
             amount: collateral,
         };
         self.chain
             .send(
-                whale_holding,
-                &[whale_holding, owner_holding],
+                whale,
+                &[whale, self.holding(self.whale, cdef), owner_collateral],
                 &[&self.whale_key],
                 &fund,
             )
             .expect("the whale funds the owner");
 
         let open = self.host_proxied(HostMsg::OpenPosition { owner, collateral });
-        let vault = Actor::new(vault_id(host, owner), token);
-        let evidence = [PublicAccountEvidence::Pda {
-            program: host,
-            seed: vault_seed(owner),
-        }];
+        let vault_collateral = self.holding(vault_id(host, owner), cdef);
+        let actors = [
+            proxy,
+            self.params,
+            position,
+            owner_actor,
+            owner_collateral,
+            vault_collateral,
+        ];
         self.chain
-            .send_with_evidence(
-                proxy,
-                &[proxy, self.params, position, owner_holding, vault],
-                &[&key],
-                &evidence,
-                &open,
-            )
+            .send(proxy, &actors, &[&key], &open)
             .expect("the position opens");
 
         let generate = self.host_proxied(HostMsg::GenerateDebt {
             normalized_debt: debt,
         });
         let sdef = Actor::new(self.stable_def, token);
+        let owner_stable = self.holding(owner, self.stable_def);
         self.chain
             .send(
                 proxy,
-                &[proxy, self.params, position, sdef, owner_holding],
+                &[proxy, self.params, position, sdef, owner_stable],
                 &[&key],
                 &generate,
             )
@@ -457,26 +551,30 @@ impl World {
         auction_actor(self.engine, self.config.account_id, position, nonce)
     }
 
-    /// The auction's vault holding `(pda(E, ["VAULT", auction]), T)`.
+    /// The auction vault's token actor `(pda(E, ["VAULT", auction]), T)`, the owner actor the
+    /// engine debits; its collateral is `holding(vault.account_id, collateral_def)`.
     pub fn vault(&self, position: AccountId, nonce: u64) -> Actor {
         let auction = self.auction(position, nonce).account_id;
         vault_holding(self.engine, self.token, auction)
     }
 
-    /// The host vault holding of `position`'s owner.
+    /// The token actor of the host vault of `position`'s owner (the owner actor the host debits).
     pub fn host_vault(&self, position: AccountId) -> Actor {
         let owner = self.owner_of(position).account;
         Actor::new(vault_id(self.host_prog, owner), self.token)
     }
 
+    /// `account`'s holding of `definition`, `holding_actor(T, account, definition)` (ADR-062).
+    pub fn holding(&self, account: AccountId, definition: AccountId) -> Actor {
+        holding_actor(self.token, account, definition)
+    }
+
     /// `account`'s balance of `definition`; zero if it holds nothing.
     pub fn balance(&self, account: AccountId, definition: AccountId) -> u128 {
         self.chain
-            .raw_state(Actor::new(account, self.token))
+            .raw_state(self.holding(account, definition))
             .map_or(0, |bytes| {
-                Holding::decode(&bytes)
-                    .expect("a token holding")
-                    .balance(definition)
+                Holding::decode(&bytes).expect("a token holding").balance
             })
     }
 
@@ -498,9 +596,12 @@ impl World {
     }
 
     /// Every actor a liquidation of `position` as auction `nonce` touches, except the proxy:
-    /// collateral, host params, oracle, clock, config, record, auction, host position and vault,
-    /// the auction vault and the keeper's holding.
+    /// collateral, host params, oracle, clock, config, record, auction, host position, the host
+    /// vault's token actor and collateral holding, the auction vault's token actor and collateral
+    /// holding, and the keeper's collateral holding.
     pub fn liquidate_actors(&self, position: AccountId, nonce: u64) -> Vec<Actor> {
+        let cdef = self.collateral_def;
+        let (host_vault, vault) = (self.host_vault(position), self.vault(position, nonce));
         vec![
             self.collateral,
             self.params,
@@ -510,24 +611,12 @@ impl World {
             self.record(position),
             self.auction(position, nonce),
             Actor::new(position, self.host_prog),
-            self.host_vault(position),
-            self.vault(position, nonce),
-            Actor::new(self.keeper, self.token),
+            host_vault,
+            self.holding(host_vault.account_id, cdef),
+            vault,
+            self.holding(vault.account_id, cdef),
+            self.holding(self.keeper, cdef),
         ]
-    }
-
-    /// The admission evidence a liquidation needs: the auction vault is a fresh engine PDA that
-    /// a token `Credit` creates (ruling R-5b).
-    pub fn liquidate_evidence(
-        &self,
-        position: AccountId,
-        nonce: u64,
-    ) -> [PublicAccountEvidence; 1] {
-        let auction = self.auction(position, nonce).account_id;
-        [PublicAccountEvidence::Pda {
-            program: self.engine,
-            seed: engine_vault_seed(auction),
-        }]
     }
 
     /// The keeper liquidates `position` as auction `nonce`, claiming the world's current time.
@@ -539,7 +628,8 @@ impl World {
         self.liquidate_at(position, nonce, self.now_ms)
     }
 
-    /// The keeper liquidates `position` as auction `nonce`, claiming `now_ms`.
+    /// The keeper liquidates `position` as auction `nonce`, claiming `now_ms`. No evidence: the
+    /// fresh vault holding is a token PDA its `Credit` grants (ADR-062).
     pub fn liquidate_at(
         &mut self,
         position: AccountId,
@@ -548,11 +638,9 @@ impl World {
     ) -> Result<Vec<TransactionEvent>, LeeError> {
         let msg = self.liquidate_msg(position, nonce, now_ms);
         let actors = self.proxy_actors(self.keeper, &msg);
-        let evidence = self.liquidate_evidence(position, nonce);
         let root = Actor::new(self.keeper, self.engine);
         let key = self.keeper_key.clone();
-        self.chain
-            .send_with_evidence(root, &actors, &[&key], &evidence, &msg)
+        self.chain.send(root, &actors, &[&key], &msg)
     }
 
     fn host_proxied(&self, message: HostMsg) -> HostMsg {

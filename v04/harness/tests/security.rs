@@ -33,7 +33,7 @@ use harness::{
     invariants,
     world::{RAY, SALT},
 };
-use lee::{AccountId, Actor, PublicAccountEvidence};
+use lee::{AccountId, Actor};
 use token_core::TokenMsg;
 
 const COLLATERAL: u128 = 500_000;
@@ -66,20 +66,27 @@ fn collateral_state(w: &World) -> CollateralState {
 
 /// Every state a forged message could aim at in the liquidated world: the engine's config,
 /// collateral, accounting, record, auction, the auction vault, the keeper's and the owner's
-/// holdings, the host position and its vault, and the stablecoin definition.
+/// token actors and holdings, the host position and its vault, and the stablecoin definition.
 fn snapshot(w: &World, position: AccountId) -> Vec<Option<Vec<u8>>> {
     let owner = w.owner_of(position).account;
+    let cdef = w.collateral_def;
+    let (vault, host_vault) = (w.vault(position, 0), w.host_vault(position));
     [
         w.config,
         w.collateral,
         w.accounting,
         w.record(position),
         w.auction(position, 0),
-        w.vault(position, 0),
+        vault,
+        w.holding(vault.account_id, cdef),
         Actor::new(w.keeper, w.token),
+        w.holding(w.keeper, cdef),
         Actor::new(owner, w.token),
+        w.holding(owner, cdef),
+        w.holding(owner, w.stable_def),
         Actor::new(position, w.host_prog),
-        w.host_vault(position),
+        host_vault,
+        w.holding(host_vault.account_id, cdef),
         Actor::new(w.stable_def, w.token),
     ]
     .into_iter()
@@ -523,15 +530,17 @@ fn engine_actor_at_an_attacker_account_cannot_either() {
 }
 
 /// The victim engine's own states: config, collateral, accounting, and `position`'s record,
-/// auction 0 and its vault.
+/// auction 0 and its vault (token actor and collateral holding).
 fn victim_engine_state(w: &World, position: AccountId) -> Vec<Option<Vec<u8>>> {
+    let vault = w.vault(position, 0);
     [
         w.config,
         w.collateral,
         w.accounting,
         w.record(position),
         w.auction(position, 0),
-        w.vault(position, 0),
+        vault,
+        w.holding(vault.account_id, w.collateral_def),
     ]
     .into_iter()
     .map(|actor| w.chain.raw_state(actor))
@@ -570,6 +579,7 @@ fn rogue_config_of_the_same_engine_cannot_seize() {
     let (e, r) = (w.engine, rogue.account_id);
     let rogue_auction = auction_actor(e, r, position, 0);
     let rogue_record = record_actor(e, r, position);
+    let rogue_vault = vault_holding(e, w.token, rogue_auction.account_id);
     let keeper_root = Actor::new(w.keeper, e);
     let msg = EngineMsg::Liquidate {
         config: r,
@@ -589,18 +599,15 @@ fn rogue_config_of_the_same_engine_cannot_seize() {
         rogue_auction,
         Actor::new(position, w.host_prog),
         w.host_vault(position),
-        vault_holding(e, w.token, rogue_auction.account_id),
-        Actor::new(w.keeper, w.token),
+        w.holding(w.host_vault(position).account_id, w.collateral_def),
+        rogue_vault,
+        w.holding(rogue_vault.account_id, w.collateral_def),
+        w.holding(w.keeper, w.collateral_def),
     ];
-    let evidence = [PublicAccountEvidence::Pda {
-        program: e,
-        seed: engine_core::actors::vault_seed(rogue_auction.account_id),
-    }];
     let before = snapshot_host(&w, position);
     let keeper_key = w.keeper_key.clone();
     expect_revert(
-        w.chain
-            .send_with_evidence(keeper_root, &actors, &[&keeper_key], &evidence, &msg),
+        w.chain.send(keeper_root, &actors, &[&keeper_key], &msg),
         "host: NotEngine",
     );
     assert_eq!(
@@ -617,12 +624,15 @@ fn rogue_config_of_the_same_engine_cannot_seize() {
     invariants::check(&w);
 }
 
-/// The host position, its vault and the keeper's holding.
+/// The host position, its vault (token actor and collateral holding) and the keeper's
+/// collateral holding.
 fn snapshot_host(w: &World, position: AccountId) -> Vec<Option<Vec<u8>>> {
+    let host_vault = w.host_vault(position);
     [
         Actor::new(position, w.host_prog),
-        w.host_vault(position),
-        Actor::new(w.keeper, w.token),
+        host_vault,
+        w.holding(host_vault.account_id, w.collateral_def),
+        w.holding(w.keeper, w.collateral_def),
     ]
     .into_iter()
     .map(|actor| w.chain.raw_state(actor))

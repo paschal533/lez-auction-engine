@@ -1,15 +1,14 @@
-//! The mock CDP host: owner actions through the proxy, the engine binding, and the
-//! `LiquidatePosition` hook (whole-actor check, oracle read, sweep to custody, then `Seized`).
+//! The mock CDP host: owner actions through the proxy, the engine binding, the
+//! `LiquidatePosition` hook (whole-actor check, oracle read, sweep to custody, then `Seized`) and
+//! the engine's `EngineFreezeNewDebt`.
 
 use borsh::BorshSerialize;
 use harness::{Chain, expect_revert};
-use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence, error::LeeError};
+use lee::{AccountId, Actor, PrivateKey, error::LeeError};
 use lee_core::program::TransactionEvent;
-use mock_host_core::{
-    HostMsg, Params, Position, Seized, TAG_POSITION, position_id, vault_id, vault_seed,
-};
+use mock_host_core::{HostMsg, Params, Position, Seized, TAG_POSITION, position_id, vault_id};
 use oracle_core::OracleMsg;
-use token_core::{Definition, Holding, TokenMsg};
+use token_core::{Definition, Holding, TokenMsg, holding_actor};
 
 const RAY: u128 = 1_000_000_000_000_000_000_000_000_000;
 const MIN_CR_RAY: u128 = RAY * 3 / 2;
@@ -101,14 +100,20 @@ impl World {
             chain,
         };
 
-        let (cdef, sdef, owner_holding) = (w.collateral_def, w.stable_def, w.owner_holding);
+        let (cdef, sdef) = (w.collateral_def, w.stable_def);
+        let owner_collateral = w.holding(w.owner_holding, cdef);
         let collateral_def = TokenMsg::NewDefinition {
             minter: None,
             initial_to: Some(owner),
             initial_supply: OWNER_COLLATERAL,
         };
         w.chain
-            .send(cdef, &[cdef, owner_holding], &[&cdef_key], &collateral_def)
+            .send(
+                cdef,
+                &[cdef, owner_collateral],
+                &[&cdef_key],
+                &collateral_def,
+            )
             .expect("the collateral definition is created");
         let stable_def = TokenMsg::NewDefinition {
             minter: Some(params),
@@ -180,7 +185,7 @@ impl World {
     }
 
     /// The owner opens a position with `collateral`, signing (or not) at its proxy. The fresh
-    /// vault holding is admitted by PDA evidence.
+    /// vault collateral holding is a token PDA its `Credit` grants (ADR-062): no evidence.
     fn open(
         &mut self,
         owner: AccountId,
@@ -193,16 +198,12 @@ impl World {
             self.params,
             self.position,
             self.owner_holding,
-            self.vault,
+            self.holding(self.owner_holding, self.collateral_def),
+            self.holding(self.vault, self.collateral_def),
         ];
-        let evidence = [PublicAccountEvidence::Pda {
-            program: self.host,
-            seed: vault_seed(self.owner),
-        }];
         let signers: &[&PrivateKey] = if sign { &[&self.owner_key] } else { &[] };
         let proxy = self.proxy;
-        self.chain
-            .send_with_evidence(proxy, &actors, signers, &evidence, &msg)
+        self.chain.send(proxy, &actors, signers, &msg)
     }
 
     fn generate_debt(&mut self, normalized_debt: u128) -> Result<Vec<TransactionEvent>, LeeError> {
@@ -212,7 +213,7 @@ impl World {
             self.params,
             self.position,
             self.stable_def,
-            self.owner_holding,
+            self.holding(self.owner_holding, self.stable_def),
         ];
         let proxy = self.proxy;
         self.chain.send(proxy, &actors, &[&self.owner_key], &msg)
@@ -241,15 +242,34 @@ impl World {
             self.oracle,
             self.position,
             self.vault,
-            self.custody,
+            self.holding(self.vault, self.collateral_def),
+            self.holding(self.custody, self.collateral_def),
         ];
         self.chain.send(from, &actors, &[], &forward(params, &msg))
     }
 
-    fn balance(&self, holding: Actor, definition: Actor) -> u128 {
+    /// `from` (a relay actor) sends `EngineFreezeNewDebt` to `P`.
+    fn freeze(&mut self, from: Actor) -> Result<Vec<TransactionEvent>, LeeError> {
+        let params = self.params;
+        let msg = HostMsg::EngineFreezeNewDebt;
         self.chain
-            .state::<Holding>(holding)
-            .map_or(0, |h| h.balance(definition.account_id))
+            .send(from, &[from, params], &[], &forward(params, &msg))
+    }
+
+    /// The holding of the token actor `owner` for the definition actor `definition` (ADR-062).
+    fn holding(&self, owner: Actor, definition: Actor) -> Actor {
+        holding_actor(
+            owner.program_account_id,
+            owner.account_id,
+            definition.account_id,
+        )
+    }
+
+    /// The balance of the token actor `owner` of `definition`; zero while it has no holding.
+    fn balance(&self, owner: Actor, definition: Actor) -> u128 {
+        self.chain
+            .state::<Holding>(self.holding(owner, definition))
+            .map_or(0, |h| h.balance)
     }
 
     fn position_state(&self) -> Option<Position> {
@@ -546,4 +566,48 @@ fn add_debt_from_another_params_actor_reverts() {
     );
     assert_eq!(w.balance(w.owner_holding, w.stable_def), DEBT);
     assert_eq!(w.balance(w.vault, w.collateral_def), COLLATERAL);
+}
+
+/// `EngineFreezeNewDebt` (the engine's `check_solvency` freeze): refused before binding, from a
+/// rogue relay, from another program at the engine's account and as a root message; from the
+/// bound engine it sets `is_frozen` (again harmlessly), after which `GenerateDebt` is refused.
+#[test]
+fn engine_freeze_only_from_the_bound_engine_actor() {
+    let mut w = World::with_position(false);
+    let engine = w.engine;
+    assert!(!w.params_state().is_frozen);
+    expect_revert(w.freeze(engine), "host: NotEngine");
+
+    w.bind(engine).expect("the engine is bound");
+    let (_, rogue_account) = w.chain.key("rogue-config");
+    w.chain.fund(rogue_account, 1);
+    let rogue = Actor::new(rogue_account, w.chain.program("relay"));
+    let attacker = Actor::new(engine.account_id, w.chain.program("twin"));
+    expect_revert(w.freeze(rogue), "host: NotEngine");
+    expect_revert(w.freeze(attacker), "host: NotEngine");
+    let params = w.params;
+    expect_revert(
+        w.chain
+            .send(params, &[params], &[], &HostMsg::EngineFreezeNewDebt),
+        "host: NotEngine",
+    );
+    assert!(!w.params_state().is_frozen);
+
+    w.freeze(engine).expect("the bound engine freezes");
+    let frozen = w.params_state();
+    assert!(frozen.is_frozen);
+    assert_eq!(
+        w.chain.raw_state(engine),
+        None,
+        "the host sends nothing back"
+    );
+    w.freeze(engine).expect("a second freeze is harmless");
+    assert_eq!(w.params_state(), frozen);
+
+    expect_revert(w.generate_debt(1), "host: Frozen");
+    assert_eq!(
+        w.position_state(),
+        Some(w.expected_position(COLLATERAL, DEBT))
+    );
+    assert_eq!(w.balance(w.owner_holding, w.stable_def), DEBT);
 }

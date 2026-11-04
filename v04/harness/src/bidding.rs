@@ -1,20 +1,18 @@
 //! Bids and leftover claims on the [`World`] (design note §4.2 rows 5-8).
 //!
-//! A `Bid` is a root message at the collateral actor, signed by the bidder: the bidder's own
-//! holding `(bidder, T)` pays the charge and receives the collateral. A `ClaimLeftover` is a
+//! A `Bid` is a root message at the collateral actor, signed by the bidder: the bidder's token
+//! actor `(bidder, T)` pays the charge from its stablecoin holding, and the collateral lands in its
+//! collateral holding (ADR-062). A `ClaimLeftover` is a
 //! root message at the owner's proxy `(owner, E)`, signed by the owner. A `SettleEmpty` is a
 //! permissionless root message at the config.
 
-use engine_core::{
-    actors::{buffer_holding, buffer_seed},
-    msg::EngineMsg,
-};
-use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence, error::LeeError};
+use engine_core::{actors::buffer_holding, msg::EngineMsg};
+use lee::{AccountId, Actor, PrivateKey, error::LeeError};
 use lee_core::program::TransactionEvent;
 
 use crate::World;
 
-/// A funded bidder: a signer whose holding `(account, T)` holds stablecoin.
+/// A funded bidder: a signer whose stablecoin holding holds stablecoin.
 #[derive(Clone)]
 pub struct Bidder {
     pub key: PrivateKey,
@@ -22,7 +20,8 @@ pub struct Bidder {
 }
 
 impl World {
-    /// The surplus buffer `(pda(E, ["BUFFER", config]), T)`.
+    /// The surplus buffer's token actor `(pda(E, ["BUFFER", config]), T)`; its stablecoin is
+    /// `holding(buffer.account_id, stable_def)`.
     pub fn buffer(&self) -> Actor {
         buffer_holding(self.engine, self.token, self.config.account_id)
     }
@@ -61,9 +60,13 @@ impl World {
     }
 
     /// Every actor a bid by `bidder` on auction `nonce` of `position` touches: the collateral
-    /// actor (root), host params, oracle, clock, the auction, the bidder's holding, the
-    /// stablecoin definition (burn), the buffer, the auction vault, the accounting and the config.
+    /// actor (root), host params, oracle, clock, the auction, the bidder's token actor and its
+    /// stablecoin and collateral holdings, the stablecoin definition (burn), the buffer's
+    /// stablecoin holding, the auction vault's token actor and collateral holding, the accounting
+    /// and the config. No evidence: a fresh buffer holding is a token PDA its `Credit` grants.
     pub fn bid_actors(&self, bidder: AccountId, position: AccountId, nonce: u64) -> Vec<Actor> {
+        let (cdef, sdef) = (self.collateral_def, self.stable_def);
+        let vault = self.vault(position, nonce);
         vec![
             self.collateral,
             self.params,
@@ -71,24 +74,15 @@ impl World {
             self.chain.clock(),
             self.auction(position, nonce),
             Actor::new(bidder, self.token),
-            Actor::new(self.stable_def, self.token),
-            self.buffer(),
-            self.vault(position, nonce),
+            self.holding(bidder, sdef),
+            self.holding(bidder, cdef),
+            Actor::new(sdef, self.token),
+            self.holding(self.buffer().account_id, sdef),
+            vault,
+            self.holding(vault.account_id, cdef),
             self.accounting,
             self.config,
         ]
-    }
-
-    /// The admission evidence a bid needs: the buffer is a fresh engine PDA until the first
-    /// penalty part credits it (rulings R-5b, R-3a).
-    pub fn bid_evidence(&self) -> Vec<PublicAccountEvidence> {
-        if self.chain.raw_state(self.buffer()).is_some() {
-            return Vec::new();
-        }
-        vec![PublicAccountEvidence::Pda {
-            program: self.engine,
-            seed: buffer_seed(self.config.account_id),
-        }]
     }
 
     /// Sends the `Bid` `msg` at the collateral actor, signed by `signers`.
@@ -110,10 +104,8 @@ impl World {
             panic!("not a bid: {msg:?}")
         };
         let actors = self.bid_actors(*bidder, *position, *nonce);
-        let evidence = self.bid_evidence();
         let root = self.collateral;
-        self.chain
-            .send_with_evidence(root, &actors, signers, &evidence, msg)
+        self.chain.send(root, &actors, signers, msg)
     }
 
     /// `bidder` bids `(max_debt_in, min_collateral_out)` on auction `nonce` of `position` at the
@@ -194,13 +186,15 @@ impl World {
     }
 
     /// The actors a claim at the proxy `(claimant, E)` touches, after the proxy: the auction, its
-    /// vault and the owner's holding.
+    /// vault's token actor and collateral holding, and the owner's collateral holding.
     pub(crate) fn claim_actors(&self, position: AccountId, nonce: u64) -> Vec<Actor> {
-        let owner = self.owner_of(position).account;
+        let (owner, cdef) = (self.owner_of(position).account, self.collateral_def);
+        let vault = self.vault(position, nonce);
         vec![
             self.auction(position, nonce),
-            self.vault(position, nonce),
-            Actor::new(owner, self.token),
+            vault,
+            self.holding(vault.account_id, cdef),
+            self.holding(owner, cdef),
         ]
     }
 }

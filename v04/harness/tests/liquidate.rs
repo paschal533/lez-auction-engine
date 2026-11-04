@@ -223,8 +223,13 @@ fn donation_to_the_host_vault_does_not_block_liquidation() {
         amount: donation,
     };
     let key = w.whale_key.clone();
+    let actors = [
+        whale,
+        w.holding(w.whale, w.collateral_def),
+        w.holding(host_vault.account_id, w.collateral_def),
+    ];
     w.chain
-        .send(whale, &[whale, host_vault], &[&key], &donate)
+        .send(whale, &actors, &[&key], &donate)
         .expect("the whale donates into the host vault");
 
     w.liquidate(position, 0)
@@ -329,11 +334,9 @@ fn liquidate_needs_the_keeper_signature_and_a_configured_collateral() {
     let root = Actor::new(w.keeper, w.engine);
     let msg = w.liquidate_msg(position, 0, T);
     let actors = w.proxy_actors(w.keeper, &msg);
-    let evidence = w.liquidate_evidence(position, 0);
     // Unsigned at the keeper's proxy (v0.2.4: the keeper must sign).
     expect_revert(
-        w.chain
-            .send_with_evidence(root, &actors, &[], &evidence, &msg),
+        w.chain.send(root, &actors, &[], &msg),
         &fail_text(EngineError::WrongAccount("keeper")),
     );
     // A collateral type the config never configured: the engine's own error, not LEZ's
@@ -351,8 +354,7 @@ fn liquidate_needs_the_keeper_signature_and_a_configured_collateral() {
     actors.push(other);
     let key = w.keeper_key.clone();
     expect_revert(
-        w.chain
-            .send_with_evidence(root, &actors, &[&key], &evidence, &msg),
+        w.chain.send(root, &actors, &[&key], &msg),
         &fail_text(EngineError::WrongAccount("coll_config")),
     );
     assert_eq!(w.chain.raw_state(other), None);
@@ -360,12 +362,13 @@ fn liquidate_needs_the_keeper_signature_and_a_configured_collateral() {
     invariants::check(&w);
 }
 
-/// Ruling R-F2: a collateral type must be the one the bound host holds. The Observe block fails
-/// `HostMismatch` unless the host's `params.collateral_def` is the type's definition, so a second
-/// type on the same config (here the stablecoin definition) can never be configured, and so never
-/// liquidated: otherwise the engine would price and auction the host's collateral under another
-/// type's parameters. The check sits in the Observe reply branch every `SetCollateral` and
-/// `Liquidate` runs; it fires first at `SetCollateral`, before a mismatched type can exist.
+/// Rulings R-F2 / R-F3: a collateral type must be the one the bound host holds, and a config has
+/// one type. A second type on the same config (here the stablecoin definition) is refused at the
+/// config, `WrongAccount("collateral_def")`, because its first `SetCollateral` recorded the type;
+/// behind that, the Observe block fails `HostMismatch` unless the host's `params.collateral_def`
+/// is the type's definition. So the type can never be configured, and so never liquidated:
+/// otherwise the engine would price and auction the host's collateral under another type's
+/// parameters.
 #[test]
 fn collateral_type_the_host_does_not_hold_is_refused() {
     let (mut w, position) = world_with_position();
@@ -380,10 +383,24 @@ fn collateral_type_the_host_does_not_hold_is_refused() {
     };
     expect_revert(
         w.send_engine(w.admin, &[&key], &set),
-        &fail_text(EngineError::HostMismatch),
+        &fail_text(EngineError::WrongAccount("collateral_def")),
     );
     assert_eq!(w.chain.raw_state(other), None);
     invariants::check(&w);
+    // R-F2 on its own: a fresh config bound to the same host, whose first type is the stablecoin.
+    let (fresh_key, fresh) = w.chain.key("fresh-admin");
+    w.chain.fund(fresh, 1);
+    let init = w.init_msg();
+    w.send_engine(fresh, &[&fresh_key], &init)
+        .expect("a fresh config");
+    let fresh_config = engine_core::actors::config_actor(w.engine, fresh, harness::world::SALT);
+    let fresh_other =
+        engine_core::actors::collateral_actor(w.engine, fresh_config.account_id, second);
+    expect_revert(
+        w.send_engine(fresh, &[&fresh_key], &set),
+        &fail_text(EngineError::HostMismatch),
+    );
+    assert_eq!(w.chain.raw_state(fresh_other), None);
 
     let liquidate = EngineMsg::Liquidate {
         config: w.config.account_id,
@@ -394,16 +411,14 @@ fn collateral_type_the_host_does_not_hold_is_refused() {
     };
     let mut actors = w.proxy_actors(w.keeper, &liquidate);
     actors.push(other);
-    let evidence = w.liquidate_evidence(position, 0);
     let keeper_key = w.keeper_key.clone();
     let before = position_state(&w, position);
     let vault_before = w.collateral_balance(w.host_vault(position).account_id);
     expect_revert(
-        w.chain.send_with_evidence(
+        w.chain.send(
             Actor::new(w.keeper, w.engine),
             &actors,
             &[&keeper_key],
-            &evidence,
             &liquidate,
         ),
         &fail_text(EngineError::WrongAccount("coll_config")),
@@ -443,6 +458,7 @@ fn collateral_grant_does_not_reach_the_host() {
         min_cr_ray: harness::world::MIN_CR_RAY,
         engine_actor: Some(w.config),
         pending: None,
+        is_frozen: false,
     };
     w.chain
         .send(host, &[host], &[&host_key], &params)
@@ -481,10 +497,8 @@ fn collateral_grant_does_not_reach_the_host() {
         target,
     ];
     let keeper_key = w.keeper_key.clone();
-    let evidence = w.liquidate_evidence(position, 0);
     expect_revert(
-        w.chain
-            .send_with_evidence(keeper_root, &actors, &[&keeper_key], &evidence, &msg),
+        w.chain.send(keeper_root, &actors, &[&keeper_key], &msg),
         &fail_text(EngineError::NotAuctioning),
     );
 }

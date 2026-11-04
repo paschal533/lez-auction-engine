@@ -3,13 +3,20 @@
 //! PDA seed). The stateless proxy forwards the message, and the receiver checks it came from
 //! exactly `(signer, E)`:
 //!
-//! - `Init` / `SetCollateral` (admin) go to the signer's config `config_actor(E, signer, salt)`;
+//! - `Init` / `SetCollateral` / `SetEngineParams` (admin) go to the signer's config
+//!   `config_actor(E, signer, salt)`;
 //! - `Liquidate` (keeper, row 4) goes to the named collateral actor
 //!   `collateral_actor(E, config, def)`, which takes the keeper from the proxy's account;
 //! - `ClaimLeftover` (owner, row 8) goes to the named auction, which accepts it only from
 //!   `(owner, E)`;
 //! - `SettleEmpty` (permissionless, row 7) is rooted at the named config itself, which forwards it
 //!   to the auction.
+//!
+//! The system roots (`SettleDebt`, row 9; `StartSurplus`, row 10) are rooted at the named config
+//! too, and handled by `system` (the config hands them to its accounting, not to an auction);
+//! `TakeSurplus` / `CloseSurplus` (rows 11-12) by `surplus`, behind a seeded `Probe { Surplus }`;
+//! `StartDebt` (row 13) by `debt` through `system`, and `TakeDebt` / `CloseDebt` (rows 14-15) by
+//! `debt`, behind a seeded `Probe { Debt }`.
 //!
 //! Every forward to an auction goes behind a seeded `Probe { Auction }` (ruling R-9b).
 //!
@@ -23,10 +30,12 @@ use auction_engine_params::EngineError;
 use engine_core::{
     actors::{
         auction_actor, auction_seed, collateral_actor, collateral_seed, config_actor, config_seed,
+        debt_actor, debt_seed, surplus_actor, surplus_seed,
     },
     check::fail,
     msg::{EngineMsg, ProbeKind},
     state::{AuctionState, CollateralState, ConfigState},
+    system_state::{DebtAuctionState, SurplusAuctionState},
 };
 use lee_core::{
     account::{AccountId, Actor},
@@ -37,9 +46,9 @@ use lee_core::{
 /// handlers refuse a message without a sender.
 pub fn root(input: &ReceiveInput, message: &EngineMsg) -> Option<Response> {
     match message {
-        EngineMsg::Init { salt, .. } | EngineMsg::SetCollateral { salt, .. } => {
-            Some(forward_admin(input, message, *salt))
-        }
+        EngineMsg::Init { salt, .. }
+        | EngineMsg::SetCollateral { salt, .. }
+        | EngineMsg::SetEngineParams { salt, .. } => Some(forward_admin(input, message, *salt)),
         EngineMsg::Liquidate {
             config,
             collateral_def,
@@ -61,12 +70,13 @@ pub fn root(input: &ReceiveInput, message: &EngineMsg) -> Option<Response> {
     }
 }
 
-/// Forwards a root `Init` / `SetCollateral` to the signer's config.
+/// Forwards a root `Init` / `SetCollateral` / `SetEngineParams` to the signer's config.
 ///
 /// `Init`: the seeded `Init` creates the config (and sends nothing), then the unseeded `InitReads`
-/// runs its reads and creates the accounting. `SetCollateral`: a seeded `Probe` makes a missing
-/// config fail with the engine's v0.2.4 `WrongAccount("config")` rather than LEZ's admission
-/// error, then the unseeded `SetCollateral` follows.
+/// runs its reads and creates the accounting and the protocol definition. `SetCollateral` /
+/// `SetEngineParams`: a seeded `Probe` makes a missing config fail with the engine's v0.2.4
+/// `WrongAccount("config")` rather than LEZ's admission error, then the unseeded message
+/// follows.
 fn forward_admin(input: &ReceiveInput, message: &EngineMsg, salt: u64) -> Response {
     if !input.is_authorized {
         fail(EngineError::NotAdmin);
@@ -133,6 +143,30 @@ pub fn auction_probe(
     (auction, seeded)
 }
 
+/// The seeded leaf `Probe { Surplus }` for `surplus_actor(engine, config, nonce)`: an absent
+/// surplus auction fails with v0.2.4's `WrongAccount("surplus_auction")`. The caller sends the
+/// real message unseeded as the next sibling.
+pub fn surplus_probe(engine: AccountId, config: AccountId, nonce: u64) -> (Actor, SyncMessage) {
+    let surplus = surplus_actor(engine, config, nonce);
+    let probe = EngineMsg::Probe {
+        kind: ProbeKind::Surplus,
+    };
+    let seeded = SyncMessage::new(surplus, &probe).with_pda_seeds([surplus_seed(config, nonce)]);
+    (surplus, seeded)
+}
+
+/// The seeded leaf `Probe { Debt }` for `debt_actor(engine, config, nonce)`: an absent debt
+/// auction fails with v0.2.4's `WrongAccount("debt_auction")`. The caller sends the real message
+/// unseeded as the next sibling.
+pub fn debt_probe(engine: AccountId, config: AccountId, nonce: u64) -> (Actor, SyncMessage) {
+    let debt = debt_actor(engine, config, nonce);
+    let probe = EngineMsg::Probe {
+        kind: ProbeKind::Debt,
+    };
+    let seeded = SyncMessage::new(debt, &probe).with_pda_seeds([debt_seed(config, nonce)]);
+    (debt, seeded)
+}
+
 /// Forwards the owner's root `ClaimLeftover` to the auction (v0.2.4: the owner must sign,
 /// `NotOwner`), behind the seeded auction probe; the auction checks the sender is exactly
 /// `(owner, E)`.
@@ -188,6 +222,16 @@ pub fn probe(input: &ReceiveInput, kind: ProbeKind) -> Response {
         ProbeKind::Auction if AuctionState::decode(state).is_none() => {
             fail(EngineError::WrongAccount("auction"))
         }
-        ProbeKind::Config | ProbeKind::Collateral | ProbeKind::Auction => Response::keep_state(),
+        ProbeKind::Surplus if SurplusAuctionState::decode(state).is_none() => {
+            fail(EngineError::WrongAccount("surplus_auction"))
+        }
+        ProbeKind::Debt if DebtAuctionState::decode(state).is_none() => {
+            fail(EngineError::WrongAccount("debt_auction"))
+        }
+        ProbeKind::Config
+        | ProbeKind::Collateral
+        | ProbeKind::Auction
+        | ProbeKind::Surplus
+        | ProbeKind::Debt => Response::keep_state(),
     }
 }

@@ -15,7 +15,9 @@
 //!    `WrongAccount("pending")`. An empty buffer holding (never credited) reads as 0; a reference
 //!    reply that is not an oracle state is `RefReading::Undecodable` (admin price, never a panic).
 //! 4. [`proceed`] needs every reading, clears the scratch and runs the op: `SettleDebt` burns
-//!    `min(amount, buffer, unbacked - debt_on_auction)` from the buffer under its `BUFFER` seed.
+//!    `min(amount, buffer, unbacked - debt_on_auction)` from the buffer under its `BUFFER` seed;
+//!    `StartSurplus` (its nonce checked before the reads) starts a surplus auction
+//!    (`surplus::start`).
 
 use auction_engine_params::EngineError;
 use borsh::BorshDeserialize;
@@ -34,7 +36,7 @@ use lee_core::{
 use oracle_core::{OracleMsg, OracleState};
 use token_core::{Holding, TokenMsg, holding_actor};
 
-use crate::admin::engine;
+use crate::{admin::engine, surplus};
 
 /// Root `SettleDebt` at the named config (row 9).
 pub fn on_settle_debt(input: &ReceiveInput, config: AccountId, amount: u128) -> Response {
@@ -45,29 +47,42 @@ pub fn on_settle_debt(input: &ReceiveInput, config: AccountId, amount: u128) -> 
 /// A system root at the config `config`: asserts the clock claim `now_ms` (except for
 /// `SettleDebt`) and hands `op` to the config's accounting.
 pub fn root(input: &ReceiveInput, config: AccountId, op: SystemOp, now_ms: u64) -> Response {
-    let e = engine(input);
-    if input.receiver != Actor::new(config, e) {
-        fail(EngineError::WrongAccount("config"));
-    }
-    let c = ConfigState::decode(input.pre_state.as_ref())
-        .unwrap_or_else(|| fail(EngineError::WrongAccount("config")));
-    let mut response = Response::keep_state();
-    if !matches!(op, SystemOp::SettleDebt { .. }) {
-        let at_most = now_ms
-            .checked_add(c.slack_ms)
-            .unwrap_or_else(|| fail(EngineError::Math));
-        let assert = ClockMsg::AssertTimestamp {
-            at_least: now_ms,
-            at_most,
-        };
-        response = response.send_sync(c.clock, &assert);
-    }
+    let claim = (!matches!(op, SystemOp::SettleDebt { .. })).then_some(now_ms);
+    let (c, response) = config_root(input, config, claim);
     let system = EngineMsg::System {
         op,
         now_ms,
         ctx: Box::new(SystemCtx::from_config(config, &c)),
     };
-    response.send_sync(accounting_actor(e, config), &system)
+    response.send_sync(accounting_actor(engine(input), config), &system)
+}
+
+/// A root at the config `config` (every system root, ruling R-9d): the receiver must be that
+/// config (`WrongAccount("config")`); the config's state, and a response that asserts the clock
+/// claim `now_ms`, if any, on the config's clock (`AssertTimestamp { now, now + slack }`).
+pub fn config_root(
+    input: &ReceiveInput,
+    config: AccountId,
+    now_ms: Option<u64>,
+) -> (ConfigState, Response) {
+    if input.receiver != Actor::new(config, engine(input)) {
+        fail(EngineError::WrongAccount("config"));
+    }
+    let c = ConfigState::decode(input.pre_state.as_ref())
+        .unwrap_or_else(|| fail(EngineError::WrongAccount("config")));
+    let response = Response::keep_state();
+    let Some(now_ms) = now_ms else {
+        return (c, response);
+    };
+    let at_most = now_ms
+        .checked_add(c.slack_ms)
+        .unwrap_or_else(|| fail(EngineError::Math));
+    let assert = ClockMsg::AssertTimestamp {
+        at_least: now_ms,
+        at_most,
+    };
+    let response = response.send_sync(c.clock, &assert);
+    (c, response)
 }
 
 /// The buffer's stablecoin holding of `ctx`'s config, the one actor whose balance counts.
@@ -92,7 +107,7 @@ pub fn on_system(input: &ReceiveInput, op: SystemOp, now_ms: u64, ctx: SystemCtx
     if acc.pending.is_some() {
         fail(EngineError::WrongAccount("pending"));
     }
-    precheck(op);
+    precheck(op, &acc);
     let pending = SystemPending {
         op,
         now_ms,
@@ -116,13 +131,17 @@ pub fn on_system(input: &ReceiveInput, op: SystemOp, now_ms: u64, ctx: SystemCtx
     response.send_sync(input.receiver, &EngineMsg::Proceed)
 }
 
-/// The op's checks before any read. Ops 1-3 arrive with Tasks 4-6.
-fn precheck(op: SystemOp) {
+/// The op's checks before any read: a surplus start names the accounting's next nonce
+/// (`NonceMismatch`). Ops 2-3 arrive with Tasks 5-6.
+fn precheck(op: SystemOp, acc: &AccountingState) {
     match op {
         SystemOp::SettleDebt { .. } => {}
-        SystemOp::StartSurplus { .. } | SystemOp::StartDebt { .. } | SystemOp::CheckSolvency => {
-            panic!("engine: BadMessage")
+        SystemOp::StartSurplus { nonce } => {
+            if nonce != acc.surplus_nonce {
+                fail(EngineError::NonceMismatch);
+            }
         }
+        SystemOp::StartDebt { .. } | SystemOp::CheckSolvency => panic!("engine: BadMessage"),
     }
 }
 
@@ -138,7 +157,7 @@ pub fn on_reply(input: &ReceiveInput) -> Option<Response> {
         .ref_oracle
         .filter(|_| pending.awaits_reference());
     if from == buffer && pending.buffer.is_none() {
-        pending.buffer = Some(buffer_balance(input));
+        pending.buffer = Some(holding_balance(input, EngineError::WrongAccount("buffer")));
     } else if Some(from) == reference && pending.reference.is_none() {
         pending.reference = Some(reference_reading(input));
     } else if from == buffer || Some(from) == reference {
@@ -153,17 +172,15 @@ pub fn on_reply(input: &ReceiveInput) -> Option<Response> {
     Some(Response::set_state(next.encode()))
 }
 
-/// The buffer holding's balance: 0 for an empty state (never credited), else a holding's.
-fn buffer_balance(input: &ReceiveInput) -> u128 {
-    let reply = StateReply::try_from_slice(&input.message)
-        .unwrap_or_else(|_| fail(EngineError::WrongAccount("buffer")));
+/// A holding's balance from its `StateReply`: 0 for an empty state (never credited), else a
+/// holding's; anything else fails with `err`.
+pub fn holding_balance(input: &ReceiveInput, err: EngineError) -> u128 {
+    let reply = StateReply::try_from_slice(&input.message).unwrap_or_else(|_| fail(err));
     let state = reply.state.as_ref();
     if state.is_empty() {
         return 0;
     }
-    Holding::decode(state)
-        .unwrap_or_else(|| fail(EngineError::WrongAccount("buffer")))
-        .balance
+    Holding::decode(state).unwrap_or_else(|| fail(err)).balance
 }
 
 /// The reference oracle's reading; anything but an oracle state is `Undecodable`.
@@ -203,9 +220,10 @@ pub fn proceed(input: &ReceiveInput) -> Response {
         SystemOp::SettleDebt { amount } => {
             settle_debt(input, &cleared, &pending.ctx, (amount, buffer))
         }
-        SystemOp::StartSurplus { .. } | SystemOp::StartDebt { .. } | SystemOp::CheckSolvency => {
-            panic!("engine: BadMessage")
+        SystemOp::StartSurplus { nonce } => {
+            surplus::start(input, &cleared, &pending, (buffer, nonce))
         }
+        SystemOp::StartDebt { .. } | SystemOp::CheckSolvency => panic!("engine: BadMessage"),
     }
 }
 

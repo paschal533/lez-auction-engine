@@ -47,6 +47,7 @@ macro_rules! tagged_state {
         }
     };
 }
+pub(crate) use tagged_state;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SchedulePointRec {

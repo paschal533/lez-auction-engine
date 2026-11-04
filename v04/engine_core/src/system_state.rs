@@ -3,6 +3,7 @@
 //! scratch. Kept apart from `state.rs` (ruling R-3a, file size); the surplus and debt auctions'
 //! states join them here.
 
+use auction_core::system::SurplusAuction;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::{AccountId, Actor};
 
@@ -94,10 +95,125 @@ impl SystemPending {
     }
 }
 
+pub const TAG_SURPLUS: [u8; 8] = *b"AESURPLS";
+
+/// A system auction's phase; it only moves forward.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum SystemPhase {
+    Live,
+    Ended,
+}
+
+/// A close in flight at the surplus auction: set by `SurplusClose`, filled by the vault holding's
+/// `StateReply`, consumed and cleared by `Proceed`, so `None` in every committed state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SurplusCloseRec {
+    /// The vault's stablecoin holding, the one actor whose reply counts.
+    pub vault: Actor,
+    /// The vault's balance, once its reply is in.
+    pub amount: Option<u128>,
+    /// The buffer account the remainder returns to.
+    pub buffer: AccountId,
+    pub stable_def: AccountId,
+    /// The close's clock claim, reported to the accounting as the auction's end.
+    pub now_ms: u64,
+}
+
+/// `surplus_actor(E, config, nonce)` (v0.2.4 `SurplusAuctionState`; `phase` replaces `live`).
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SurplusAuctionState {
+    pub tag: [u8; 8],
+    pub config: AccountId,
+    pub nonce: u64,
+    pub lot_left: u128,
+    pub start_ms: u64,
+    /// The reference price snapshotted at start, RAY.
+    pub ref_ray: u128,
+    pub phase: SystemPhase,
+    pub close: Option<SurplusCloseRec>,
+}
+crate::state::tagged_state!(SurplusAuctionState, TAG_SURPLUS);
+
+impl SurplusAuctionState {
+    /// The `auction_core` view: `live ⇔ phase == Live`.
+    #[must_use]
+    pub fn core(&self) -> SurplusAuction {
+        SurplusAuction {
+            lot_left: self.lot_left,
+            start_ms: self.start_ms,
+            live: self.phase == SystemPhase::Live,
+        }
+    }
+
+    #[must_use]
+    pub fn with_core(&self, a: &SurplusAuction) -> Self {
+        Self {
+            lot_left: a.lot_left,
+            start_ms: a.start_ms,
+            phase: if a.live {
+                SystemPhase::Live
+            } else {
+                SystemPhase::Ended
+            },
+            ..self.clone()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::state::fixtures::{actor, config, id};
+
+    fn surplus(phase: SystemPhase) -> SurplusAuctionState {
+        SurplusAuctionState {
+            tag: TAG_SURPLUS,
+            config: id(40),
+            nonce: 2,
+            lot_left: 500,
+            start_ms: 7,
+            ref_ray: 9,
+            phase,
+            close: None,
+        }
+    }
+
+    /// `phase` replaces v0.2.4's `live`: `live ⇔ phase == Live`.
+    #[test]
+    fn surplus_core_maps_live_to_the_phase() {
+        let live = surplus(SystemPhase::Live);
+        let core = live.core();
+        assert_eq!((core.lot_left, core.start_ms, core.live), (500, 7, true));
+        assert!(!surplus(SystemPhase::Ended).core().live);
+        let taken = live.with_core(&SurplusAuction {
+            lot_left: 0,
+            live: false,
+            ..core
+        });
+        assert_eq!((taken.lot_left, taken.phase), (0, SystemPhase::Ended));
+        assert_eq!((taken.config, taken.nonce, taken.ref_ray), (id(40), 2, 9));
+        assert_eq!(live.with_core(&core), live);
+    }
+
+    #[test]
+    fn surplus_state_round_trips_with_its_own_tag() {
+        let closing = SurplusAuctionState {
+            close: Some(SurplusCloseRec {
+                vault: actor(1, 2),
+                amount: Some(3),
+                buffer: id(4),
+                stable_def: id(5),
+                now_ms: 6,
+            }),
+            ..surplus(SystemPhase::Ended)
+        };
+        let bytes = closing.encode();
+        assert_eq!(bytes.get(..8), Some(&TAG_SURPLUS[..]));
+        assert_eq!(SurplusAuctionState::decode(&bytes), Some(closing));
+        let foreign = crate::state::AccountingState::new().encode();
+        assert_eq!(SurplusAuctionState::decode(&foreign), None);
+        assert_eq!(SurplusAuctionState::decode(&[]), None);
+    }
 
     #[test]
     fn ctx_copies_the_config() {

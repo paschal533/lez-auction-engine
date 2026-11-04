@@ -192,6 +192,15 @@ fn init_checks_the_reference_oracle_slot() {
             ),
             EngineError::WrongAccount("ref_oracle"),
         ),
+        // Ruling R-3b: never an actor of the token program, so never the buffer's holding.
+        (
+            w.init_msg_full(
+                enabled.clone(),
+                Some(w.holding(w.buffer().account_id, w.stable_def)),
+                None,
+            ),
+            EngineError::WrongAccount("ref_oracle"),
+        ),
     ];
     for (init, err) in cases {
         expect_revert(w.send_engine(w.admin, &[&key], &init), &fail_text(err));
@@ -371,6 +380,11 @@ fn set_engine_params_checks_the_reference_oracle_slot() {
         ),
         (
             Some(Actor::new(w.protocol_def(), oracle_program)),
+            EngineError::WrongAccount("ref_oracle"),
+        ),
+        // Ruling R-3b: never an actor of the token program, so never the buffer's holding.
+        (
+            Some(w.holding(w.buffer().account_id, w.stable_def)),
             EngineError::WrongAccount("ref_oracle"),
         ),
     ];

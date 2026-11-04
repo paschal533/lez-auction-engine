@@ -20,6 +20,9 @@
 //! - `settle`: the auction's `SettleEmpty`, forwarded by its config (permissionless root).
 //! - `system`: root `SettleDebt` at the config and the accounting's system Read block (buffer
 //!   and reference-oracle reads, `Proceed`).
+//! - `surplus`: roots `StartSurplus` / `TakeSurplus` / `CloseSurplus` at the config, the surplus
+//!   auction's `SurplusOpen` / `SurplusTake` / `SurplusClose` (vault read, `Proceed`) and the
+//!   accounting's `SurplusTaken` / `SurplusReturned`.
 //!
 //! Errors are panics with the v0.2.4 text (`engine_core::check::fail`).
 
@@ -42,6 +45,8 @@ mod proxy;
 mod read;
 #[path = "engine/settle.rs"]
 mod settle;
+#[path = "engine/surplus.rs"]
+mod surplus;
 #[path = "engine/system.rs"]
 mod system;
 
@@ -270,5 +275,69 @@ fn handle_message(input: &ReceiveInput) -> Response {
         EngineMsg::AssertSystemIdle => admin::on_assert_system_idle(input),
         EngineMsg::SettleDebt { config, amount } => system::on_settle_debt(input, config, amount),
         EngineMsg::System { op, now_ms, ctx } => system::on_system(input, op, now_ms, *ctx),
+        EngineMsg::StartSurplus {
+            config,
+            nonce,
+            now_ms,
+        } => surplus::on_start(input, config, nonce, now_ms),
+        EngineMsg::TakeSurplus {
+            taker,
+            config,
+            nonce,
+            amount_coin,
+            max_protocol_in,
+            now_ms,
+        } => surplus::on_take_root(
+            input,
+            (config, nonce),
+            &surplus::TakeArgs {
+                taker,
+                amount_coin,
+                max_protocol_in,
+                now_ms,
+            },
+        ),
+        EngineMsg::CloseSurplus {
+            config,
+            nonce,
+            now_ms,
+        } => surplus::on_close_root(input, (config, nonce), now_ms),
+        EngineMsg::SurplusOpen {
+            config,
+            nonce,
+            lot,
+            start_ms,
+            ref_ray,
+        } => surplus::on_open(input, (config, nonce), lot, start_ms, ref_ray),
+        EngineMsg::SurplusTake {
+            taker,
+            amount_coin,
+            max_protocol_in,
+            now_ms,
+            ctx,
+        } => surplus::on_take(
+            input,
+            &surplus::TakeArgs {
+                taker,
+                amount_coin,
+                max_protocol_in,
+                now_ms,
+            },
+            &ctx,
+        ),
+        EngineMsg::SurplusClose { now_ms, ctx } => surplus::on_close(input, now_ms, &ctx),
+        EngineMsg::SurplusTaken {
+            config,
+            nonce,
+            protocol_burned,
+            ended,
+            now_ms,
+        } => surplus::on_taken(input, (config, nonce), protocol_burned, ended, now_ms),
+        EngineMsg::SurplusReturned {
+            config,
+            nonce,
+            amount,
+            now_ms,
+        } => surplus::on_returned(input, (config, nonce), amount, now_ms),
     }
 }

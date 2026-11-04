@@ -11,6 +11,9 @@
 //!   scratch (`pending_read`, `pending_genesis`, `pending`, `scratch`, the accounting's system
 //!   `pending`) survives a transaction.
 //! - **R-F3:** the config's recorded collateral type, if any, has its collateral actor.
+//! - **Surplus (rows 10-12):** every started surplus auction exists with its close scratch
+//!   cleared; one is live iff the accounting's `surplus_live`; a live one's vault holding holds
+//!   at least `lot_left` (donations may add to it).
 
 use engine_core::{
     actors::collateral_actor,
@@ -18,6 +21,7 @@ use engine_core::{
         AccountingState, AuctionPhase, AuctionState, CollateralState, ConfigState,
         LiquidationRecordState,
     },
+    system_state::{SurplusAuctionState, SystemPhase},
 };
 use lee::Actor;
 
@@ -52,6 +56,7 @@ pub fn check(w: &World) {
     }
     if let Some(accounting) = decoded(w, w.accounting, AccountingState::decode) {
         assert_eq!(accounting.pending, None, "F6: accounting scratch cleared");
+        check_surplus(w, &accounting);
     }
     if let Some(config) = decoded(w, w.config, ConfigState::decode) {
         assert_eq!(config.pending_read, None, "F6: config scratch cleared");
@@ -93,6 +98,37 @@ fn check_auction(w: &World, a: &AuctionState, position: lee::AccountId, nonce: u
     assert!(
         held >= booked,
         "R6: vault holds {held} < booked {booked} (auction {nonce})"
+    );
+}
+
+/// Every surplus auction the accounting has started: its close scratch is cleared, a live one
+/// exists iff `surplus_live` (at most one), and a live one's vault holds at least its lot.
+fn check_surplus(w: &World, acc: &AccountingState) {
+    let mut live = 0_u32;
+    for nonce in 0..acc.surplus_nonce {
+        let s = decoded(w, w.surplus(nonce), SurplusAuctionState::decode)
+            .unwrap_or_else(|| panic!("surplus auction {nonce} of a counted nonce exists"));
+        assert_eq!(
+            (s.config, s.nonce),
+            (w.config.account_id, nonce),
+            "surplus identity"
+        );
+        assert_eq!(s.close, None, "F6: surplus {nonce} close scratch cleared");
+        if s.phase == SystemPhase::Live {
+            live = live.checked_add(1).expect("few auctions");
+            let held = w.stable_balance(w.surplus_vault(nonce).account_id);
+            assert!(
+                held >= s.lot_left,
+                "surplus vault holds {held} < lot {} (auction {nonce})",
+                s.lot_left
+            );
+        }
+    }
+    assert!(live <= 1, "at most one live surplus auction");
+    assert_eq!(
+        live == 1,
+        acc.surplus_live,
+        "a live surplus auction iff surplus_live"
     );
 }
 

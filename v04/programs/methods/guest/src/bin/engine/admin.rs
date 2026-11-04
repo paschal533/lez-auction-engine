@@ -121,16 +121,22 @@ struct InitConfig<'a> {
 
 /// The reference-oracle slot (v0.2.4 `optional_slot` / `check_distinct_slots`): an actor iff
 /// enabled (`ZeroId` when enabled without one, `WrongAccount("unused slot")` when given while
-/// disabled), never zero and never at one of the `distinct` accounts (the stablecoin and the
-/// protocol definitions; `WrongAccount("ref_oracle")`).
-fn ref_oracle_slot(enabled: bool, actor: Option<Actor>, distinct: &[AccountId]) -> Option<Actor> {
+/// disabled), never zero, never at one of the `distinct` accounts (the stablecoin and the
+/// protocol definitions) and never an actor of the token program `token`, so never the buffer's
+/// holding a system op reads beside it (ruling R-3b; `WrongAccount("ref_oracle")`).
+fn ref_oracle_slot(
+    enabled: bool,
+    actor: Option<Actor>,
+    token: AccountId,
+    distinct: &[AccountId],
+) -> Option<Actor> {
     match (enabled, actor) {
         (false, None) => None,
         (true, None) => fail(EngineError::ZeroId),
         (false, Some(_)) => fail(EngineError::WrongAccount("unused slot")),
         (true, Some(oracle)) => {
             nonzero_actor(oracle);
-            if distinct.contains(&oracle.account_id) {
+            if oracle.program_account_id == token || distinct.contains(&oracle.account_id) {
                 fail(EngineError::WrongAccount("ref_oracle"));
             }
             Some(oracle)
@@ -160,6 +166,7 @@ fn init_config(input: &ReceiveInput, c: &InitConfig<'_>) -> Response {
     let ref_oracle = ref_oracle_slot(
         c.params.ref_oracle_enabled,
         c.ref_oracle,
+        c.token,
         &[c.stable_def, protocol_def(engine(input), k)],
     );
     if let Some(genesis) = c.protocol_genesis {
@@ -287,6 +294,7 @@ fn updated_config(
     let ref_oracle = ref_oracle_slot(
         params.ref_oracle_enabled,
         ref_oracle,
+        config.token,
         &[config.stablecoin_definition_id, protocol_def(e, k)],
     );
     check_ref_price_step(

@@ -217,6 +217,69 @@ pub enum EngineMsg {
         now_ms: u64,
         ctx: Box<SystemCtx>,
     },
+    /// 26. Root at the config `K`, permissionless (row 10; v0.2.4 `start_surplus_auction`): `K`
+    ///     asserts the clock claim and sends `System { StartSurplus { nonce } }` to its
+    ///     accounting, which reads the buffer (and the reference oracle), settles, moves the lot
+    ///     into the auction's vault and opens `surplus_actor(E, config, nonce)`.
+    StartSurplus {
+        config: AccountId,
+        nonce: u64,
+        now_ms: u64,
+    },
+    /// 27. Root at `K` (row 11; v0.2.4 `take_surplus`): `taker` pays protocol tokens from its own
+    ///     holding (so it signs) for up to `amount_coin` stablecoin. `K` asserts the clock,
+    ///     probes the auction and sends it `SurplusTake`.
+    TakeSurplus {
+        taker: AccountId,
+        config: AccountId,
+        nonce: u64,
+        amount_coin: u128,
+        max_protocol_in: u128,
+        now_ms: u64,
+    },
+    /// 28. Root at `K`, permissionless (row 12; v0.2.4 `close_surplus_auction`): after the TTL
+    ///     the vault's whole balance returns to the buffer. `K` asserts the clock, probes the
+    ///     auction and sends it `SurplusClose`.
+    CloseSurplus {
+        config: AccountId,
+        nonce: u64,
+        now_ms: u64,
+    },
+    /// 29. Accounting to `surplus_actor(E, config, nonce)` (SURP seed, empty state; a leaf):
+    ///     creates the live auction.
+    SurplusOpen {
+        config: AccountId,
+        nonce: u64,
+        lot: u128,
+        start_ms: u64,
+        ref_ray: u128,
+    },
+    /// 30. Config to its surplus auction: a take with the config's context.
+    SurplusTake {
+        taker: AccountId,
+        amount_coin: u128,
+        max_protocol_in: u128,
+        now_ms: u64,
+        ctx: Box<SystemCtx>,
+    },
+    /// 31. Config to its surplus auction: a close with the config's context.
+    SurplusClose { now_ms: u64, ctx: Box<SystemCtx> },
+    /// 32. Surplus auction to its accounting: `protocol_burned` burned; `ended` if the lot is
+    ///     gone.
+    SurplusTaken {
+        config: AccountId,
+        nonce: u64,
+        protocol_burned: u128,
+        ended: bool,
+        now_ms: u64,
+    },
+    /// 33. Surplus auction to its accounting: closed, `amount` returned to the buffer.
+    SurplusReturned {
+        config: AccountId,
+        nonce: u64,
+        amount: u128,
+        now_ms: u64,
+    },
 }
 
 /// The protocol token's genesis at `Init`: `supply` credited to `to`'s holding.
@@ -235,6 +298,8 @@ pub enum ProbeKind {
     Collateral,
     /// An auction; otherwise `WrongAccount("auction")` (v0.2.4 `load_auction`).
     Auction,
+    /// A surplus auction; otherwise `WrongAccount("surplus_auction")` (v0.2.4 `load_surplus`).
+    Surplus,
 }
 
 /// The clock program's message set (`clock_core::Message` at LEZ v0.4.0-rc1), mirrored so the
@@ -443,10 +508,76 @@ mod tests {
         assert_indices(&internals, usize::from(SEIZED_INDEX));
     }
 
+    /// The surplus auction's variants 26..=33 (Plan 6 Task 4), pinned one by one.
+    #[test]
+    fn surplus_variant_indices_are_fixed() {
+        let (config, nonce, now_ms) = (id(1), 2, 3);
+        let ctx = || {
+            Box::new(SystemCtx::from_config(
+                config,
+                &crate::state::fixtures::config(),
+            ))
+        };
+        let surplus = [
+            EngineMsg::StartSurplus {
+                config,
+                nonce,
+                now_ms,
+            },
+            EngineMsg::TakeSurplus {
+                taker: id(4),
+                config,
+                nonce,
+                amount_coin: 5,
+                max_protocol_in: 6,
+                now_ms,
+            },
+            EngineMsg::CloseSurplus {
+                config,
+                nonce,
+                now_ms,
+            },
+            EngineMsg::SurplusOpen {
+                config,
+                nonce,
+                lot: 4,
+                start_ms: 5,
+                ref_ray: 6,
+            },
+            EngineMsg::SurplusTake {
+                taker: id(4),
+                amount_coin: 5,
+                max_protocol_in: 6,
+                now_ms,
+                ctx: ctx(),
+            },
+            EngineMsg::SurplusClose { now_ms, ctx: ctx() },
+            EngineMsg::SurplusTaken {
+                config,
+                nonce,
+                protocol_burned: 4,
+                ended: true,
+                now_ms,
+            },
+            EngineMsg::SurplusReturned {
+                config,
+                nonce,
+                amount: 4,
+                now_ms,
+            },
+        ];
+        assert_indices(&surplus, 26);
+    }
+
     #[test]
     fn probe_kind_indices_are_fixed() {
         assert_indices(
-            &[ProbeKind::Config, ProbeKind::Collateral, ProbeKind::Auction],
+            &[
+                ProbeKind::Config,
+                ProbeKind::Collateral,
+                ProbeKind::Auction,
+                ProbeKind::Surplus,
+            ],
             0,
         );
     }

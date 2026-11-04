@@ -624,12 +624,15 @@ fn duplicate_buffer_reply_reverts() {
     invariants::check(&w);
 }
 
-/// Routed 2, 6: reports for nonce 1 cannot book against auction 0's or 1's slot. The accounting
-/// re-derives the sender from the reported nonce (`surplus_actor(E, K, 1)`), so `SurplusTaken` /
-/// `SurplusReturned` for nonce 1 from `S(0)`'s account, and `DebtTaken` / `DebtClosed` / `Mint`
-/// for nonce 1 from `D(0)`'s, revert; so do impostors at the never-started `S(1)` / `D(1)`. (The
-/// real `S(0)` / `D(0)` only ever report their own nonce, so the engine-program sender at `S(0)`
-/// with nonce 1 cannot be produced in a transaction.)
+/// Routed 2, 6: cross-nonce reports from impostors at the S/D accounts cannot book. `SurplusTaken`
+/// / `SurplusReturned` for nonce 1 from impostor programs at `S(0)`'s and the never-started
+/// `S(1)`'s accounts, and `DebtTaken` / `DebtClosed` / `Mint` for nonce 1 from impostors at
+/// `D(0)`'s and `D(1)`'s, revert on the program half of the whole-`Actor` sender check (the
+/// sender is not at `E`). The nonce re-derivation itself (the real `S(0)` / `D(0)` reporting
+/// nonce 1, which no transaction can produce) is unit-tested in `engine_core::assertions`:
+/// `surplus_reports_are_accepted_only_from_the_reported_nonces_auction`,
+/// `debt_reports_are_accepted_only_from_the_reported_nonces_auction` and
+/// `mint_is_accepted_only_from_this_configs_debt_actor`.
 #[test]
 fn system_messages_for_another_nonce_cannot_book() {
     let mut w = both_live();

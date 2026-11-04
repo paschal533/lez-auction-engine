@@ -27,7 +27,7 @@ use borsh::BorshDeserialize;
 use engine_core::{
     SystemCtx, SystemOp, SystemPending,
     actors::{accounting_actor, buffer_holding, buffer_seed},
-    assertions::freeze_sender,
+    assertions::{freeze_sender, system_sender},
     check::{expect_root, fail},
     msg::{ClockMsg, EngineMsg},
     solvency::SolvencyDecision,
@@ -111,22 +111,9 @@ fn buffer_reader(e: AccountId, ctx: &SystemCtx) -> Actor {
     holding_actor(ctx.token, buffer.account_id, ctx.stable_def)
 }
 
-/// `System` at the accounting, from exactly its config: start the Read block.
+/// `System` at the accounting, from exactly its config (`system_sender`): start the Read block.
 pub fn on_system(input: &ReceiveInput, op: SystemOp, now_ms: u64, ctx: SystemCtx) -> Response {
-    let e = engine(input);
-    let k = input
-        .from
-        .filter(|from| from.program_account_id == e)
-        .map(|from| from.account_id)
-        .unwrap_or_else(|| fail(EngineError::WrongAccount("accounting")));
-    if input.receiver != accounting_actor(e, k) || ctx.config != k {
-        fail(EngineError::WrongAccount("accounting"));
-    }
-    let acc = AccountingState::decode(input.pre_state.as_ref())
-        .unwrap_or_else(|| fail(EngineError::WrongAccount("accounting")));
-    if acc.pending.is_some() {
-        fail(EngineError::WrongAccount("pending"));
-    }
+    let acc = system_sender(input, ctx.config).unwrap_or_else(|err| fail(err));
     precheck(op, now_ms, &acc);
     let pending = SystemPending {
         op,
@@ -139,7 +126,7 @@ pub fn on_system(input: &ReceiveInput, op: SystemOp, now_ms: u64, ctx: SystemCtx
         .ctx
         .ref_oracle
         .filter(|_| pending.awaits_reference());
-    let buffer = buffer_reader(e, &pending.ctx);
+    let buffer = buffer_reader(engine(input), &pending.ctx);
     let next = AccountingState {
         pending: Some(pending),
         ..acc

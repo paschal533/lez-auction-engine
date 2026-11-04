@@ -27,6 +27,7 @@ use engine_core::{
         accounting_actor, buffer_holding, buffer_seed, surplus_actor, surplus_seed,
         surplus_vault_holding, surplus_vault_seed,
     },
+    assertions::surplus_report_sender,
     check::{expect_from, expect_root, fail},
     msg::EngineMsg,
     state::AccountingState,
@@ -292,19 +293,10 @@ pub fn proceed(input: &ReceiveInput) -> Response {
     response.send_sync(accounting, &returned)
 }
 
-/// The accounting of `config`, receiving from exactly `surplus_actor(E, config, nonce)`.
+/// The accounting of `config`, receiving from exactly `surplus_actor(E, config, nonce)`
+/// (`surplus_report_sender`).
 fn accounting_from(input: &ReceiveInput, config: AccountId, nonce: u64) -> AccountingState {
-    let e = engine(input);
-    expect_from(
-        input,
-        surplus_actor(e, config, nonce),
-        EngineError::WrongAccount("surplus_auction"),
-    );
-    if input.receiver != accounting_actor(e, config) {
-        fail(EngineError::WrongAccount("accounting"));
-    }
-    AccountingState::decode(input.pre_state.as_ref())
-        .unwrap_or_else(|| fail(EngineError::WrongAccount("accounting")))
+    surplus_report_sender(input, config, nonce).unwrap_or_else(|err| fail(err))
 }
 
 /// `SurplusTaken` at the accounting: books the burn; a take that emptied the lot ends the auction.

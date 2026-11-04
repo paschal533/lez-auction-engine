@@ -10,6 +10,10 @@
 //! Also the config's sender checks of the debt auction's `Mint` (row 14) and the accounting's
 //! `Freeze` (row 16), whose account halves (an engine actor that is not this config's debt auction
 //! or accounting) no transaction can reach.
+//!
+//! Likewise the accounting's sender checks of `System` (rows 9-16: the receiver/ctx and pending
+//! halves) and of the surplus and debt auctions' reports (the sender re-derived from the reported
+//! nonce), which no transaction can reach past their program half (Task 7 review, C1).
 
 use auction_engine_params::EngineError;
 use lee_core::{
@@ -18,7 +22,7 @@ use lee_core::{
 };
 
 use crate::{
-    actors::{accounting_actor, collateral_actor, debt_actor},
+    actors::{accounting_actor, collateral_actor, debt_actor, surplus_actor},
     state::{AccountingState, CollateralState, ConfigState},
 };
 
@@ -88,6 +92,79 @@ pub fn freeze_sender(input: &ReceiveInput) -> Result<ConfigState, EngineError> {
         return Err(EngineError::WrongAccount("accounting"));
     }
     Ok(config)
+}
+
+/// `System` at an accounting actor (rows 9-16): the sender must be an actor `(k, E)` of the
+/// receiver's program, the receiver exactly `accounting_actor(E, k)` and the ctx's config `k`
+/// (`WrongAccount("accounting")`); the receiver holds an accounting state, returned
+/// (`WrongAccount("accounting")`), with no system scratch pending (`WrongAccount("pending")`).
+pub fn system_sender(
+    input: &ReceiveInput,
+    ctx_config: AccountId,
+) -> Result<AccountingState, EngineError> {
+    let wrong = EngineError::WrongAccount("accounting");
+    let e = input.receiver.program_account_id;
+    let k = input
+        .from
+        .filter(|from| from.program_account_id == e)
+        .map(|from| from.account_id)
+        .ok_or(wrong)?;
+    if input.receiver != accounting_actor(e, k) || ctx_config != k {
+        return Err(wrong);
+    }
+    let acc = AccountingState::decode(input.pre_state.as_ref()).ok_or(wrong)?;
+    if acc.pending.is_some() {
+        return Err(EngineError::WrongAccount("pending"));
+    }
+    Ok(acc)
+}
+
+/// A report at the accounting of `config` from exactly `expected` (`sender_err`), then the
+/// receiver must be `accounting_actor(E, config)` holding an accounting state, returned
+/// (`WrongAccount("accounting")`).
+fn report_sender(
+    input: &ReceiveInput,
+    config: AccountId,
+    expected: Actor,
+    sender_err: EngineError,
+) -> Result<AccountingState, EngineError> {
+    if input.from != Some(expected) {
+        return Err(sender_err);
+    }
+    let wrong = EngineError::WrongAccount("accounting");
+    if input.receiver != accounting_actor(input.receiver.program_account_id, config) {
+        return Err(wrong);
+    }
+    AccountingState::decode(input.pre_state.as_ref()).ok_or(wrong)
+}
+
+/// `SurplusTaken` / `SurplusReturned { config, nonce }` at the accounting: the sender is exactly
+/// `surplus_actor(E, config, nonce)`, re-derived from the reported nonce
+/// (`WrongAccount("surplus_auction")`); then as [`report_sender`].
+pub fn surplus_report_sender(
+    input: &ReceiveInput,
+    config: AccountId,
+    nonce: u64,
+) -> Result<AccountingState, EngineError> {
+    let s = surplus_actor(input.receiver.program_account_id, config, nonce);
+    report_sender(
+        input,
+        config,
+        s,
+        EngineError::WrongAccount("surplus_auction"),
+    )
+}
+
+/// `DebtTaken` / `DebtClosed { config, nonce }` at the accounting: the sender is exactly
+/// `debt_actor(E, config, nonce)`, re-derived from the reported nonce
+/// (`WrongAccount("debt_auction")`); then as [`report_sender`].
+pub fn debt_report_sender(
+    input: &ReceiveInput,
+    config: AccountId,
+    nonce: u64,
+) -> Result<AccountingState, EngineError> {
+    let d = debt_actor(input.receiver.program_account_id, config, nonce);
+    report_sender(input, config, d, EngineError::WrongAccount("debt_auction"))
 }
 
 #[cfg(test)]
@@ -247,6 +324,130 @@ mod tests {
         assert_eq!(
             freeze_sender(&delivery(k, Some(acc), Vec::new())),
             Err(EngineError::WrongAccount("config"))
+        );
+    }
+
+    /// `System` at `Acc = accounting_actor(E, K)`: only from `K` at `E`, naming `K` in the ctx,
+    /// at `K`'s own accounting, with an accounting state and no scratch; each check in order.
+    #[test]
+    fn system_is_accepted_only_from_the_accountings_own_config() {
+        let (admin, k, k2) = actors();
+        let kid = k.account_id;
+        let acc = accounting_actor(engine(), kid);
+        let idle = AccountingState::new();
+        let at = |receiver, from, state: &AccountingState| delivery(receiver, from, state.encode());
+        let wrong = Err(EngineError::WrongAccount("accounting"));
+        // Program half: a root delivery, or a sender not at E (even at K's account).
+        for from in [None, Some(Actor::new(kid, id(77))), Some(admin)] {
+            assert_eq!(system_sender(&at(acc, from, &idle), kid), wrong, "{from:?}");
+        }
+        // Receiver half: `K` at E sending to another config's accounting (or to itself).
+        for receiver in [accounting_actor(engine(), k2.account_id), k] {
+            assert_eq!(
+                system_sender(&at(receiver, Some(k), &idle), kid),
+                wrong,
+                "{receiver:?}"
+            );
+        }
+        // Another config K2 at E, at K's accounting.
+        assert_eq!(system_sender(&at(acc, Some(k2), &idle), kid), wrong);
+        // Ctx half: the right sender and receiver, a ctx naming another config.
+        assert_eq!(
+            system_sender(&at(acc, Some(k), &idle), k2.account_id),
+            wrong
+        );
+        // No accounting state.
+        assert_eq!(
+            system_sender(&delivery(acc, Some(k), Vec::new()), kid),
+            wrong
+        );
+        // A scratch still pending.
+        let busy = AccountingState {
+            pending: Some(crate::SystemPending {
+                op: crate::SystemOp::SettleDebt { amount: 1 },
+                now_ms: 0,
+                ctx: crate::SystemCtx::from_config(kid, &crate::state::fixtures::config()),
+                buffer: None,
+                reference: None,
+            }),
+            ..AccountingState::new()
+        };
+        assert_eq!(
+            system_sender(&at(acc, Some(k), &busy), kid),
+            Err(EngineError::WrongAccount("pending"))
+        );
+        assert_eq!(system_sender(&at(acc, Some(k), &idle), kid), Ok(idle));
+    }
+
+    /// Shared body of the two report-sender tests: `check` accepts a report for nonce 3 at `K`'s
+    /// accounting only from `own(E, K, 3)` (`sender_err` otherwise: a root delivery, `K`, another
+    /// nonce's auction, another config's, an impostor program at `own`'s account, or the right
+    /// auction reporting another nonce), then needs that receiver and an accounting state.
+    fn report_sender_cases(
+        own: fn(AccountId, AccountId, u64) -> Actor,
+        check: fn(&ReceiveInput, AccountId, u64) -> Result<AccountingState, EngineError>,
+        sender_err: EngineError,
+    ) {
+        let (_, k, k2) = actors();
+        let (e, kid) = (engine(), k.account_id);
+        let acc = accounting_actor(e, kid);
+        let reporter = own(e, kid, 3);
+        let books = AccountingState::new();
+        let foreign = [
+            None,
+            Some(k),
+            Some(own(e, kid, 4)),
+            Some(own(e, kid, 2)),
+            Some(own(e, k2.account_id, 3)),
+            Some(Actor::new(reporter.account_id, id(77))),
+        ];
+        for from in foreign {
+            assert_eq!(
+                check(&delivery(acc, from, books.encode()), kid, 3),
+                Err(sender_err),
+                "{from:?}"
+            );
+        }
+        // The real auction 3, reporting nonce 4: the sender is re-derived from the nonce.
+        assert_eq!(
+            check(&delivery(acc, Some(reporter), books.encode()), kid, 4),
+            Err(sender_err)
+        );
+        // The right reporter, at another config's accounting (or at K itself).
+        for receiver in [accounting_actor(e, k2.account_id), k] {
+            assert_eq!(
+                check(&delivery(receiver, Some(reporter), books.encode()), kid, 3),
+                Err(EngineError::WrongAccount("accounting")),
+                "{receiver:?}"
+            );
+        }
+        assert_eq!(
+            check(&delivery(acc, Some(reporter), Vec::new()), kid, 3),
+            Err(EngineError::WrongAccount("accounting"))
+        );
+        assert_eq!(
+            check(&delivery(acc, Some(reporter), books.encode()), kid, 3),
+            Ok(books)
+        );
+    }
+
+    /// `SurplusTaken` / `SurplusReturned` for nonce `n`: only from `surplus_actor(E, K, n)`.
+    #[test]
+    fn surplus_reports_are_accepted_only_from_the_reported_nonces_auction() {
+        report_sender_cases(
+            surplus_actor,
+            surplus_report_sender,
+            EngineError::WrongAccount("surplus_auction"),
+        );
+    }
+
+    /// `DebtTaken` / `DebtClosed` for nonce `n`: only from `debt_actor(E, K, n)`.
+    #[test]
+    fn debt_reports_are_accepted_only_from_the_reported_nonces_auction() {
+        report_sender_cases(
+            debt_actor,
+            debt_report_sender,
+            EngineError::WrongAccount("debt_auction"),
         );
     }
 }

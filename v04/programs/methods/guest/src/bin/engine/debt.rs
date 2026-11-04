@@ -22,7 +22,7 @@ use auction_engine_params::EngineError;
 use engine_core::{
     SystemCtx, SystemOp, SystemPending,
     actors::{accounting_actor, buffer_holding, buffer_seed, debt_actor, debt_seed, protocol_def},
-    assertions::mint_sender,
+    assertions::{debt_report_sender, mint_sender},
     check::{expect_from, expect_root, fail},
     msg::EngineMsg,
     state::{AccountingState, ConfigState},
@@ -300,19 +300,10 @@ fn on_close(input: &ReceiveInput, now_ms: u64, ctx: &SystemCtx) -> Response {
     Response::set_state(next.encode()).send_sync(accounting_actor(engine(input), d.config), &closed)
 }
 
-/// The accounting of `config`, receiving from exactly `debt_actor(E, config, nonce)`.
+/// The accounting of `config`, receiving from exactly `debt_actor(E, config, nonce)`
+/// (`debt_report_sender`).
 fn accounting_from(input: &ReceiveInput, config: AccountId, nonce: u64) -> AccountingState {
-    let e = engine(input);
-    expect_from(
-        input,
-        debt_actor(e, config, nonce),
-        EngineError::WrongAccount("debt_auction"),
-    );
-    if input.receiver != accounting_actor(e, config) {
-        fail(EngineError::WrongAccount("accounting"));
-    }
-    AccountingState::decode(input.pre_state.as_ref())
-        .unwrap_or_else(|| fail(EngineError::WrongAccount("accounting")))
+    debt_report_sender(input, config, nonce).unwrap_or_else(|err| fail(err))
 }
 
 /// `DebtTaken` at the accounting: `record_debt_take(filled)`, the mint booked; a take that

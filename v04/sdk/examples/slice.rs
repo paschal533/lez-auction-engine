@@ -462,6 +462,8 @@ async fn engine_up(live: &mut Live, s: &Setup, slack_ms: u64) -> Res<Deployment>
         oracle: s.oracle,
         clock: Actor::new(CLOCK_01_PROGRAM_ACCOUNT_ID, clock_core::clock_account_id()),
         slack_ms,
+        ref_oracle: None,
+        protocol_genesis: None,
     };
     let init = sdk::plan_init(s.p.engine, admin.account, args)?;
     live.run("engine: Init", &init).await?;

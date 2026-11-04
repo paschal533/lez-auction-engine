@@ -112,6 +112,8 @@ fn plans_declare_every_touched_actor() {
             oracle: w.oracle,
             clock: w.chain.clock(),
             slack_ms: SLACK_MS,
+            ref_oracle: None,
+            protocol_genesis: None,
         },
     )
     .expect("init plan");

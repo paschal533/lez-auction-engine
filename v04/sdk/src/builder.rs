@@ -15,9 +15,9 @@ use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use engine_core::{
     actors::{
         accounting_actor, auction_actor, buffer_holding, collateral_actor, config_actor,
-        record_actor, vault_holding,
+        protocol_def, record_actor, vault_holding,
     },
-    msg::EngineMsg,
+    msg::{EngineMsg, ProtocolGenesis},
     state::ConfigState,
 };
 use lee::{AccountId, Actor, PublicAccountEvidence};
@@ -173,6 +173,10 @@ pub struct InitArgs {
     pub oracle: Actor,
     pub clock: Actor,
     pub slack_ms: u64,
+    /// The reference oracle, present iff `params.ref_oracle_enabled`.
+    pub ref_oracle: Option<Actor>,
+    /// The protocol token's genesis supply and recipient, if any.
+    pub protocol_genesis: Option<ProtocolGenesis>,
 }
 
 /// The keeper's `Liquidate`.
@@ -201,7 +205,8 @@ pub struct BidArgs {
 }
 
 /// `Init` at the admin's proxy `(admin, E)`, signed by the admin: proxy, config, oracle,
-/// accounting.
+/// accounting, the protocol definition `(protocol_def(E, K), T)` and, with a genesis, its
+/// recipient's holding (a fresh holding is granted by the token's `Credit`, so no evidence).
 ///
 /// # Errors
 /// [`SdkError::Encode`] if the message does not encode.
@@ -209,7 +214,18 @@ pub fn plan_init(engine: AccountId, admin: AccountId, args: InitArgs) -> Result<
     let config = config_actor(engine, admin, args.salt);
     let accounting = accounting_actor(engine, config.account_id);
     let proxy = Actor::new(admin, engine);
-    let actors = vec![proxy, config, args.oracle, accounting];
+    let definition = protocol_def(engine, config.account_id);
+    let mut actors = vec![
+        proxy,
+        config,
+        args.oracle,
+        accounting,
+        Actor::new(definition, args.token),
+    ];
+    actors.extend(
+        args.protocol_genesis
+            .map(|genesis| holding_actor(args.token, genesis.to, definition)),
+    );
     let msg = EngineMsg::Init {
         salt: args.salt,
         params: Box::new(args.params),
@@ -219,6 +235,8 @@ pub fn plan_init(engine: AccountId, admin: AccountId, args: InitArgs) -> Result<
         oracle: args.oracle,
         clock: args.clock,
         slack_ms: args.slack_ms,
+        ref_oracle: args.ref_oracle,
+        protocol_genesis: args.protocol_genesis,
     };
     Plan::new(proxy, actors, vec![admin], Vec::new(), &msg)
 }

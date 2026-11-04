@@ -2,14 +2,16 @@
 //! message is for follows from the message, its sender and the receiver's address, never from a
 //! caller-supplied account list.
 //!
-//! - `proxy`: root `Init` / `SetCollateral` / `Liquidate` / `ClaimLeftover` at the signer's own engine actor
-//!   `(signer, E)`, forwarded only if the signer signed (Proxy block).
-//! - `admin`: the config, accounting and collateral handlers of `Init` / `SetCollateral`, each
-//!   accepting only the one actor that may send it (Relay block, whole-actor checks).
+//! - `proxy`: root `Init` / `SetEngineParams` / `SetCollateral` / `Liquidate` / `ClaimLeftover` at
+//!   the signer's own engine actor `(signer, E)`, forwarded only if the signer signed (Proxy
+//!   block).
+//! - `admin`: the config, accounting and collateral handlers of `Init` / `SetEngineParams` /
+//!   `SetCollateral` (with the protocol definition, `AssertCapAtMost` and `AssertSystemIdle`),
+//!   each accepting only the one actor that may send it (Relay block, whole-actor checks).
 //! - `read`: the config's oracle read at `Init` (Read block), the `Proceed` sentinels, and the
 //!   routing of every `StateReply` to the actor kind awaiting it.
 //! - `observe`: the collateral actor's Observe block (host and oracle reads, clock assert,
-//!   `Proceed`), run by `SetCollateral` and `Liquidate`.
+//!   `Proceed`), run by `SetCollateral`, root `ObserveFeed`, `Liquidate` and `Bid`.
 //! - `liquidate`: the config's liquidation context, the record's `Bump`, and the reservations.
 //! - `auction`: the auction's `Open`, `Seized` (the quote), vault check and `Finish` sentinel.
 //! - `bid`: root `Bid` at the collateral actor (Observe), the auction's `BidCtx` (quote, token
@@ -252,5 +254,15 @@ fn handle_message(input: &ReceiveInput) -> Response {
             position,
             nonce,
         } => settle::on_settle_empty(input, config, position, nonce),
+        EngineMsg::SetEngineParams { .. } => admin::on_set_engine_params(input, &message),
+        EngineMsg::ObserveFeed {
+            config,
+            collateral_def,
+            now_ms,
+        } => observe::on_observe_feed(input, config, collateral_def, now_ms),
+        EngineMsg::AssertCapAtMost { global_cap } => {
+            admin::on_assert_cap_at_most(input, global_cap)
+        }
+        EngineMsg::AssertSystemIdle => admin::on_assert_system_idle(input),
     }
 }

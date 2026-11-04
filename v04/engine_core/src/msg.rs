@@ -15,7 +15,11 @@ pub const SEIZED_INDEX: u8 = 5;
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum EngineMsg {
     // Root variants (0-4): sent by a transaction, at a proxy `(signer, E)` or at the actor itself.
-    /// 0. Creates the config at the config actor, then `Accounting`.
+    /// 0. Creates the config at the config actor, then `Accounting` and the protocol token's
+    ///    definition `(protocol_def(E, K), T)` with minter `K`, its genesis supply credited to
+    ///    `protocol_genesis.to` (none without a genesis). The config names that definition only
+    ///    while `params.protocol_token_enabled`; `ref_oracle` fills the reference-oracle slot,
+    ///    present iff `params.ref_oracle_enabled`.
     Init {
         salt: u64,
         params: Box<EngineParamsArgs>,
@@ -25,6 +29,8 @@ pub enum EngineMsg {
         oracle: Actor,
         clock: Actor,
         slack_ms: u64,
+        ref_oracle: Option<Actor>,
+        protocol_genesis: Option<ProtocolGenesis>,
     },
     /// 1. Sets (or replaces) a collateral type's parameters, then observes the feed with the new
     ///    admin flag at the clock claim `now_ms` (row 2).
@@ -171,6 +177,38 @@ pub enum EngineMsg {
         position: AccountId,
         nonce: u64,
     },
+    /// 20. Root at the admin's proxy (row 1; v0.2.4 `set_engine_params`): a seeded
+    ///     `Probe { Config }`, then this message unseeded to the config, which validates and writes
+    ///     the parameters, then asks the collateral actor of its recorded type (if any, behind a
+    ///     seeded `Probe { Collateral }`) for `AssertCapAtMost`, and, if the protocol token, the
+    ///     reference oracle or the system parameters change, the accounting for
+    ///     `AssertSystemIdle`. `slack_ms` and the actors fixed at `Init` are not settable.
+    SetEngineParams {
+        salt: u64,
+        params: Box<EngineParamsArgs>,
+        ref_oracle: Option<Actor>,
+    },
+    /// 21. Root at `collateral_actor(E, config, collateral_def)`, permissionless (row 3; v0.2.4
+    ///     `observe_feed`): observes the feed at the clock claim `now_ms` and records the pause
+    ///     clock; a stale feed is recorded, not refused.
+    ObserveFeed {
+        config: AccountId,
+        collateral_def: AccountId,
+        now_ms: u64,
+    },
+    /// 22. Config to collateral actor: the type's cap must not exceed `global_cap`
+    ///     (`TypeCapAboveGlobal`). Sends nothing.
+    AssertCapAtMost { global_cap: u128 },
+    /// 23. Config to accounting: no surplus or debt auction may be live
+    ///     (`ProtocolTokenLocked`). Sends nothing.
+    AssertSystemIdle,
+}
+
+/// The protocol token's genesis at `Init`: `supply` credited to `to`'s holding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ProtocolGenesis {
+    pub to: AccountId,
+    pub supply: u128,
 }
 
 /// What a [`EngineMsg::Probe`] expects at its receiver.
@@ -222,6 +260,11 @@ mod tests {
                 oracle: Actor::new(id(5), id(6)),
                 clock: Actor::new(id(7), id(8)),
                 slack_ms: 9,
+                ref_oracle: Some(Actor::new(id(10), id(11))),
+                protocol_genesis: Some(ProtocolGenesis {
+                    to: id(12),
+                    supply: 13,
+                }),
             },
             EngineMsg::SetCollateral {
                 salt: 1,
@@ -267,7 +310,7 @@ mod tests {
         }
     }
 
-    /// The internal variants 5..=19 are wire format too (appended only): pinned one by one.
+    /// The variants 5..=23 are wire format too (appended only): pinned one by one.
     #[test]
     fn internal_variant_indices_are_fixed() {
         use crate::state::fixtures::{actor, coll};
@@ -356,8 +399,20 @@ mod tests {
                 position,
                 nonce,
             },
+            EngineMsg::SetEngineParams {
+                salt: 1,
+                params: Box::new(EngineParamsArgs::defaults_for_tests()),
+                ref_oracle: Some(actor(4, 5)),
+            },
+            EngineMsg::ObserveFeed {
+                config: id(3),
+                collateral_def: id(4),
+                now_ms: 5,
+            },
+            EngineMsg::AssertCapAtMost { global_cap: 3 },
+            EngineMsg::AssertSystemIdle,
         ];
-        assert_eq!(internals.len(), 15, "variants 5..=19");
+        assert_eq!(internals.len(), 19, "variants 5..=23");
         assert_indices(&internals, usize::from(SEIZED_INDEX));
     }
 

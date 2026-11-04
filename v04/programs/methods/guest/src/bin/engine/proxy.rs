@@ -3,7 +3,8 @@
 //! PDA seed). The stateless proxy forwards the message, and the receiver checks it came from
 //! exactly `(signer, E)`:
 //!
-//! - `Init` / `SetCollateral` (admin) go to the signer's config `config_actor(E, signer, salt)`;
+//! - `Init` / `SetCollateral` / `SetEngineParams` (admin) go to the signer's config
+//!   `config_actor(E, signer, salt)`;
 //! - `Liquidate` (keeper, row 4) goes to the named collateral actor
 //!   `collateral_actor(E, config, def)`, which takes the keeper from the proxy's account;
 //! - `ClaimLeftover` (owner, row 8) goes to the named auction, which accepts it only from
@@ -37,9 +38,9 @@ use lee_core::{
 /// handlers refuse a message without a sender.
 pub fn root(input: &ReceiveInput, message: &EngineMsg) -> Option<Response> {
     match message {
-        EngineMsg::Init { salt, .. } | EngineMsg::SetCollateral { salt, .. } => {
-            Some(forward_admin(input, message, *salt))
-        }
+        EngineMsg::Init { salt, .. }
+        | EngineMsg::SetCollateral { salt, .. }
+        | EngineMsg::SetEngineParams { salt, .. } => Some(forward_admin(input, message, *salt)),
         EngineMsg::Liquidate {
             config,
             collateral_def,
@@ -61,12 +62,13 @@ pub fn root(input: &ReceiveInput, message: &EngineMsg) -> Option<Response> {
     }
 }
 
-/// Forwards a root `Init` / `SetCollateral` to the signer's config.
+/// Forwards a root `Init` / `SetCollateral` / `SetEngineParams` to the signer's config.
 ///
 /// `Init`: the seeded `Init` creates the config (and sends nothing), then the unseeded `InitReads`
-/// runs its reads and creates the accounting. `SetCollateral`: a seeded `Probe` makes a missing
-/// config fail with the engine's v0.2.4 `WrongAccount("config")` rather than LEZ's admission
-/// error, then the unseeded `SetCollateral` follows.
+/// runs its reads and creates the accounting and the protocol definition. `SetCollateral` /
+/// `SetEngineParams`: a seeded `Probe` makes a missing config fail with the engine's v0.2.4
+/// `WrongAccount("config")` rather than LEZ's admission error, then the unseeded message
+/// follows.
 fn forward_admin(input: &ReceiveInput, message: &EngineMsg, salt: u64) -> Response {
     if !input.is_authorized {
         fail(EngineError::NotAdmin);

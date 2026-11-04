@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod actors;
+pub mod assertions;
 pub mod bid;
 pub mod check;
 pub mod feed;

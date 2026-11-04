@@ -8,10 +8,12 @@
 //! - **Reservations:** the collateral actor's `type_reserved` and the config's `global_reserved`
 //!   both equal the sum of `reserved_amount` over live (`Auctioning`) auctions (inv. 2/7).
 //! - **F6:** every auction is `Auctioning` or `Settled`, never `AwaitingSeize`, and no engine
-//!   scratch (`pending_read`, `pending`, `scratch`) survives a transaction.
+//!   scratch (`pending_read`, `pending_genesis`, `pending`, `scratch`) survives a transaction.
+//! - **R-F3:** the config's recorded collateral type, if any, has its collateral actor.
 
-use engine_core::state::{
-    AuctionPhase, AuctionState, CollateralState, ConfigState, LiquidationRecordState,
+use engine_core::{
+    actors::collateral_actor,
+    state::{AuctionPhase, AuctionState, CollateralState, ConfigState, LiquidationRecordState},
 };
 use lee::Actor;
 
@@ -46,6 +48,14 @@ pub fn check(w: &World) {
     }
     if let Some(config) = decoded(w, w.config, ConfigState::decode) {
         assert_eq!(config.pending_read, None, "F6: config scratch cleared");
+        assert_eq!(config.pending_genesis, None, "F6: config genesis consumed");
+        if let Some(def) = config.collateral_def {
+            let recorded = collateral_actor(w.engine, w.config.account_id, def);
+            assert!(
+                decoded(w, recorded, CollateralState::decode).is_some(),
+                "R-F3: the config's recorded collateral type exists"
+            );
+        }
         assert_eq!(
             config.global_reserved, live_reserved,
             "reservations: global_reserved == sum over live auctions"

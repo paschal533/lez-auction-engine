@@ -69,6 +69,21 @@ pub fn vault_seed(auction: AccountId) -> PdaSeed {
     seed(&[&seed_from_str("VAULT"), auction.value()])
 }
 
+/// `["PROTOCOL", config]`: the protocol token's definition account. New in the port (v0.2.4's
+/// `MINT_AUTH` is retired by ADR-056); the config grants it on the `NewDefinition` it sends at
+/// `Init`.
+#[must_use]
+pub fn protocol_def_seed(config: AccountId) -> PdaSeed {
+    seed(&[&seed_from_str("PROTOCOL"), config.value()])
+}
+
+/// The protocol token's definition account `pda(E, ["PROTOCOL", config])`; its definition state
+/// is the token actor `(protocol_def, T)`, minter `(config, E)`.
+#[must_use]
+pub fn protocol_def(engine: AccountId, config: AccountId) -> AccountId {
+    AccountId::for_public_pda(&engine, &protocol_def_seed(config))
+}
+
 /// Config actor `(pda(E, CONFIG), E)`.
 #[must_use]
 pub fn config_actor(engine: AccountId, admin: AccountId, salt: u64) -> Actor {
@@ -175,6 +190,11 @@ mod tests {
                 sha(&[&lit("AUCTION"), config.value(), position.value(), &le(7)]),
             ),
             (vault_seed(auction), sha(&[&lit("VAULT"), auction.value()])),
+            // New in the 0.4 port (v0.2.4's `MINT_AUTH` is retired by ADR-056).
+            (
+                protocol_def_seed(config),
+                sha(&[&lit("PROTOCOL"), config.value()]),
+            ),
         ];
         for (seed, expected) in cases {
             assert_eq!(seed.as_bytes(), &expected);
@@ -213,6 +233,10 @@ mod tests {
         assert_eq!(
             buffer_holding(engine, token, config),
             Actor::new(derive(buffer_seed(config)), token)
+        );
+        assert_eq!(
+            protocol_def(engine, config),
+            derive(protocol_def_seed(config))
         );
     }
 }

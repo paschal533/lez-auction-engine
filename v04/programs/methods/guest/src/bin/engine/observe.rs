@@ -1,5 +1,6 @@
 //! Observe block at the collateral actor `C = collateral_actor(E, config, def)` (design note §4.1,
-//! v0.2.4 `feed.rs` / `observe.rs`), shared by `SetCollateral`, `Liquidate` and `Bid`:
+//! v0.2.4 `feed.rs` / `observe.rs`), shared by `SetCollateral`, `ObserveFeed`, `Liquidate` and
+//! `Bid`:
 //!
 //! 1. `start` stores a [`PendingObserve`] and sends `ReadState` to the host params actor
 //!    (redemption price; its oracle must be ours, ADR-028, and its collateral definition the
@@ -65,6 +66,24 @@ pub fn on_observe(input: &ReceiveInput, now_ms: u64) -> Response {
         .unwrap_or_else(|| fail(EngineError::WrongAccount("coll_config")));
     let config = Actor::new(coll.config, engine(input));
     expect_from(input, config, EngineError::NotAdmin);
+    start(input, coll, now_ms, ObserveThen::Record)
+}
+
+/// Root `ObserveFeed` at the named collateral actor, permissionless (row 3; v0.2.4
+/// `observe_feed`): observe at the clock claim `now_ms` and only record the pause clock, so a
+/// stale feed is recorded rather than refused. No probe: an unconfigured type is an absent
+/// actor, which LEZ refuses to admit before the engine runs.
+pub fn on_observe_feed(
+    input: &ReceiveInput,
+    config: AccountId,
+    collateral_def: AccountId,
+    now_ms: u64,
+) -> Response {
+    if input.receiver != collateral_actor(engine(input), config, collateral_def) {
+        fail(EngineError::WrongAccount("coll_config"));
+    }
+    let coll = CollateralState::decode(input.pre_state.as_ref())
+        .unwrap_or_else(|| fail(EngineError::WrongAccount("coll_config")));
     start(input, coll, now_ms, ObserveThen::Record)
 }
 

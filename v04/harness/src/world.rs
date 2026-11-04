@@ -7,10 +7,11 @@
 use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use engine_core::{
     actors::{
-        accounting_actor, auction_actor, collateral_actor, config_actor, record_actor,
-        vault_holding,
+        accounting_actor, auction_actor, collateral_actor, config_actor, protocol_def,
+        record_actor, vault_holding,
     },
-    msg::EngineMsg,
+    msg::{EngineMsg, ProtocolGenesis},
+    state::ConfigState,
 };
 use lee::{AccountId, Actor, PrivateKey, error::LeeError};
 use lee_core::program::TransactionEvent;
@@ -237,8 +238,19 @@ impl World {
         self.init_msg_with(Self::engine_params())
     }
 
-    /// `Init` for salt [`SALT`] with `params`.
+    /// `Init` for salt [`SALT`] with `params`, no reference oracle and no protocol genesis.
     pub fn init_msg_with(&self, params: EngineParamsArgs) -> EngineMsg {
+        self.init_msg_full(params, None, None)
+    }
+
+    /// `Init` for salt [`SALT`] with `params`, the reference oracle `ref_oracle` and the protocol
+    /// token's genesis `genesis`.
+    pub fn init_msg_full(
+        &self,
+        params: EngineParamsArgs,
+        ref_oracle: Option<Actor>,
+        genesis: Option<ProtocolGenesis>,
+    ) -> EngineMsg {
         EngineMsg::Init {
             salt: SALT,
             params: Box::new(params),
@@ -248,7 +260,40 @@ impl World {
             oracle: self.oracle,
             clock: self.chain.clock(),
             slack_ms: SLACK_MS,
+            ref_oracle,
+            protocol_genesis: genesis,
         }
+    }
+
+    /// `SetEngineParams` for salt [`SALT`] with `params` and the reference oracle `ref_oracle`.
+    pub fn set_engine_params_msg(
+        &self,
+        params: EngineParamsArgs,
+        ref_oracle: Option<Actor>,
+    ) -> EngineMsg {
+        EngineMsg::SetEngineParams {
+            salt: SALT,
+            params: Box::new(params),
+            ref_oracle,
+        }
+    }
+
+    /// The protocol token's definition account of the world's config, `protocol_def(E, K)`.
+    pub fn protocol_def(&self) -> AccountId {
+        protocol_def(self.engine, self.config.account_id)
+    }
+
+    /// The permissionless root `ObserveFeed` of the world's collateral at the collateral actor,
+    /// claiming `now_ms`: collateral actor, host params, oracle, clock; no signer.
+    pub fn observe_feed(&mut self, now_ms: u64) -> Result<Vec<TransactionEvent>, LeeError> {
+        let msg = EngineMsg::ObserveFeed {
+            config: self.config.account_id,
+            collateral_def: self.collateral_def,
+            now_ms,
+        };
+        let root = self.collateral;
+        let actors = [root, self.params, self.oracle, self.chain.clock()];
+        self.chain.send(root, &actors, &[], &msg)
     }
 
     /// `SetCollateral` of the world's collateral definition for salt [`SALT`], claiming the
@@ -268,10 +313,44 @@ impl World {
     /// For a message that is not sent through the proxy.
     pub fn proxy_actors(&self, proxy: AccountId, msg: &EngineMsg) -> Vec<Actor> {
         let at = Actor::new(proxy, self.engine);
-        if let EngineMsg::Init { salt, oracle, .. } = msg {
+        if let EngineMsg::Init {
+            salt,
+            oracle,
+            token,
+            protocol_genesis,
+            ..
+        } = msg
+        {
             let config = config_actor(self.engine, proxy, *salt);
             let accounting = accounting_actor(self.engine, config.account_id);
-            return vec![at, config, *oracle, accounting];
+            // The protocol definition, and the genesis holding its supply is credited to.
+            let definition = protocol_def(self.engine, config.account_id);
+            let mut actors = vec![
+                at,
+                config,
+                *oracle,
+                accounting,
+                Actor::new(definition, *token),
+            ];
+            actors.extend(
+                protocol_genesis.map(|genesis| holding_actor(*token, genesis.to, definition)),
+            );
+            return actors;
+        }
+        if let EngineMsg::SetEngineParams { salt, .. } = msg {
+            // The accounting (`AssertSystemIdle`) and the config's recorded collateral type
+            // (`AssertCapAtMost`), read from the config's state.
+            let config = config_actor(self.engine, proxy, *salt);
+            let accounting = accounting_actor(self.engine, config.account_id);
+            let mut actors = vec![at, config, accounting];
+            let recorded = self
+                .chain
+                .raw_state(config)
+                .and_then(|bytes| ConfigState::decode(&bytes))
+                .and_then(|state| state.collateral_def);
+            actors
+                .extend(recorded.map(|def| collateral_actor(self.engine, config.account_id, def)));
+            return actors;
         }
         if let EngineMsg::SetCollateral {
             salt,

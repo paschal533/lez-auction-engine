@@ -362,12 +362,13 @@ fn liquidate_needs_the_keeper_signature_and_a_configured_collateral() {
     invariants::check(&w);
 }
 
-/// Ruling R-F2: a collateral type must be the one the bound host holds. The Observe block fails
-/// `HostMismatch` unless the host's `params.collateral_def` is the type's definition, so a second
-/// type on the same config (here the stablecoin definition) can never be configured, and so never
-/// liquidated: otherwise the engine would price and auction the host's collateral under another
-/// type's parameters. The check sits in the Observe reply branch every `SetCollateral` and
-/// `Liquidate` runs; it fires first at `SetCollateral`, before a mismatched type can exist.
+/// Rulings R-F2 / R-F3: a collateral type must be the one the bound host holds, and a config has
+/// one type. A second type on the same config (here the stablecoin definition) is refused at the
+/// config, `WrongAccount("collateral_def")`, because its first `SetCollateral` recorded the type;
+/// behind that, the Observe block fails `HostMismatch` unless the host's `params.collateral_def`
+/// is the type's definition. So the type can never be configured, and so never liquidated:
+/// otherwise the engine would price and auction the host's collateral under another type's
+/// parameters.
 #[test]
 fn collateral_type_the_host_does_not_hold_is_refused() {
     let (mut w, position) = world_with_position();
@@ -382,10 +383,24 @@ fn collateral_type_the_host_does_not_hold_is_refused() {
     };
     expect_revert(
         w.send_engine(w.admin, &[&key], &set),
-        &fail_text(EngineError::HostMismatch),
+        &fail_text(EngineError::WrongAccount("collateral_def")),
     );
     assert_eq!(w.chain.raw_state(other), None);
     invariants::check(&w);
+    // R-F2 on its own: a fresh config bound to the same host, whose first type is the stablecoin.
+    let (fresh_key, fresh) = w.chain.key("fresh-admin");
+    w.chain.fund(fresh, 1);
+    let init = w.init_msg();
+    w.send_engine(fresh, &[&fresh_key], &init)
+        .expect("a fresh config");
+    let fresh_config = engine_core::actors::config_actor(w.engine, fresh, harness::world::SALT);
+    let fresh_other =
+        engine_core::actors::collateral_actor(w.engine, fresh_config.account_id, second);
+    expect_revert(
+        w.send_engine(fresh, &[&fresh_key], &set),
+        &fail_text(EngineError::HostMismatch),
+    );
+    assert_eq!(w.chain.raw_state(fresh_other), None);
 
     let liquidate = EngineMsg::Liquidate {
         config: w.config.account_id,

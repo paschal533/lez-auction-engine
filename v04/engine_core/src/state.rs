@@ -15,6 +15,7 @@ use auction_engine_params::EngineError;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::{AccountId, Actor};
 
+use crate::msg::ProtocolGenesis;
 pub use crate::scratch::{
     AuctionScratch, BidRequestRec, ObserveThen, OracleReadingRec, PendingObserve, QuoteCtx,
 };
@@ -161,6 +162,13 @@ pub struct ConfigState {
     /// Set by the handler that sends the `ReadState`, cleared by the reply, and asserted `None`
     /// by the `Proceed` sentinel, so it is `None` in every committed state.
     pub pending_read: Option<Actor>,
+    /// `Init` scratch: the protocol token's genesis, from `Init` (which sends nothing) to
+    /// `InitReads` (which creates the definition and clears it), so `None` in every committed
+    /// state.
+    pub pending_genesis: Option<ProtocolGenesis>,
+    /// The config's one collateral type (ruling R-F3), recorded by its first `SetCollateral`;
+    /// `SetEngineParams` checks this type's cap against a new global cap.
+    pub collateral_def: Option<AccountId>,
 }
 tagged_state!(ConfigState, TAG_CONFIG);
 
@@ -528,6 +536,8 @@ pub(crate) mod fixtures {
             bad_debt_freeze_threshold: 600,
             system: sys(),
             pending_read: None,
+            pending_genesis: None,
+            collateral_def: None,
         }
     }
 

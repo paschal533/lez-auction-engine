@@ -2,6 +2,7 @@
 //! program that speaks as whichever actor `(account, Impostor)` it sits at, stands in as a bound
 //! host, or replays a script (see `programs/methods/guest/src/bin/impostor.rs`).
 
+use auction_engine_params::args::EngineParamsArgs;
 use borsh::BorshSerialize;
 use engine_core::{
     actors::{auction_actor, collateral_actor, config_actor, record_actor, vault_holding},
@@ -10,7 +11,7 @@ use engine_core::{
 use lee::{AccountId, Actor, PrivateKey, error::LeeError};
 use lee_core::program::TransactionEvent;
 use mock_host_core::{Params, TAG_PARAMS};
-use token_core::TokenMsg;
+use token_core::{TokenMsg, holding_actor};
 
 use crate::{
     World,
@@ -78,6 +79,46 @@ impl World {
         actor
     }
 
+    /// The impostor at `account`, storing `state` if given (unsigned). An actor can only sit at an
+    /// existing account, so an absent `account` is force-created first; an existing one is kept.
+    pub fn impostor_at(&mut self, account: AccountId, state: Option<Vec<u8>>) -> Actor {
+        if !self.chain.account_exists(account) {
+            self.chain.fund(account, 1);
+        }
+        let actor = self.impostor(account);
+        if let Some(state) = state {
+            self.chain
+                .send(actor, &[actor], &[], &ImpostorMsg::SetState(state))
+                .expect("the impostor stores its state");
+        }
+        actor
+    }
+
+    /// An attacker's own config of the engine whose token program is the impostor: the signer
+    /// `label`'s `Init` (salt [`SALT`]) with `params`, the world's host, oracle and stablecoin.
+    /// Every holding its system ops read is then an impostor actor the attacker scripts
+    /// ([`World::impostor_holding`]), which lets a test answer the engine's reads at will.
+    /// Returns the config actor.
+    pub fn impostor_token_config(&mut self, label: &str, params: EngineParamsArgs) -> Actor {
+        let (key, admin) = self.chain.key(label);
+        if !self.chain.account_exists(admin) {
+            self.chain.fund(admin, 1);
+        }
+        let mut init = self.init_msg_with(params);
+        if let EngineMsg::Init { token, .. } = &mut init {
+            *token = self.chain.program("impostor");
+        }
+        self.send_engine(admin, &[&key], &init)
+            .expect("the attacker's config with an impostor token");
+        config_actor(self.engine, admin, SALT)
+    }
+
+    /// `owner`'s stablecoin holding under the impostor token program,
+    /// `holding_actor(Impostor, owner, stable_def)`.
+    pub fn impostor_holding(&self, owner: AccountId) -> Actor {
+        holding_actor(self.chain.program("impostor"), owner, self.stable_def)
+    }
+
     /// An impostor host stand-in at `label`'s account: mock `Params` with the world's token,
     /// definitions and oracle and redemption price 1 RAY. On `LiquidatePosition` it pings `admin`;
     /// with `admin = None` it pings nobody (a host that never replies).
@@ -108,7 +149,19 @@ impl World {
         admin_key: &PrivateKey,
         host: Actor,
     ) -> Actor {
-        let mut init = self.init_msg();
+        let init = self.init_msg();
+        self.configure_init_with_host(admin, admin_key, host, init)
+    }
+
+    /// [`World::configure_with_host`] with the given `Init` (its host replaced by `host`), e.g.
+    /// one that enables the protocol token.
+    pub fn configure_init_with_host(
+        &mut self,
+        admin: AccountId,
+        admin_key: &PrivateKey,
+        host: Actor,
+        mut init: EngineMsg,
+    ) -> Actor {
         if let EngineMsg::Init { host: bound, .. } = &mut init {
             *bound = host;
         }

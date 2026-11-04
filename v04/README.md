@@ -1,8 +1,9 @@
 # v04 — the auction engine on LEZ v0.4.0-rc1
 
 A separate cargo workspace (the root one, on LEZ v0.2.4, lists `v04` in `exclude`). Design:
-[`docs/v04-port-design.md`](../docs/v04-port-design.md); plan: Plan 5 (the liquidation slice);
-decisions: ADR-056 to ADR-061 in [`docs/design-log.md`](../docs/design-log.md).
+[`docs/v04-port-design.md`](../docs/v04-port-design.md); plans: Plan 5 (the liquidation slice), Plan 6
+(holdings per owner and definition, system auctions and solvency); decisions: ADR-056 to ADR-063 in
+[`docs/design-log.md`](../docs/design-log.md).
 
 | Path | What |
 |---|---|
@@ -11,9 +12,10 @@ decisions: ADR-056 to ADR-061 in [`docs/design-log.md`](../docs/design-log.md).
 | `programs/{token,oracle,mock_host}_core` | the message and state types those guests speak |
 | `engine_core` | the engine's messages, actor addresses, states and pure decision code (calls into `crates/auction_core`) |
 | `harness` | `harness::Chain`: an in-process `lee::V03State` with our guests and the clock program, signed sends, simulation (`cycles`) and harness-set time (`set_now_ms`); `World`, the deployed token, oracle, mock host and engine the tests share |
-| `sdk` | plans per instruction, `simulate_with` over any state source, `fit_gas`, and `simulate` / `send` / `confirm` over a live sequencer |
+| `sdk` | plans per instruction (`builder`: the slice; `system`: the system instructions), `simulate_with` over any state source, `fit_gas`, and `simulate` / `send` / `confirm` over a live sequencer |
 | `sdk/examples/slice.rs` | the slice end to end on a live sequencer |
-| `scripts/e2e.sh` | standalone sequencer, deploy, run the example |
+| `sdk/examples/system.rs` | `settle_debt`, one debt auction, one surplus auction and `check_solvency` on a live sequencer |
+| `scripts/e2e.sh` | standalone sequencer, deploy, run both examples |
 | `CYCLES.md` | cycles and fees per instruction |
 
 ## Build and test
@@ -42,15 +44,19 @@ localnet story: it needs a LEZ build and about 25 minutes of 15 s blocks.
 
 ```bash
 source ~/lez-spikes/s1/env.sh   # wherever libclang / libpcsclite come from (spike S1)
-v04/scripts/e2e.sh              # or in stages: up, deploy, slice, down
+v04/scripts/e2e.sh              # or in stages: up, deploy, slice, system, down
 ```
 
 `e2e.sh` builds (or reuses) LEZ v0.4.0-rc1's `sequencer_service` (standalone) and `wallet`, builds the
 guests and the example, sets up a fresh sequencer home from `lez/sequencer/service/networks/local.json`,
 imports the genesis-funded public dev key A as the fee payer, deploys token, oracle, mock host, relay and
 engine with `wallet program-loader deploy` (segment count from a dry run, spike S8), runs
-`cargo run -p sdk --example slice`, and stops the sequencer with `pkill -x sequencer_servi`. It exits
-non-zero on any failed step and expects `slice complete`.
+`cargo run -p sdk --example slice`, then `cargo run -p sdk --example system`, and stops the sequencer with
+`pkill -x sequencer_servi`. It exits non-zero on any failed step and expects `slice complete` and
+`system complete`. The `system` stage needs the `up` and `deploy` stages (it reads
+`$E2E_HOME/programs.env`) but not the slice: the system example derives its keys from `RUN_TAG` + `/system`,
+so it creates its own token definitions, oracle, mock-host params and engine config on the same deployed
+programs.
 
 `SLACK_MS` (the config's clock slack, ADR-058) defaults to 60 s in the example; the in-process harness uses
 6 s (`harness::world::SLACK_MS`). A 15 s-block sequencer needs at least 60 s, since a claim must lie within
@@ -83,6 +89,36 @@ End state: auction `Settled`, debt raised 600,000, penalty 60,000, collateral so
 come from the claimed time (epoch milliseconds on the sequencer, 1,000,000 in the harness), not from
 storage. 20 transactions cost 22,262,464 in fees. `SettleEmpty` is covered in-process only.
 
+### Recorded system run (2026-11-04, same setup, `e2e.sh all` on a fresh sequencer)
+
+The slice ran first (20 transactions, `slice complete`; engine cycles within 21 of CYCLES.md's slice rows),
+then `examples/system.rs`: 27 transactions, every one applied first time, `system complete`, 31,670,544 in
+fees. Engine instructions (the other 13 are token, oracle and mock-host setup, the donations included; all
+27 are in the Task 9 report):
+
+| Instruction | Block | Simulated cycles | CYCLES.md | gas_limit | Fee charged |
+|---|---|---|---|---|---|
+| Init (protocol token, genesis) | 75 | 242,292 | — (no token: 214,766) | 290,751 | 1,949,728 |
+| SetCollateral | 76 | 325,819 | 323,949 | 390,983 | 2,615,136 |
+| Liquidate (lot 3) | 81 | 841,174 | 839,357 | 1,009,409 | 6,741,544 |
+| SettleEmpty | 82 | 210,141 | 208,291 | 252,170 | 1,686,432 |
+| StartDebt (buffer holding absent, `Pda` evidence) | 86 | 217,757 | 217,756 | 261,309 | 1,749,224 |
+| TakeDebt (whole lot, 500) | 87 | 263,328 | 271,617 | 315,994 | 2,116,216 |
+| SettleDebt (`u128::MAX`, burns 9,500) | 92 | 210,647 | 206,767 (burns 100) | 252,777 | 1,690,800 |
+| StartSurplus | 94 | 255,298 | 255,298 | 306,358 | 2,049,032 |
+| TakeSurplus (whole lot, 500) | 95 | 236,967 | 243,063 / 245,296 (two takes of 250) | 284,361 | 1,905,840 |
+| CheckSolvency (`Healthy`, no burn) | 96 | 177,785 | — (with a burn: 218,253) | 213,342 | 1,427,840 |
+
+End state: shortfall `U` = 10,000 booked by the empty lot-3 auction; the debt take burned 500 stablecoin and
+minted 325 protocol tokens (30 % growth after more than a second); 9,500 donated and settled, `unbacked_debt`
+0; 1,500 donated, the surplus lot of 500 taken for 200 protocol tokens; both auctions `Ended`, host not frozen,
+protocol supply 10,125 = genesis 10,000 + 325 − 200, all held by the taker. Rows whose scenario matches
+CYCLES.md (`StartDebt`, `StartSurplus`) agree to the cycle. The others differ by scenario (likely causes, not
+measured one by one: a config with the protocol token is larger to decode (`SetCollateral`, `Liquidate`,
+`SettleEmpty`, about +1,850), a bigger burn (`SettleDebt`), one whole-lot take instead of a partial one
+(`TakeSurplus`), and a taker whose holdings differ from the harness's (`TakeDebt`)). Every system transaction
+stays under 3 % of the cap.
+
 ## What this slice proves
 
 - The design note's conversation model carries the engine's liquidation path on LEZ 0.4: `Init`,
@@ -96,13 +132,35 @@ storage. 20 transactions cost 22,262,464 in fees. `SettleEmpty` is covered in-pr
 - Every instruction fits far below the 10M gas cap (`Liquidate`, the largest, under 8 %; CYCLES.md), and
   simulate-then-send predicts what the sequencer charges (ADR-061).
 
-## What Plan 6 adds
+## What Plan 6 proves
 
-`settle_debt`, surplus auctions (`start_surplus_auction`, `take_surplus`, `close_surplus_auction`), debt
-auctions (`start_debt_auction`, `take_debt`, `close_debt_auction`), `check_solvency` with the host freeze,
-`observe_feed`, the admin setters (`set_engine_params`), `Init`'s validation of the host's
-`ProtocolParameters` and the protocol-token and reference-oracle fields (ruling R-7c), the SDK scanner, and
-the hand-kept IDL.
+- **Junk tokens cannot block a debit.** A holding is one token actor per `(owner, definition)` (ADR-062), so
+  junk credited to a host vault, an auction vault or the buffer leaves liquidation and bid costs unchanged,
+  and no credit can pre-block a definition address.
+- **The rest of the first milestone runs on 0.4** (design note §8): `set_engine_params`, `observe_feed`,
+  `settle_debt`, surplus and debt auctions (start, take, close) and `check_solvency` with the host freeze, as
+  conversations rooted at the config with one Read block at the accounting (ADR-063). The protocol token is
+  the engine's PDA definition, created at `Init` with the config as minter; a debt take mints through it.
+- **Invariants and security carry over.** R6, the reservation invariants and the new system-auction
+  invariants hold after every step; impostor, rogue-config, forged-message and read-window tests cover the
+  new internal message (`harness/tests/security_system.rs`, `security_surplus.rs`).
+- **Keepers are not griefable cheaply.** SDK system plans declare the actors a run may touch (ruling R-8b),
+  so a 1-unit buffer donation cannot revert a pending `CheckSolvency` or start; every system op fits under 3 %
+  of the gas cap (CYCLES.md).
+- **On a sequencer.** `examples/system.rs` runs `settle_debt`, one debt auction (started while the buffer
+  holding's account is absent, with its `Pda` evidence), one surplus auction and `check_solvency` on the
+  standalone sequencer (recorded run below).
+
+## Deferred
+
+- **The IDL.** The hand-kept IDL with a drift test waits for SPEL on 0.4: a drift test over 45 borsh variants
+  needs a schema derive the crates do not have.
+- **A `slack_ms` setter.** `slack_ms` is set at `Init` only (ADR-058); a wrong value means a new config.
+- **Host `ProtocolParameters` validation at `Init`** (ruling R-7c): `Init` does not yet read the host's
+  parameters to check the stablecoin definition and oracle.
+- **Native collateral.** Collateral is a `T` token; native collateral would need Read + exact `Transfer`
+  instead of `Sweep` (design note §6).
+- **The SDK scanner** (design note §7) and CI for the e2e (it stays local).
 
 ## Time in-process
 

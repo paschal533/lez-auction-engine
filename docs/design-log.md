@@ -1545,3 +1545,65 @@ On 0.4 every public transaction must carry a `FeeDeclaration`, and a revert is c
 Accepted (Plan 5, Tasks 12, 13)
 
 ---
+
+## ADR-062: Token Holdings Are One Actor per (Owner, Definition)
+
+**Context**
+A holding was `T`'s single actor state on the owner's account, a map `definition → balance`; any `Transfer`/`NewDefinition { initial_to }` may credit any account, so anyone (not only the owner) can stuff junk definitions into a host vault, an auction vault or the buffer until `Sweep`/`Transfer`/`Burn`, which decode and re-encode the whole map, exceed the 10M gas cap (THREAT_MODEL "LEZ 0.4 port", Plan 5 final review).
+
+**Options**
+- (a) One holding actor per `(owner, definition)`.
+- (b) Debits whose cost does not depend on the map. (b) is not achievable on 0.4: a handler receives its whole `pre_state` and commits a whole post-state, so even a zero-decode patch costs O(state) cycles plus the state commitment.
+
+**Decision**
+(a). The holding of `owner` for `definition` is the token actor at `pda(T, ["HOLDING", owner, definition])`, state `{ owner, definition, balance }`. The owner's own token actor `(owner, T)` is a stateless proxy: it accepts `Transfer`/`Sweep`/`Burn` only if `is_authorized` (signature or the engine's/host's PDA seed, unchanged for callers) and forwards an unseeded `Debit` to the holding, which accepts it only from `(o, T)` where `o` re-derives the receiver with the message's definition. `Credit` goes straight to the recipient holding with `T`'s `HOLDING` seed (a leaf), which admits a fresh holding without transaction evidence (S9 finding 3).
+
+**Consequences**
+- Junk credited to an account lands in other actors and never changes the cost of a debit.
+- Nothing but `NewDefinition` ever writes `(X, T)`, so a PDA definition address can no longer be pre-blocked by a credit.
+- One extra execution per debit (CYCLES.md, "Liquidation slice": `Liquidate` +2, final `Bid` +3).
+- Readers (engine Reads, harness, SDK) read `holding_actor(T, owner, def)`; holdings at zero keep their state.
+- Admission evidence: ADR-061's `Pda` evidence for the auction vault (`Liquidate`) and the buffer (first `Bid`) is no longer needed. The one evidence left is `Pda { T, holding_seed(buffer, stable_def) }`, on a system op whose accounting reads the buffer while the buffer holding's **account** is absent (no credit yet). The SDK (`buffer_evidence`) and the harness (`World::buffer_evidence`) both test account existence, not token state (Task 8 review).
+
+**Evidence**
+- Tests (`v04/harness/tests/holdings.rs`): `junk_definitions_in_a_host_vault_do_not_change_liquidation_cost`, `junk_in_the_buffer_and_an_auction_vault_does_not_change_bid_cost` (ruling R-1a: the final bid credits the buffer in both worlds at equal cycles), `holding_lives_at_the_token_pda_and_owner_actor_stays_stateless`, `debit_only_from_the_owner_actor`, `credit_to_a_mismatched_holding_reverts`, `a_credit_cannot_pre_block_a_definition_address`; `token_core`: `holding_seed_matches_its_literal`, `holding_actor_is_the_token_pda`, `only_the_owner_actor_may_debit`; `engine_params.rs`: `protocol_definition_cannot_be_pre_blocked`; `security_system.rs`: `holding_debit_not_from_its_owner_actor`.
+- Live: the slice and the system example run on this layout (`v04/scripts/e2e.sh`, `v04/README.md`).
+
+**Status**
+Accepted (Plan 6, Task 1)
+
+---
+
+## ADR-063: System Instructions Rooted at the Config, One Read Block at the Accounting; the Protocol Token as an Engine-PDA Definition Created at `Init`
+
+**Context**
+Design note §4.2 rows 9-16 root `settle_debt` at `Acc` and the surplus and debt takes and closes at `S`/`D`, and have `K` and `Acc` each read (ref oracle and protocol definition at `K`, buffer at `Acc`). On 0.4, `Acc` does not store its config, and a root at an absent `S`/`D` cannot report the engine's error (the reason `settle_empty` moved to `K`, ruling R-9d). v0.2.4's mint authority was a `MINT_AUTH` PDA and the protocol definition an admin-named slot, checked by a definition read at `start_debt_auction` and `check_solvency`. On 0.4 a PDA definition address could also be pre-blocked (fixed by ADR-062).
+
+**Options**
+- (A) The rows as written: roots at `Acc`/`S`/`D`, reads at both `K` and `Acc`, an admin-named protocol definition with a minter check at every debt start.
+- (B) Every system root at `K`; one Read block at `Acc`; the protocol definition is the engine's PDA, created at `Init` with `minter = (K, E)`.
+
+**Decision**
+(B) (Plan 6 decisions, Tasks 2-6).
+- **Roots at `K`, permissionless**: `SettleDebt`, `StartSurplus`/`TakeSurplus`/`CloseSurplus`, `StartDebt`/`TakeDebt`/`CloseDebt`, `CheckSolvency`. `K` checks `receiver == (config, E)` and that a config decodes (`WrongAccount("config")`), sends `AssertTimestamp` for every op except `SettleDebt` (ADR-058), then relays a `SystemCtx` snapshot of its config. Settle, starts and the check go to `Acc` as `System { op, now_ms, ctx }`. Takes and closes go to `S`/`D` as a seeded `Probe`, then `SurplusTake`/`SurplusClose`/`DebtTake`/`DebtClose`, so an absent auction reports the engine's error (ADR-057, seeded probes).
+- **One Read block at `Acc`** replaces the separate `K` and `Acc` reads. `Acc` writes a `SystemPending`, reads the buffer's stablecoin holding and, for timed ops, the reference oracle, then sends `Proceed`. A reply is accepted only from exactly the actor read and only while pending; a second one is `WrongAccount("pending")`. An absent buffer holding reads 0 (Review Focus 1). An empty or foreign oracle reply falls back to the admin price (v0.2.4's `OutOfRange` fallback). The decision is `auction_core`'s, through the pure `engine_core::system` and `engine_core::solvency` functions, which the SDK planners also run.
+- **Auctions** `S = pda(E, ["SURP", K, nonce])` and `D = pda(E, ["DEBT", K, nonce])` are created by seeded leaf messages from `Acc` (`SurplusOpen`, `DebtOpen`). `phase: Live → Ended` replaces v0.2.4's `live` and only moves forward. `S`/`D` accept takes and closes only from `(S.config, E)`. `Acc` accepts `SurplusTaken`/`SurplusReturned`/`DebtTaken`/`DebtClosed` only from the auction it re-derives from `(config, nonce)`. These guards are pure `engine_core::assertions` functions with unit tests (Task 7b).
+- **Protocol token**: every `Init` sends a seeded `NewDefinition { minter: Some(K), initial_to: genesis.to, initial_supply }` to `(pda(E, ["PROTOCOL", K]), T)`; `config.protocol_token = Some(def)` iff `protocol_token_enabled`. A debt take mints through `K`: `D → K Mint` (accepted only from `debt_actor(E, K, nonce)`), then `K → def MintTo`. `token_ok`/`mint_authority_ok` are true by construction, so rows 13 and 16's definition read is dropped and `MintAuthorityMissing`/`ProtocolTokenMismatch` are unreachable.
+- **Freeze**: a `Freeze` decision sends `Acc → K Freeze → host EngineFreezeNewDebt`. The host refuses it from any other `(K, E)`, and the whole check reverts (Review Focus 4).
+- **Config state** (the encoding changed, so a fresh deployment is required): `pending_genesis` is scratch between `Init` and `InitReads`, `None` in every committed state. `collateral_def` is the config's one collateral type, recorded at its first `SetCollateral`; `SetEngineParams` always asserts that type's cap against a new global cap (ruling R-2a). A reference oracle may not be a token-program actor or sit at the stablecoin definition (ruling R-3b).
+- **SDK plans** declare the may-touch actors (ruling R-8b): the buffer's burn pair whenever `unbacked_debt > 0` (on `StartSurplus` only if the start simulates as successful), and the host on `CheckSolvency` whenever the config can freeze. A 1-unit buffer donation therefore cannot revert a pending `CheckSolvency` or `Start*`. Residual race: the burn pair is keyed on `unbacked_debt` at planning time, so a plan built at zero leaves it out. If a shortfall is booked together with a buffer credit before inclusion, the send reverts and is charged its gas limit (ADR-061), and the keeper re-plans from fresh state.
+
+**Trade-offs**
+- `K` is on every system path: one more execution than a root at `Acc`, and timed ops pay the clock assert. Every system op stays under 3 % of the gas cap (CYCLES.md).
+- Accepted divergences from v0.2.4 (ruling R-9c): an unsigned or underfunded take fails with the token's error, and v0.2.4's take-time `VaultBelowBook` surfaces as the token's `InsufficientBalance` (unreachable: only `E` debits a surplus vault). A donation to a surplus vault after its auction ended stays there, because close needs a live auction. A donation before the start is returned and booked at close (Review Focus 2).
+- `MintAuthorityMissing` and `ProtocolTokenMismatch` stay in the error table but cannot occur.
+
+**Evidence**
+- Design note §4.2 rows 9-16 and its "As built (Plan 6)" note; ruling R-9d; Plan 6 Tasks 2-8.
+- Tests: `settle_debt_on_a_fresh_config_reads_an_absent_buffer_as_zero`, `donation_to_a_future_surplus_vault_is_returned_and_booked`, `unpublished_reference_oracle_falls_back_to_the_admin_price`, `relist_delay_boundary_uses_the_claimed_time`, `fresh_config_without_protocol_token_freezes_above_threshold`, `freeze_after_the_host_was_rebound_reverts_atomically`, `init_creates_the_protocol_definition_with_minter_k`, `impostor_at_engine_accounts_cannot_send_system_internals`, `rogue_config_conversations_land_only_on_its_own_actors`, `duplicate_buffer_reply_reverts`, `system_plans_attach_buffer_evidence_only_when_absent`, `check_solvency_plan_survives_a_donation_to_the_buffer`.
+- Live: `v04/sdk/examples/system.rs` (stage `system` of `v04/scripts/e2e.sh`) runs `settle_debt`, one debt auction, one surplus auction and `check_solvency` on a standalone sequencer; the run is recorded in `v04/README.md`.
+
+**Status**
+Accepted (Plan 6, Tasks 2-9)
+
+---

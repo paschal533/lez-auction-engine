@@ -10,10 +10,17 @@
 //! left out. Hence the may-touch actors, declared whatever today's state predicts:
 //!
 //! - the buffer's token actor and the stablecoin definition (the implicit settle's `Burn`) on
-//!   `StartSurplus`, `StartDebt`, `CheckSolvency` and a non-zero `SettleDebt`, whenever the
-//!   accounting carries unbacked debt;
+//!   `StartDebt`, `CheckSolvency` and a non-zero `SettleDebt` whenever the accounting carries
+//!   unbacked debt, and on `StartSurplus` only when, in addition, the start simulates as
+//!   successful (a refused start declares only what runs before the refusal);
 //! - the bound host on `CheckSolvency` whenever the config can freeze (no protocol token, or
 //!   `freeze_on_bad_debt`).
+//!
+//! So a 1-unit donation to the buffer cannot revert a pending `CheckSolvency` or `Start*` (the
+//! griefing fix of ruling R-8b). One race remains: the burn pair is keyed on `unbacked_debt` at
+//! planning time, so a plan built at zero leaves it out; if a shortfall is booked together with a
+//! buffer credit before inclusion, the send reverts and is charged its gas limit (ADR-061), and
+//! the keeper re-plans from fresh state.
 //!
 //! A declared actor the run does not reach costs nothing: it does not execute. Everything else is
 //! exact. Where it depends on state the attacker cannot steer cheaply (a sweep only of a

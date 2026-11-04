@@ -71,8 +71,9 @@ the leftover claim.
 ### Recorded run (2026-11-01, LEZ v0.4.0-rc1, `networks/local.json`, base fees 8 / 8)
 
 Two runs (one in stages, one `e2e.sh` end to end, each on a fresh sequencer) gave identical cycles,
-gas limits and fees. Engine instructions of the staged run (the other 13 transactions are the token, oracle and mock-host setup;
-all 20 are in the task report). Every transaction applied first time; the fee charged
+gas limits and fees. Engine instructions of the staged run below; the other 14 transactions are setup: 2 token
+definitions, oracle init and 3 price publications, mock-host init and bind, and 2 × (fund owner, open position,
+generate debt). Every transaction applied first time; the fee charged
 matched `cycles × 8 + wire bytes × 8` in the recorded runs (the example asserts fee ≤ `max_fee`).
 
 | Instruction | Block | Simulated cycles | CYCLES.md | gas_limit | Fee charged |
@@ -93,13 +94,13 @@ storage. 20 transactions cost 22,262,464 in fees. `SettleEmpty` is covered in-pr
 
 The slice ran first (20 transactions, `slice complete`; engine cycles within 21 of CYCLES.md's slice rows),
 then `examples/system.rs`: 27 transactions, every one applied first time, `system complete`, 31,670,544 in
-fees. Engine instructions (the other 13 are token, oracle and mock-host setup, the donations included; all
-27 are in the Task 9 report):
+fees. Engine instructions below; the other 17 are setup: 2 token definitions, 2 oracle (init, price), 2
+mock-host (init, bind), 3 × (fund owner, open position, generate debt) and the 2 donations to the buffer.
 
 | Instruction | Block | Simulated cycles | CYCLES.md | gas_limit | Fee charged |
 |---|---|---|---|---|---|
-| Init (protocol token, genesis) | 75 | 242,292 | — (no token: 214,766) | 290,751 | 1,949,728 |
-| SetCollateral | 76 | 325,819 | 323,949 | 390,983 | 2,615,136 |
+| Init (protocol token, genesis) | 75 | 242,292 | — (no token: 216,571) | 290,751 | 1,949,728 |
+| SetCollateral | 76 | 325,819 | 325,765 | 390,983 | 2,615,136 |
 | Liquidate (lot 3) | 81 | 841,174 | 839,357 | 1,009,409 | 6,741,544 |
 | SettleEmpty | 82 | 210,141 | 208,291 | 252,170 | 1,686,432 |
 | StartDebt (buffer holding absent, `Pda` evidence) | 86 | 217,757 | 217,756 | 261,309 | 1,749,224 |
@@ -108,6 +109,10 @@ fees. Engine instructions (the other 13 are token, oracle and mock-host setup, t
 | StartSurplus | 94 | 255,298 | 255,298 | 306,358 | 2,049,032 |
 | TakeSurplus (whole lot, 500) | 95 | 236,967 | 243,063 / 245,296 (two takes of 250) | 284,361 | 1,905,840 |
 | CheckSolvency (`Healthy`, no burn) | 96 | 177,785 | — (with a burn: 218,253) | 213,342 | 1,427,840 |
+
+This run predates the final fix round, whose `protocol_def` check (refusing the config's own protocol
+definition as stablecoin or collateral) adds about 1.8k cycles to `Init` and `SetCollateral`; the re-run after
+it gave `Init` 244,095 and `SetCollateral` 327,635, every other engine row unchanged, 31,699,608 in fees.
 
 End state: shortfall `U` = 10,000 booked by the empty lot-3 auction; the debt take burned 500 stablecoin and
 minted 325 protocol tokens (30 % growth after more than a second); 9,500 donated and settled, `unbacked_debt`
@@ -129,7 +134,7 @@ stays under 3 % of the cap.
   pending phase and a host that never replies.
 - Claimed time against the clock (ADR-058), one bid message (ADR-059) and the host's `Seized` report
   (ADR-060) keep R6 and the reservation invariants after every step.
-- Every instruction fits far below the 10M gas cap (`Liquidate`, the largest, under 8 %; CYCLES.md), and
+- Every instruction fits far below the 10M gas cap (`Liquidate`, the largest, 8.4 %, under 9 %; CYCLES.md), and
   simulate-then-send predicts what the sequencer charges (ADR-061).
 
 ## What Plan 6 proves

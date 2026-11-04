@@ -31,12 +31,17 @@
 //! what runs before the refusal (and the may-touch actors), so the simulation reports the
 //! engine's own error.
 //!
-//! Evidence (ADR-062): fresh holdings self-admit through the token's `HOLDING` seed, so the one
-//! piece of evidence is `Pda { T, holding_seed(buffer, stable_def) }`, attached only by the plans
+//! Evidence (ADR-062): fresh holdings self-admit through the token's `HOLDING` seed, so the only
+//! token evidence is `Pda { T, holding_seed(buffer, stable_def) }`, attached only by the plans
 //! whose accounting reads the buffer's stablecoin holding (`SettleDebt`, `StartSurplus`,
 //! `StartDebt`, `CheckSolvency`) and only while that holding's account is absent (Review Focus 1);
 //! it then reads as 0. `CloseSurplus` credits the buffer, which a surplus start needed a balance
-//! in, so it never needs evidence.
+//! in, so it never needs evidence. The plans that claim time (`StartSurplus`, `StartDebt`,
+//! `CheckSolvency`) also read the reference oracle, which may sit at an account nobody has funded
+//! yet (final review Minor 1): while that account is absent they attach the deployment's
+//! [`Deployment::ref_oracle_evidence`]. An oracle lives at a key account, so that is `Key`, whose
+//! public key the chain does not record: the caller supplies it, and a plan without it fails
+//! with [`SdkError::MissingState`]. The absent oracle then reads as unpublished (the admin price).
 
 use auction_engine_params::args::EngineParamsArgs;
 use engine_core::{
@@ -155,8 +160,8 @@ pub fn plan_settle_debt(
     d: &Deployment,
     amount: u128,
 ) -> Result<Plan, SdkError> {
-    let reading = SystemReading::load(source, d)?;
-    let mut actors = reading.base(d, false);
+    let reading = SystemReading::load(source, d, false)?;
+    let mut actors = reading.base(d);
     if amount > 0 {
         actors.extend(reading.may_burn(d));
     }
@@ -181,8 +186,8 @@ pub fn plan_start_surplus(
     nonce: u64,
     now_ms: u64,
 ) -> Result<Plan, SdkError> {
-    let reading = SystemReading::load(source, d)?;
-    let mut actors = reading.base(d, true);
+    let reading = SystemReading::load(source, d, true)?;
+    let mut actors = reading.base(d);
     let reference = reading.reference(now_ms);
     let started = start_surplus_op(
         &reading.acc,
@@ -289,8 +294,8 @@ pub fn plan_start_debt(
     nonce: u64,
     now_ms: u64,
 ) -> Result<Plan, SdkError> {
-    let reading = SystemReading::load(source, d)?;
-    let mut actors = reading.base(d, true);
+    let reading = SystemReading::load(source, d, true)?;
+    let mut actors = reading.base(d);
     actors.extend(reading.may_burn(d));
     let reference = reading.reference(now_ms);
     let started = start_debt_op(
@@ -370,8 +375,8 @@ pub fn plan_check_solvency(
     d: &Deployment,
     now_ms: u64,
 ) -> Result<Plan, SdkError> {
-    let reading = SystemReading::load(source, d)?;
-    let mut actors = reading.base(d, true);
+    let reading = SystemReading::load(source, d, true)?;
+    let mut actors = reading.base(d);
     actors.extend(reading.may_burn(d));
     if reading.ctx.protocol_token.is_none() || reading.ctx.freeze_on_bad_debt {
         actors.push(reading.config.host);
@@ -397,6 +402,46 @@ pub fn buffer_evidence(source: &impl StateSource, d: &Deployment) -> Vec<PublicA
     }]
 }
 
+/// The evidence a timed system plan needs for the config's reference oracle `oracle`: none
+/// without one or while its account exists; else `supplied` (the deployment's
+/// [`Deployment::ref_oracle_evidence`]), which must prove that account. The accounting reads an
+/// absent oracle as `Undecodable` (an empty reply), so the plan then prices at the admin price.
+fn ref_oracle_evidence(
+    source: &impl StateSource,
+    oracle: Option<Actor>,
+    supplied: Option<&PublicAccountEvidence>,
+) -> Result<Vec<PublicAccountEvidence>, SdkError> {
+    let Some(oracle) = oracle else {
+        return Ok(Vec::new());
+    };
+    if source.account_exists(oracle.account_id) {
+        return Ok(Vec::new());
+    }
+    match supplied {
+        Some(evidence) if evidence.account_id() == oracle.account_id => Ok(vec![evidence.clone()]),
+        _ => Err(SdkError::MissingState(format!(
+            "the reference oracle's account {} is absent: supply its evidence \
+             (Deployment::with_ref_oracle_evidence)",
+            oracle.account_id
+        ))),
+    }
+}
+
+/// The reference oracle's reading as the accounting takes it: `Undecodable` unless `oracle`
+/// holds an oracle state.
+fn ref_reading(source: &impl StateSource, oracle: Actor) -> RefReading {
+    source
+        .actor_state(oracle)
+        .and_then(|bytes| OracleState::decode(&bytes))
+        .map_or(RefReading::Undecodable, |o| {
+            RefReading::Valid(OracleReadingRec {
+                price_raw: o.price_ray,
+                confidence_raw: o.confidence,
+                timestamp_ms: o.timestamp_ms,
+            })
+        })
+}
+
 /// What the accounting reads for a system op, from `source`: the config (its context), the
 /// accounting, the buffer's balance (0 while absent) and the reference oracle's state.
 struct SystemReading {
@@ -406,10 +451,14 @@ struct SystemReading {
     buffer: u128,
     reference: Option<RefReading>,
     evidence: Vec<PublicAccountEvidence>,
+    /// Whether the op claims time, and so reads the clock and the reference oracle.
+    timed: bool,
 }
 
 impl SystemReading {
-    fn load(source: &impl StateSource, d: &Deployment) -> Result<Self, SdkError> {
+    /// The reading for an op that claims time iff `timed`: its evidence is the buffer's and, if
+    /// `timed`, the reference oracle's.
+    fn load(source: &impl StateSource, d: &Deployment, timed: bool) -> Result<Self, SdkError> {
         let config = config_state(source, d.config)?;
         let ctx = SystemCtx::from_config(d.config.account_id, &config);
         let acc = source
@@ -417,25 +466,20 @@ impl SystemReading {
             .and_then(|bytes| AccountingState::decode(&bytes))
             .ok_or_else(|| SdkError::MissingState("no engine accounting".into()))?;
         let buffer = balance(source, d.holding_of(d.buffer().account_id, d.stable_def))?;
-        let reference = ctx.ref_oracle.map(|oracle| {
-            source
-                .actor_state(oracle)
-                .and_then(|bytes| OracleState::decode(&bytes))
-                .map_or(RefReading::Undecodable, |o| {
-                    RefReading::Valid(OracleReadingRec {
-                        price_raw: o.price_ray,
-                        confidence_raw: o.confidence,
-                        timestamp_ms: o.timestamp_ms,
-                    })
-                })
-        });
+        let reference = ctx.ref_oracle.map(|oracle| ref_reading(source, oracle));
+        let mut evidence = buffer_evidence(source, d);
+        if timed {
+            let supplied = d.ref_oracle_evidence.as_ref();
+            evidence.extend(ref_oracle_evidence(source, ctx.ref_oracle, supplied)?);
+        }
         Ok(Self {
             config,
             ctx,
             acc,
             buffer,
             reference,
-            evidence: buffer_evidence(source, d),
+            evidence,
+            timed,
         })
     }
 
@@ -455,14 +499,14 @@ impl SystemReading {
     }
 
     /// The actors every run of the op touches: config, accounting, the buffer's stablecoin
-    /// holding; for an op that claims time (`timed`), the clock and the reference oracle.
-    fn base(&self, d: &Deployment, timed: bool) -> Vec<Actor> {
+    /// holding; for an op that claims time, the clock and the reference oracle.
+    fn base(&self, d: &Deployment) -> Vec<Actor> {
         let mut actors = vec![
             d.config,
             d.accounting,
             d.holding_of(d.buffer().account_id, d.stable_def),
         ];
-        if timed {
+        if self.timed {
             actors.push(d.clock);
             actors.extend(self.ctx.ref_oracle);
         }

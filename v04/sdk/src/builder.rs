@@ -6,11 +6,13 @@
 //!
 //! Evidence rule (settlement admits signers ∪ accounts that exist ∪ accounts a message's PDA seed
 //! grants ∪ accounts proven public by evidence): no plan in this module carries evidence (the
-//! system plans in [`crate::system`] carry one `Pda`, for an absent buffer holding). A fresh
+//! system plans in [`crate::system`] carry a `Pda` for an absent buffer holding and, on the timed
+//! ones, the caller-supplied evidence for an absent reference-oracle account). A fresh
 //! holding is a token PDA that the token program's `Credit` grants with its `HOLDING` seed; the
 //! engine's vault and buffer token actors are granted by the engine's own seeds on the messages
 //! that debit them; engine actors written by their own seed-granted messages need none (S9). No
-//! plan touches a fresh non-signer plain account, so none carries `PublicAccountEvidence::Key`.
+//! plan here touches a fresh non-signer plain account, so none here carries
+//! `PublicAccountEvidence::Key`.
 
 use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use engine_core::{
@@ -84,6 +86,12 @@ pub struct Deployment {
     pub protocol_def: AccountId,
     /// The reference oracle the config names, if any.
     pub ref_oracle: Option<Actor>,
+    /// Admission evidence for the reference oracle's account, attached by the timed system plans
+    /// while that account is absent (it then reads as unpublished: the admin price). An oracle
+    /// sits at a key account, so this is `Key(public key)`, which the chain does not record: the
+    /// caller supplies it ([`Deployment::with_ref_oracle_evidence`]). `None` after
+    /// [`Deployment::load`].
+    pub ref_oracle_evidence: Option<PublicAccountEvidence>,
 }
 
 impl Deployment {
@@ -121,7 +129,18 @@ impl Deployment {
             accounting: accounting_actor(engine, config),
             protocol_def: protocol_def(engine, config),
             ref_oracle: state.protocol_token_oracle,
+            ref_oracle_evidence: None,
         })
+    }
+
+    /// This deployment with `evidence` for its reference oracle's account (see
+    /// [`Deployment::ref_oracle_evidence`]).
+    #[must_use]
+    pub fn with_ref_oracle_evidence(self, evidence: PublicAccountEvidence) -> Self {
+        Self {
+            ref_oracle_evidence: Some(evidence),
+            ..self
+        }
     }
 
     /// The collateral actor of `collateral_def`.

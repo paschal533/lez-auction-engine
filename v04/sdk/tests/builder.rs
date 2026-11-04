@@ -14,7 +14,7 @@ use harness::{
     system::{TAKER, TAKER_GENESIS},
     world::{RAY, SALT, SLACK_MS},
 };
-use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence};
+use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey};
 use sdk::{
     BidArgs, Deployment, InitArgs, LiquidateArgs, MAX_GAS_EXEC, Plan, SdkError,
     SetEngineParamsArgs, StateSource, TakeArgs, buffer_evidence, fit_gas, plan_bid,
@@ -730,4 +730,55 @@ fn system_plans_attach_buffer_evidence_only_when_absent() {
     ] {
         assert!(plan.expect("plan").evidence.is_empty());
     }
+}
+
+/// Final Minor 1: an enabled reference oracle at a key account that was never funded. The timed
+/// system plans need its `Key` evidence (the chain does not record the public key, so the caller
+/// supplies it), then simulate and price at the admin price: the guest reads the absent account
+/// as `Undecodable` (an empty reply). `SettleDebt` does not read the oracle and needs none.
+#[test]
+fn unfunded_reference_oracle_is_admitted_and_prices_at_the_admin_price() {
+    let mut w = World::bare();
+    let (oracle_key, account) = w.chain.key("unfunded-oracle");
+    let oracle = Actor::new(account, w.oracle.program_account_id);
+    let enabled = EngineParamsArgs {
+        ref_oracle_enabled: true,
+        ..token_params()
+    };
+    w.init_system(enabled, Some(oracle));
+    w.set_now_ms(T);
+    assert!(!w.chain.account_exists(account), "never funded");
+    let buffer = w.buffer().account_id;
+    w.donate_stable(buffer, 1_500);
+    let bare = deployment(&w);
+    let src = InProcess(&w.chain);
+    match plan_check_solvency(&src, &bare, T) {
+        Err(SdkError::MissingState(reason)) => assert!(reason.contains("reference oracle")),
+        other => panic!("without the oracle's evidence: {other:?}"),
+    }
+    plan_settle_debt(&src, &bare, u128::MAX).expect("settle_debt reads no oracle");
+
+    let key = PublicAccountEvidence::Key(PublicKey::new_from_private_key(&oracle_key));
+    let d = bare.with_ref_oracle_evidence(key.clone());
+    let check = plan_check_solvency(&src, &d, T).expect("check plan");
+    let start = plan_start_surplus(&src, &d, 0, T).expect("start plan");
+    for plan in [&check, &start] {
+        assert_eq!(
+            plan.evidence,
+            vec![key.clone()],
+            "only the oracle is absent"
+        );
+        let without = Plan {
+            evidence: Vec::new(),
+            ..plan.clone()
+        };
+        match simulate(&w, &without) {
+            Err(SdkError::WouldRevert(reason)) => assert!(reason.contains("UnadmittedPublicActor")),
+            other => panic!("without the evidence: {other:?}"),
+        }
+    }
+    simulate(&w, &check).unwrap_or_else(|err| panic!("check_solvency simulates: {err}"));
+    run_exact(&mut w, "start_surplus (unfunded oracle)", &start, &[]);
+    assert_eq!(w.surplus_state(0).ref_ray, 2 * RAY, "the admin price");
+    assert_eq!(w.chain.raw_state(oracle), None, "still no oracle state");
 }

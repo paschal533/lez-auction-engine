@@ -22,11 +22,11 @@ common.workspace = true
 sequencer_service_rpc.workspace = true
 wallet.workspace = true
 tokio = { workspace = true, features = ["time"] }
-
-[dev-dependencies]
-harness.workspace = true
-# The live example (`examples/slice.rs`) speaks the host's messages and reads the clock.
+# The examples' live session (`session`): the mock host's messages, the clock and derived keys.
 mock_host_core.workspace = true
 clock_core.workspace = true
 sha2.workspace = true
+
+[dev-dependencies]
+harness.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

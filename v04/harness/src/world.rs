@@ -97,6 +97,10 @@ pub struct World {
     pub keeper_key: PrivateKey,
     /// The chain time the world last set, ms.
     pub now_ms: u64,
+    /// The protocol token's genesis supply of the world's config: recorded by
+    /// [`World::send_engine`] when the config's `Init` applies, 0 before (and without a genesis).
+    /// `invariants::check` asserts the definition's supply against it.
+    pub protocol_genesis: u128,
 }
 
 impl World {
@@ -156,6 +160,7 @@ impl World {
             keeper,
             keeper_key,
             now_ms: 0,
+            protocol_genesis: 0,
             chain,
         };
 
@@ -392,7 +397,17 @@ impl World {
     ) -> Result<Vec<TransactionEvent>, LeeError> {
         let actors = self.proxy_actors(proxy, msg);
         let root = Actor::new(proxy, self.engine);
-        self.chain.send(root, &actors, signers, msg)
+        let sent = self.chain.send(root, &actors, signers, msg)?;
+        if let EngineMsg::Init {
+            salt,
+            protocol_genesis,
+            ..
+        } = msg
+            && config_actor(self.engine, proxy, *salt) == self.config
+        {
+            self.protocol_genesis = protocol_genesis.map_or(0, |genesis| genesis.supply);
+        }
+        Ok(sent)
     }
 
     /// Binds the host to the config actor `(config, E)`.

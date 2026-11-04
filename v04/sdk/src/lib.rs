@@ -1,11 +1,13 @@
 //! Client SDK for the LEZ 0.4 auction engine: build an instruction's [`Plan`] (root, declared
 //! actors, signers, admission evidence, message), simulate it against any [`StateSource`], fit
-//! its gas, and (in [`live`]) simulate and send it over a sequencer.
+//! its gas, and (in [`live`]) simulate and send it over a sequencer; [`session`] is the live
+//! session the e2e examples share.
 #![forbid(unsafe_code)]
 
 pub mod builder;
 pub mod decode;
 pub mod live;
+pub mod session;
 pub mod simulate;
 pub mod system;
 

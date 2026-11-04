@@ -136,8 +136,11 @@ deploy_all() {
 # run_example <name>: runs the SDK example <name>, which must print "<name> complete".
 run_example() {
   local log="$E2E_HOME/$1.log"
-  ( cd "$V04" && cargo run -q -p sdk --example "$1" ) 2>&1 | tee "$log"
-  [[ ${PIPESTATUS[0]} -eq 0 ]] || die "the $1 example failed (log $log)"
+  # Tested by `if !`, so `set -e` does not abort here and the message is printed (`pipefail`
+  # makes a failed example fail the pipeline even though `tee` succeeds).
+  if ! ( cd "$V04" && cargo run -q -p sdk --example "$1" ) 2>&1 | tee "$log"; then
+    die "the $1 example failed (log $log)"
+  fi
   grep -q "^$1 complete\$" "$log" || die "no '$1 complete' in $log"
 }
 

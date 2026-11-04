@@ -345,3 +345,25 @@ fn mint_from_anything_but_this_configs_debt_actor_reverts() {
     assert_eq!(supply(&w, def), TAKER_GENESIS, "nothing was minted");
     invariants::check(&w);
 }
+
+/// Final Minor 6: the invariants check protocol-token conservation (`supply == genesis +
+/// total_protocol_minted − total_protocol_burned`), so a supply change the accounting did not
+/// book is caught. Here the taker burns 1 of its own protocol tokens straight through the token
+/// program, which the engine never sees.
+#[test]
+#[should_panic(expected = "protocol supply")]
+fn invariants_catch_an_unbooked_protocol_supply_change() {
+    let (mut w, _) = world();
+    let (key, taker) = w.chain.key(TAKER);
+    let def = w.protocol_def();
+    let owner = Actor::new(taker, w.token);
+    let actors = [owner, w.holding(taker, def), Actor::new(def, w.token)];
+    let burn = TokenMsg::Burn {
+        definition: def,
+        amount: 1,
+    };
+    w.chain
+        .send(owner, &actors, &[&key], &burn)
+        .expect("a holder burns its own protocol token");
+    invariants::check(&w);
+}

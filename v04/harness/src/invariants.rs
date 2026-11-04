@@ -17,6 +17,11 @@
 //! - **Debt (rows 13-15, ADR-024):** every started debt auction exists; one is live iff the
 //!   accounting's `debt_live`, and then `debt_on_auction == lot_left`; `debt_on_auction == 0`
 //!   when none is live; the reservation never exceeds `unbacked_debt`.
+//! - **Protocol supply (final review Minor 6):** once the protocol definition exists, its supply
+//!   is `genesis + total_protocol_minted − total_protocol_burned` ([`World::protocol_genesis`]),
+//!   so a mint or burn without its booking (or a booking without its token move) is caught. A
+//!   holder can burn its own protocol tokens through the token program, unbooked; no test does,
+//!   except the one that proves this check catches it.
 
 use engine_core::{
     actors::collateral_actor,
@@ -27,6 +32,7 @@ use engine_core::{
     system_state::{DebtAuctionState, SurplusAuctionState, SystemPhase},
 };
 use lee::Actor;
+use token_core::Definition;
 
 use crate::World;
 
@@ -61,6 +67,7 @@ pub fn check(w: &World) {
         assert_eq!(accounting.pending, None, "F6: accounting scratch cleared");
         check_surplus(w, &accounting);
         check_debt(w, &accounting);
+        check_protocol_supply(w, &accounting);
     }
     if let Some(config) = decoded(w, w.config, ConfigState::decode) {
         assert_eq!(config.pending_read, None, "F6: config scratch cleared");
@@ -168,6 +175,25 @@ fn check_debt(w: &World, acc: &AccountingState) {
         acc.debt_on_auction,
         live.first().copied().unwrap_or(0),
         "debt_on_auction == the live debt auction's lot_left, else 0"
+    );
+}
+
+/// The protocol definition's supply is the genesis plus what the accounting booked as minted,
+/// less what it booked as burned (no-op before `Init` creates the definition).
+fn check_protocol_supply(w: &World, acc: &AccountingState) {
+    let definition = Actor::new(w.protocol_def(), w.token);
+    let Some(def) = decoded(w, definition, Definition::decode) else {
+        return;
+    };
+    let booked = w
+        .protocol_genesis
+        .checked_add(acc.total_protocol_minted)
+        .and_then(|sum| sum.checked_sub(acc.total_protocol_burned))
+        .expect("protocol supply: booked burns never exceed genesis + mints");
+    assert_eq!(
+        def.supply, booked,
+        "protocol supply == genesis {} + minted {} − burned {}",
+        w.protocol_genesis, acc.total_protocol_minted, acc.total_protocol_burned
     );
 }
 

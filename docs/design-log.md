@@ -1597,6 +1597,8 @@ Design note §4.2 rows 9-16 root `settle_debt` at `Acc` and the surplus and debt
 - `K` is on every system path: one more execution than a root at `Acc`, and timed ops pay the clock assert. Every system op stays under 3 % of the gas cap (CYCLES.md).
 - Accepted divergences from v0.2.4 (ruling R-9c): an unsigned or underfunded take fails with the token's error, and v0.2.4's take-time `VaultBelowBook` surfaces as the token's `InsufficientBalance` (unreachable: only `E` debits a surplus vault). A donation to a surplus vault after its auction ended stays there, because close needs a live auction. A donation before the start is returned and booked at close (Review Focus 2).
 - `MintAuthorityMissing` and `ProtocolTokenMismatch` stay in the error table but cannot occur.
+- Claimed time (ADR-058) also backdates a surplus or debt auction's `start_ms` and the accounting's `last_surplus_end_ms`/`last_debt_end_ms` by up to `slack_ms`: that moves bounded value from the protocol to takers and lets the next start, including the relist, come up to `slack_ms` early.
+- The config's own protocol definition `protocol_def(E, K)` is refused as the stablecoin (`Init`) and as the collateral (`SetCollateral`) with `WrongAccount("protocol_token")`, whether or not the protocol token is enabled. This is stricter than v0.2.4's `check_distinct_slots`, which compared slots only when the token was configured: in 0.4 the definition exists from `Init` with `K` as minter, and `SetEngineParams` can enable the token later, so a permissionless debt take could otherwise mint the config's collateral or stablecoin.
 
 **Evidence**
 - Design note §4.2 rows 9-16 and its "As built (Plan 6)" note; ruling R-9d; Plan 6 Tasks 2-8.

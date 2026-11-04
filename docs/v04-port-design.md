@@ -360,15 +360,18 @@ the definition account, `{ supply, minter: Option<Actor> }`. The table is the as
 Two deliberate differences from v0.2.4: credits are **sync**, so a whole engine conversation settles in one
 transaction without relying on async promotion; and a fresh holding needs no signature from its owner. Only
 `T` can write `T`'s actor states, and `RecipientMustSign` (spec, S7) is dropped [I]. Squatting is closed two
-ways: a holding keeps one entry per definition, so a junk token credited to an account (or to a predictable
-vault PDA) cannot lock out the real one, and `NewDefinition` needs the definition account's authorisation, so
-nobody can claim someone else's account as a definition. The token must send nothing but `Credit`,
-`SupplyDown` and `StateReply` (§4.3 (c) point 5). Whether an undeclared fresh account is admitted is decided by
+ways: each `(owner, definition)` pair is its own holding actor (ADR-062), so a junk token credited to an
+account (or to a predictable vault PDA) lands in another actor and can neither lock out nor weigh down the real
+one, and `NewDefinition` needs the definition account's authorisation, so nobody can claim someone else's
+account as a definition. The token must send nothing but `Credit`, `Debit` (the proxy's unseeded message to
+the owner's holding), `SupplyDown` and `StateReply` (§4.3 (c) point 5). Whether an undeclared fresh account is admitted is decided by
 the sequencer (`admit`, EX:1190-1210): a declared, unsigned, nonexistent key account needs
 `PublicAccountEvidence` (found in the Task 3 tests), so the SDK declares recipients and attaches it.
 (Plan 6, ADR-062: junk now lands in other actors, and a fresh holding self-admits through `T`'s `HOLDING`
 seed. The only evidence left is the buffer holding's `Pda`, on a system op that reads it while its account is
-absent.)
+absent, and the reference oracle's evidence, on a timed system op while the oracle's account is absent: an
+oracle sits at a key account whose public key the chain does not record, so the SDK attaches the evidence
+its caller supplies.)
 
 **Correction to the squatting note above (final review, Plan 5).** One entry per definition stops a junk
 token from *locking out* the real one, but two gaps remained, both fixed in Plan 6:

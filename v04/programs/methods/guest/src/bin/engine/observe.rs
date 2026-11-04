@@ -19,7 +19,7 @@ use auction_engine_params::EngineError;
 use borsh::BorshDeserialize;
 use engine_core::{
     actors::collateral_actor,
-    check::{expect_from, fail},
+    check::{expect_from, expect_root, fail},
     feed,
     msg::{ClockMsg, EngineMsg},
     state::{CollateralState, ObserveThen, OracleReadingRec, PendingObserve},
@@ -79,6 +79,7 @@ pub fn on_observe_feed(
     collateral_def: AccountId,
     now_ms: u64,
 ) -> Response {
+    expect_root(input);
     if input.receiver != collateral_actor(engine(input), config, collateral_def) {
         fail(EngineError::WrongAccount("coll_config"));
     }

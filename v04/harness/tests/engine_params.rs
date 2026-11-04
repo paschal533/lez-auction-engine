@@ -20,7 +20,7 @@ use engine_core::{
 };
 use harness::{
     World, expect_revert, invariants,
-    world::{RAY, SALT, SLACK_MS},
+    world::{Forward, RAY, SALT, SLACK_MS},
 };
 use lee::{AccountId, Actor};
 use token_core::{Definition, TokenMsg};
@@ -594,5 +594,63 @@ fn set_collateral_still_validates_against_the_new_global_cap() {
         w.send_engine(w.admin, &[&key], &set),
         &fail_text(EngineError::TypeCapAboveGlobal),
     );
+    invariants::check(&w);
+}
+
+/// Final Minor 2 (v0.2.4 `check_distinct_slots`, `WrongAccount("protocol_token")`): a config's
+/// own protocol definition `protocol_def(E, K)` is never its stablecoin (refused at `Init`) nor
+/// its collateral type (refused at `SetCollateral`), so debt auctions never mint either.
+#[test]
+fn protocol_definition_is_never_the_stablecoin_or_the_collateral() {
+    let mut w = World::bare();
+    let key = w.admin_key.clone();
+    let mut init = w.init_msg();
+    if let EngineMsg::Init { stable_def, .. } = &mut init {
+        *stable_def = w.protocol_def();
+    }
+    expect_revert(
+        w.send_engine(w.admin, &[&key], &init),
+        &fail_text(EngineError::WrongAccount("protocol_token")),
+    );
+    assert_eq!(w.chain.raw_state(w.config), None);
+
+    let init = w.init_msg();
+    w.send_engine(w.admin, &[&key], &init)
+        .expect("the admin initialises");
+    let set = EngineMsg::SetCollateral {
+        salt: SALT,
+        collateral_def: w.protocol_def(),
+        args: World::collateral_args(),
+        now_ms: w.now_ms,
+    };
+    expect_revert(
+        w.send_engine(w.admin, &[&key], &set),
+        &fail_text(EngineError::WrongAccount("protocol_token")),
+    );
+    invariants::check(&w);
+    assert_eq!(config_state(&w).collateral_def, None);
+}
+
+/// Final Minor 3: `ObserveFeed` is a root, like every other root; relayed by another program
+/// mid-conversation it is refused before it observes.
+#[test]
+fn observe_feed_only_as_a_root() {
+    let mut w = configured();
+    w.set_now_ms(T);
+    w.set_price(RAY);
+    let before = collateral_state(&w);
+    let msg = EngineMsg::ObserveFeed {
+        config: w.config.account_id,
+        collateral_def: w.collateral_def,
+        now_ms: T,
+    };
+    let (relay, collateral) = (w.publisher, w.collateral);
+    let actors = [relay, collateral, w.params, w.oracle, w.chain.clock()];
+    expect_revert(
+        w.chain
+            .send(relay, &actors, &[], &Forward::new(collateral, &msg)),
+        &fail_text(EngineError::WrongAccount("root message expected")),
+    );
+    assert_eq!(collateral_state(&w), before);
     invariants::check(&w);
 }

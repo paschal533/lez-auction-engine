@@ -144,6 +144,15 @@ fn ref_oracle_slot(
     }
 }
 
+/// v0.2.4 `check_distinct_slots` (`WrongAccount("protocol_token")`): `def`, a stablecoin or
+/// collateral definition, is never the receiving config's own engine-mintable protocol
+/// definition `protocol_def(E, K)`, whether or not the protocol token is enabled yet.
+fn not_the_protocol_def(input: &ReceiveInput, def: AccountId) {
+    if def == protocol_def(engine(input), input.receiver.account_id) {
+        fail(EngineError::WrongAccount("protocol_token"));
+    }
+}
+
 /// The protocol token the config `k` names: its definition while enabled.
 fn protocol_token(engine: AccountId, k: AccountId, enabled: bool) -> Option<AccountId> {
     enabled.then(|| protocol_def(engine, k))
@@ -162,6 +171,7 @@ fn init_config(input: &ReceiveInput, c: &InitConfig<'_>) -> Response {
     nonzero(c.stable_def);
     nonzero_actor(c.oracle);
     nonzero_actor(c.clock);
+    not_the_protocol_def(input, c.stable_def);
     let k = input.receiver.account_id;
     let ref_oracle = ref_oracle_slot(
         c.params.ref_oracle_enabled,
@@ -367,6 +377,7 @@ pub fn on_set_collateral(
         fail(EngineError::NotAdmin);
     }
     nonzero(collateral_def);
+    not_the_protocol_def(input, collateral_def);
     // One collateral type per config (ruling R-F3): the first `SetCollateral` records it.
     if config
         .collateral_def

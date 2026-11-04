@@ -25,14 +25,14 @@ use engine_core::{
     state::{AuctionPhase, AuctionState, LiquidationRecordState},
 };
 use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey};
-use mock_host_core::{HostMsg, is_unsafe, vault_seed};
+use mock_host_core::{HostMsg, is_unsafe};
 use oracle_core::OracleMsg;
 use sdk::{
     BidArgs, Deployment, InitArgs, LiquidateArgs, Plan, Sent, Snapshot, StateSource, live::Wallet,
 };
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use sha2::{Digest as _, Sha256};
-use token_core::{Holding, TokenMsg};
+use token_core::{Holding, TokenMsg, holding_actor};
 
 type Res<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -69,13 +69,21 @@ struct Forward {
 mod mock_host {
     use lee::{AccountId, Actor};
     use mock_host_core::{position_id, vault_id};
+    use token_core::holding_actor;
 
-    /// What the mock host touches when it seizes `owner`'s position: the position PDA and the
-    /// owner's host vault holding.
-    pub fn seized_actors(host: AccountId, token: AccountId, owner: AccountId) -> [Actor; 2] {
+    /// What the mock host touches when it seizes `owner`'s position: the position PDA, the
+    /// owner's host vault token actor and that vault's holding of `collateral_def` (ADR-062).
+    pub fn seized_actors(
+        host: AccountId,
+        token: AccountId,
+        owner: AccountId,
+        collateral_def: AccountId,
+    ) -> [Actor; 3] {
+        let vault = vault_id(host, owner);
         [
             Actor::new(position_id(host, owner), host),
-            Actor::new(vault_id(host, owner), token),
+            Actor::new(vault, token),
+            holding_actor(token, vault, collateral_def),
         ]
     }
 }
@@ -281,7 +289,7 @@ impl Setup {
             p,
         };
         let (t, cdef_actor) = (s.p.token, Actor::new(cdef.account, s.p.token));
-        let whale_holding = Actor::new(s.whale.account, t);
+        let whale_holding = holding_actor(t, s.whale.account, cdef.account);
         let new_collateral = TokenMsg::NewDefinition {
             minter: None,
             initial_to: Some(s.whale.account),
@@ -378,18 +386,20 @@ impl Setup {
         collateral: u128,
         debt: u128,
     ) -> Res<AccountId> {
-        let (t, h) = (self.p.token, self.p.host);
-        let owner_holding = Actor::new(owner.account, t);
-        let whale_holding = Actor::new(self.whale.account, t);
+        let (t, h, cdef) = (self.p.token, self.p.host, self.collateral_def);
+        let owner_actor = Actor::new(owner.account, t);
+        let owner_collateral = holding_actor(t, owner.account, cdef);
+        let whale_actor = Actor::new(self.whale.account, t);
         let fund = TokenMsg::Transfer {
-            definition: self.collateral_def,
+            definition: cdef,
             to: owner.account,
             amount: collateral,
         };
         let evidence = live.key_evidence_if_fresh(owner).await?;
-        let actors = vec![whale_holding, owner_holding];
+        let whale_collateral = holding_actor(t, self.whale.account, cdef);
+        let actors = vec![whale_actor, whale_collateral, owner_collateral];
         let pl = plan(
-            whale_holding,
+            whale_actor,
             actors,
             vec![self.whale.account],
             evidence,
@@ -398,24 +408,28 @@ impl Setup {
         live.run("token: fund owner", &pl).await?;
 
         let proxy = Actor::new(owner.account, h);
-        let [position, vault] = mock_host::seized_actors(h, t, owner.account);
+        let [position, _, vault_collateral] = mock_host::seized_actors(h, t, owner.account, cdef);
         let open = self.proxied(HostMsg::OpenPosition {
             owner: owner.account,
             collateral,
         });
-        let evidence = vec![PublicAccountEvidence::Pda {
-            program: h,
-            seed: vault_seed(owner.account),
-        }];
-        let actors = vec![proxy, self.params, position, owner_holding, vault];
-        let pl = plan(proxy, actors, vec![owner.account], evidence, &open)?;
+        let actors = vec![
+            proxy,
+            self.params,
+            position,
+            owner_actor,
+            owner_collateral,
+            vault_collateral,
+        ];
+        let pl = plan(proxy, actors, vec![owner.account], vec![], &open)?;
         live.run("host: open position", &pl).await?;
 
         let generate = self.proxied(HostMsg::GenerateDebt {
             normalized_debt: debt,
         });
         let sdef = Actor::new(self.stable_def, t);
-        let actors = vec![proxy, self.params, position, sdef, owner_holding];
+        let owner_stable = holding_actor(t, owner.account, self.stable_def);
+        let actors = vec![proxy, self.params, position, sdef, owner_stable];
         let pl = plan(proxy, actors, vec![owner.account], vec![], &generate)?;
         live.run("host: generate debt", &pl).await?;
         Ok(position.account_id)
@@ -505,12 +519,15 @@ async fn auction_state(
     Ok(AuctionState::decode(&bytes).ok_or("the auction does not decode")?)
 }
 
-async fn balance(live: &Live, holding: Actor, definition: AccountId) -> Res<u128> {
+/// The balance of a per-definition holding (ADR-062); zero while it has no state.
+async fn balance(live: &Live, holding: Actor) -> Res<u128> {
     Ok(match live.raw_state(holding).await? {
         None => 0,
-        Some(bytes) => Holding::decode(&bytes)
-            .ok_or("not a token holding")?
-            .balance(definition),
+        Some(bytes) => {
+            Holding::decode(&bytes)
+                .ok_or("not a token holding")?
+                .balance
+        }
     })
 }
 
@@ -532,7 +549,8 @@ async fn auction(live: &mut Live, s: &Setup, d: &Deployment) -> Res<()> {
         nonce,
         now_ms: live.now_ms().await?,
     };
-    let host_actors = mock_host::seized_actors(s.p.host, s.p.token, owner.account);
+    let host_actors =
+        mock_host::seized_actors(s.p.host, s.p.token, owner.account, s.collateral_def);
     let liq = sdk::plan_liquidate(d, &args, &host_actors)?;
     live.run("engine: Liquidate", &liq).await?;
 
@@ -551,8 +569,7 @@ async fn auction(live: &mut Live, s: &Setup, d: &Deployment) -> Res<()> {
             min_collateral_out: 0,
             now_ms: live.now_ms().await?,
         };
-        let buffer = live.snapshot(&[d.buffer().account_id]).await?;
-        let bid = sdk::plan_bid(&buffer, d, &args)?;
+        let bid = sdk::plan_bid(d, &args)?;
         live.run(label, &bid).await?;
     }
     let settled = auction_state(live, d, position, nonce).await?;
@@ -563,10 +580,11 @@ async fn auction(live: &mut Live, s: &Setup, d: &Deployment) -> Res<()> {
         return Err("no leftover to claim".into());
     }
 
-    let claim = sdk::plan_claim_leftover(d, owner.account, position, nonce)?;
+    let claim = sdk::plan_claim_leftover(d, s.collateral_def, owner.account, position, nonce)?;
     live.run("engine: ClaimLeftover", &claim).await?;
-    let vault = balance(live, d.vault(position, nonce), s.collateral_def).await?;
-    let owner_got = balance(live, d.holding(owner.account), s.collateral_def).await?;
+    let vault = d.vault(position, nonce).account_id;
+    let vault = balance(live, d.holding_of(vault, s.collateral_def)).await?;
+    let owner_got = balance(live, d.holding_of(owner.account, s.collateral_def)).await?;
     let claimed = auction_state(live, d, position, nonce).await?;
     println!(
         "auction: Settled, debt_raised {}, penalty_raised {}, collateral_sold {}, leftover {} claimed by the owner; vault {vault}",

@@ -3,13 +3,11 @@
 
 use borsh::BorshSerialize;
 use harness::{Chain, expect_revert};
-use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence, error::LeeError};
+use lee::{AccountId, Actor, PrivateKey, error::LeeError};
 use lee_core::program::TransactionEvent;
-use mock_host_core::{
-    HostMsg, Params, Position, Seized, TAG_POSITION, position_id, vault_id, vault_seed,
-};
+use mock_host_core::{HostMsg, Params, Position, Seized, TAG_POSITION, position_id, vault_id};
 use oracle_core::OracleMsg;
-use token_core::{Definition, Holding, TokenMsg};
+use token_core::{Definition, Holding, TokenMsg, holding_actor};
 
 const RAY: u128 = 1_000_000_000_000_000_000_000_000_000;
 const MIN_CR_RAY: u128 = RAY * 3 / 2;
@@ -101,14 +99,20 @@ impl World {
             chain,
         };
 
-        let (cdef, sdef, owner_holding) = (w.collateral_def, w.stable_def, w.owner_holding);
+        let (cdef, sdef) = (w.collateral_def, w.stable_def);
+        let owner_collateral = w.holding(w.owner_holding, cdef);
         let collateral_def = TokenMsg::NewDefinition {
             minter: None,
             initial_to: Some(owner),
             initial_supply: OWNER_COLLATERAL,
         };
         w.chain
-            .send(cdef, &[cdef, owner_holding], &[&cdef_key], &collateral_def)
+            .send(
+                cdef,
+                &[cdef, owner_collateral],
+                &[&cdef_key],
+                &collateral_def,
+            )
             .expect("the collateral definition is created");
         let stable_def = TokenMsg::NewDefinition {
             minter: Some(params),
@@ -180,7 +184,7 @@ impl World {
     }
 
     /// The owner opens a position with `collateral`, signing (or not) at its proxy. The fresh
-    /// vault holding is admitted by PDA evidence.
+    /// vault collateral holding is a token PDA its `Credit` grants (ADR-062): no evidence.
     fn open(
         &mut self,
         owner: AccountId,
@@ -193,16 +197,12 @@ impl World {
             self.params,
             self.position,
             self.owner_holding,
-            self.vault,
+            self.holding(self.owner_holding, self.collateral_def),
+            self.holding(self.vault, self.collateral_def),
         ];
-        let evidence = [PublicAccountEvidence::Pda {
-            program: self.host,
-            seed: vault_seed(self.owner),
-        }];
         let signers: &[&PrivateKey] = if sign { &[&self.owner_key] } else { &[] };
         let proxy = self.proxy;
-        self.chain
-            .send_with_evidence(proxy, &actors, signers, &evidence, &msg)
+        self.chain.send(proxy, &actors, signers, &msg)
     }
 
     fn generate_debt(&mut self, normalized_debt: u128) -> Result<Vec<TransactionEvent>, LeeError> {
@@ -212,7 +212,7 @@ impl World {
             self.params,
             self.position,
             self.stable_def,
-            self.owner_holding,
+            self.holding(self.owner_holding, self.stable_def),
         ];
         let proxy = self.proxy;
         self.chain.send(proxy, &actors, &[&self.owner_key], &msg)
@@ -241,15 +241,26 @@ impl World {
             self.oracle,
             self.position,
             self.vault,
-            self.custody,
+            self.holding(self.vault, self.collateral_def),
+            self.holding(self.custody, self.collateral_def),
         ];
         self.chain.send(from, &actors, &[], &forward(params, &msg))
     }
 
-    fn balance(&self, holding: Actor, definition: Actor) -> u128 {
+    /// The holding of the token actor `owner` for the definition actor `definition` (ADR-062).
+    fn holding(&self, owner: Actor, definition: Actor) -> Actor {
+        holding_actor(
+            owner.program_account_id,
+            owner.account_id,
+            definition.account_id,
+        )
+    }
+
+    /// The balance of the token actor `owner` of `definition`; zero while it has no holding.
+    fn balance(&self, owner: Actor, definition: Actor) -> u128 {
         self.chain
-            .state::<Holding>(holding)
-            .map_or(0, |h| h.balance(definition.account_id))
+            .state::<Holding>(self.holding(owner, definition))
+            .map_or(0, |h| h.balance)
     }
 
     fn position_state(&self) -> Option<Position> {

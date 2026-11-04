@@ -1,15 +1,27 @@
-//! The token program (design note §6): holdings and definitions as actor states.
+//! The token program (design note §6, ADR-062): holdings per (owner, definition) and definitions
+//! as actor states.
 //!
-//! A holding keeps a balance per definition, and a definition needs its account's authorisation,
-//! so nobody can lock an account's token slot with a junk token. Credits are synchronous, so a
-//! whole conversation settles in one transaction. The program sends nothing but `Credit`,
-//! `SupplyDown` and `StateReply`. Errors are panics `token: <reason>`.
+//! - The owner's token actor `(owner, T)` is a stateless proxy: `Transfer`/`Sweep`/`Burn` need its
+//!   authorisation (a signature or the caller's PDA seed), then it sends an unseeded `Debit` to
+//!   `holding_actor(T, owner, definition)`.
+//! - A holding accepts `Debit` only from `(o, T)` whose re-derived holding is the receiver, and
+//!   `Credit` only from the token program, at the holding the credit names. A credit carries the
+//!   token program's `HOLDING` seed, so a fresh recipient holding is admitted without transaction
+//!   evidence; `Credit` sends nothing (a leaf).
+//! - A definition needs its account's authorisation, so nobody can claim a definition address;
+//!   credits never write `(X, T)`, so nobody can pre-block one either.
+//!
+//! Credits are synchronous, so a whole conversation settles in one transaction. The program sends
+//! nothing but `Debit`, `Credit`, `SupplyDown` and `StateReply`. Errors are panics
+//! `token: <reason>`.
 
 use lee_core::{
     account::{AccountId, Actor},
-    program::{ReceiveInput, Response, StateReply},
+    program::{ReceiveInput, Response, StateReply, SyncMessage},
 };
-use token_core::{Definition, Holding, TokenMsg};
+use token_core::{
+    DebitAction, Definition, Holding, TokenMsg, holding_actor, holding_seed, is_holding_owner,
+};
 
 lee_core::actor_entrypoint!(handle_message);
 
@@ -17,21 +29,37 @@ fn encode<T: borsh::BorshSerialize>(state: &T) -> Vec<u8> {
     borsh::to_vec(state).expect("state encodes")
 }
 
-fn token_actor(input: &ReceiveInput, account: AccountId) -> Actor {
-    Actor::new(account, input.receiver.program_account_id)
-}
-
-/// The receiver's holding; an account with no state yet holds nothing.
-fn load_holding(input: &ReceiveInput) -> Holding {
-    if input.pre_state.as_ref().is_empty() {
-        Holding::empty()
-    } else {
-        Holding::decode(input.pre_state.as_ref()).expect("token: NotAHolding")
-    }
+fn token(input: &ReceiveInput) -> AccountId {
+    input.receiver.program_account_id
 }
 
 fn load_definition(input: &ReceiveInput) -> Definition {
     Definition::decode(input.pre_state.as_ref()).expect("token: NotADefinition")
+}
+
+/// The receiver's holding of `owner` for `definition`; a holding with no state yet holds nothing.
+/// An existing state must be that holding.
+fn load_holding(input: &ReceiveInput, owner: AccountId, definition: AccountId) -> Holding {
+    if input.pre_state.as_ref().is_empty() {
+        return Holding::new(owner, definition);
+    }
+    let holding = Holding::decode(input.pre_state.as_ref()).expect("token: NotAHolding");
+    assert!(
+        holding.owner == owner && holding.definition == definition,
+        "token: WrongHolding"
+    );
+    holding
+}
+
+/// A credit of `amount` of `definition` to `to`'s holding, granting the holding's seed.
+fn credit(input: &ReceiveInput, to: AccountId, definition: AccountId, amount: u128) -> SyncMessage {
+    let msg = TokenMsg::Credit {
+        owner: to,
+        definition,
+        amount,
+    };
+    SyncMessage::new(holding_actor(token(input), to, definition), &msg)
+        .with_pda_seeds([holding_seed(to, definition)])
 }
 
 fn handle_message(input: &ReceiveInput, message: TokenMsg) -> Response {
@@ -45,31 +73,24 @@ fn handle_message(input: &ReceiveInput, message: TokenMsg) -> Response {
             definition,
             to,
             amount,
-        } => {
-            let mut holding = load_holding(input);
-            debit(input, &mut holding, definition, amount);
-            assert_ne!(to, input.receiver.account_id, "token: SelfTransfer");
-            send_credit(input, &holding, definition, to, amount)
-        }
+        } => forward_debit(
+            input,
+            definition,
+            Some(to),
+            DebitAction::Transfer { to, amount },
+        ),
         TokenMsg::Sweep {
             definition,
             to,
             at_least,
-        } => {
-            let mut holding = load_holding(input);
-            let amount = holding.balance(definition);
-            assert!(amount >= at_least, "token: BelowAtLeast");
-            debit(input, &mut holding, definition, amount);
-            assert_ne!(to, input.receiver.account_id, "token: SelfTransfer");
-            send_credit(input, &holding, definition, to, amount)
-        }
+        } => forward_debit(
+            input,
+            definition,
+            Some(to),
+            DebitAction::Sweep { to, at_least },
+        ),
         TokenMsg::Burn { definition, amount } => {
-            let mut holding = load_holding(input);
-            debit(input, &mut holding, definition, amount);
-            Response::set_state(encode(&holding)).send_sync(
-                token_actor(input, definition),
-                &TokenMsg::SupplyDown { amount },
-            )
+            forward_debit(input, definition, None, DebitAction::Burn { amount })
         }
         TokenMsg::MintTo { to, amount } => {
             let mut definition = load_definition(input);
@@ -79,13 +100,14 @@ fn handle_message(input: &ReceiveInput, message: TokenMsg) -> Response {
                 .supply
                 .checked_add(amount)
                 .expect("token: SupplyOverflow");
-            let credit = TokenMsg::Credit {
-                definition: input.receiver.account_id,
-                amount,
-            };
-            Response::set_state(encode(&definition)).send_sync(token_actor(input, to), &credit)
+            let mint = credit(input, to, input.receiver.account_id, amount);
+            Response::set_state(encode(&definition)).send(mint)
         }
-        TokenMsg::Credit { definition, amount } => receive_credit(input, definition, amount),
+        TokenMsg::Credit {
+            owner,
+            definition,
+            amount,
+        } => receive_credit(input, owner, definition, amount),
         TokenMsg::SupplyDown { amount } => {
             assert!(input.from_own_program(), "token: ForeignSupplyDown");
             let mut definition = load_definition(input);
@@ -99,6 +121,7 @@ fn handle_message(input: &ReceiveInput, message: TokenMsg) -> Response {
             let reader = input.from.expect("token: Unroutable");
             Response::keep_state().send_sync(reader, &StateReply::from(input))
         }
+        TokenMsg::Debit { definition, action } => debit(input, definition, action),
     }
 }
 
@@ -112,13 +135,7 @@ fn new_definition(
     assert!(input.pre_state.as_ref().is_empty(), "token: AlreadyExists");
     let state = Response::set_state(encode(&Definition::new(initial_supply, minter)));
     match initial_to {
-        Some(to) => {
-            let credit = TokenMsg::Credit {
-                definition: input.receiver.account_id,
-                amount: initial_supply,
-            };
-            state.send_sync(token_actor(input, to), &credit)
-        }
+        Some(to) => state.send(credit(input, to, input.receiver.account_id, initial_supply)),
         None => {
             assert_eq!(initial_supply, 0, "token: SupplyWithoutRecipient");
             state
@@ -126,34 +143,69 @@ fn new_definition(
     }
 }
 
-/// Checks authorisation and the balance, then debits `definition`'s entry of `holding` in place.
-fn debit(input: &ReceiveInput, holding: &mut Holding, definition: AccountId, amount: u128) {
+/// At the owner's token actor: authorisation, no payment to itself, then an unseeded `Debit` to
+/// the owner's holding of `definition`.
+fn forward_debit(
+    input: &ReceiveInput,
+    definition: AccountId,
+    to: Option<AccountId>,
+    action: DebitAction,
+) -> Response {
     assert!(input.is_authorized, "token: Unauthorized");
-    let balance = holding
-        .balance(definition)
+    let owner = input.receiver.account_id;
+    assert_ne!(to, Some(owner), "token: SelfTransfer");
+    let holding = holding_actor(token(input), owner, definition);
+    Response::keep_state().send_sync(holding, &TokenMsg::Debit { definition, action })
+}
+
+/// At a holding, from exactly its owner's token actor: debits, then credits or lowers supply.
+fn debit(input: &ReceiveInput, definition: AccountId, action: DebitAction) -> Response {
+    assert!(
+        is_holding_owner(input.receiver, input.from, definition),
+        "token: NotHoldingOwner"
+    );
+    let owner = input.from.expect("token: NotHoldingOwner").account_id;
+    let mut holding = load_holding(input, owner, definition);
+    let amount = match action {
+        DebitAction::Transfer { amount, .. } | DebitAction::Burn { amount } => amount,
+        DebitAction::Sweep { at_least, .. } => {
+            assert!(holding.balance >= at_least, "token: BelowAtLeast");
+            holding.balance
+        }
+    };
+    holding.balance = holding
+        .balance
         .checked_sub(amount)
         .expect("token: InsufficientBalance");
-    holding.set_balance(definition, balance);
+    let state = Response::set_state(encode(&holding));
+    match action {
+        DebitAction::Transfer { to, .. } | DebitAction::Sweep { to, .. } => {
+            state.send(credit(input, to, definition, amount))
+        }
+        DebitAction::Burn { .. } => state.send_sync(
+            Actor::new(definition, token(input)),
+            &TokenMsg::SupplyDown { amount },
+        ),
+    }
 }
 
-fn send_credit(
+/// At the holding the credit names (checked first, so a credit aimed anywhere else reports
+/// `WrongHolding`), from the token program.
+fn receive_credit(
     input: &ReceiveInput,
-    holding: &Holding,
+    owner: AccountId,
     definition: AccountId,
-    to: AccountId,
     amount: u128,
 ) -> Response {
-    let credit = TokenMsg::Credit { definition, amount };
-    Response::set_state(encode(holding)).send_sync(token_actor(input, to), &credit)
-}
-
-fn receive_credit(input: &ReceiveInput, definition: AccountId, amount: u128) -> Response {
+    assert!(
+        input.receiver == holding_actor(token(input), owner, definition),
+        "token: WrongHolding"
+    );
     assert!(input.from_own_program(), "token: ForeignCredit");
-    let mut holding = load_holding(input);
-    let balance = holding
-        .balance(definition)
+    let mut holding = load_holding(input, owner, definition);
+    holding.balance = holding
+        .balance
         .checked_add(amount)
         .expect("token: BalanceOverflow");
-    holding.set_balance(definition, balance);
     Response::set_state(encode(&holding))
 }

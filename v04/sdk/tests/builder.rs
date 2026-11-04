@@ -1,6 +1,7 @@
 //! The SDK's plans and simulation against the in-process harness (no sequencer): every plan
 //! declares the actors World declares and every actor its run changed; gas fitting; and a plan
-//! missing a recipient or the evidence of a fresh one is caught by the SDK's simulation path.
+//! missing a payer or a fresh recipient holding is caught by the SDK's simulation path, while a
+//! fresh holding needs no evidence (ADR-062).
 
 use std::collections::BTreeSet;
 
@@ -140,7 +141,12 @@ fn plans_declare_every_touched_actor() {
     w.set_now_ms(T);
     let position = w.open_unsafe_position(COLLATERAL, DEBT);
     w.set_price(RAY / 2);
-    let host_actors = [Actor::new(position, w.host_prog), w.host_vault(position)];
+    let host_vault = w.host_vault(position);
+    let host_actors = [
+        Actor::new(position, w.host_prog),
+        host_vault,
+        w.holding(host_vault.account_id, w.collateral_def),
+    ];
     let liq = plan_liquidate(
         &d,
         &LiquidateArgs {
@@ -157,7 +163,10 @@ fn plans_declare_every_touched_actor() {
     assert_eq!(liq.message, borsh::to_vec(&liq_msg).expect("encodes"));
     assert_eq!(liq.root, Actor::new(w.keeper, w.engine));
     assert_eq!(liq.signers, vec![w.keeper]);
-    assert_eq!(liq.evidence, w.liquidate_evidence(position, 0).to_vec());
+    assert!(
+        liq.evidence.is_empty(),
+        "the fresh vault holding is granted"
+    );
     assert_eq!(set(&liq.actors), set(&w.proxy_actors(w.keeper, &liq_msg)));
     run(&mut w, "liquidate", &liq, &[&keeper_key]);
 
@@ -172,12 +181,12 @@ fn plans_declare_every_touched_actor() {
             min_collateral_out: 0,
             now_ms: T,
         };
-        let bid = plan_bid(&InProcess(&w.chain), &d, &args).expect("bid plan");
+        let bid = plan_bid(&d, &args).expect("bid plan");
         let bid_msg = w.bid_msg(bidder.account, position, 0, (max_debt_in, 0), T);
         assert_eq!(bid.message, borsh::to_vec(&bid_msg).expect("encodes"));
         assert_eq!(bid.root, w.collateral);
         assert_eq!(bid.signers, vec![bidder.account]);
-        assert_eq!(bid.evidence, w.bid_evidence(), "{label}");
+        assert!(bid.evidence.is_empty(), "{label}");
         assert_eq!(
             set(&bid.actors),
             set(&w.bid_actors(bidder.account, position, 0))
@@ -187,7 +196,8 @@ fn plans_declare_every_touched_actor() {
 
     let owner = w.owner_of(position);
     let (owner_account, owner_key) = (owner.account, owner.key.clone());
-    let claim = plan_claim_leftover(&d, owner_account, position, 0).expect("claim plan");
+    let claim =
+        plan_claim_leftover(&d, w.collateral_def, owner_account, position, 0).expect("claim plan");
     let claim_msg = w.claim_msg(position, 0);
     assert_eq!(claim.message, borsh::to_vec(&claim_msg).expect("encodes"));
     assert_eq!(claim.root, Actor::new(owner_account, w.engine));
@@ -215,10 +225,10 @@ fn plans_declare_every_touched_actor() {
     run(&mut w, "settle_empty", &settle, &[]);
 }
 
-/// Review Focus 4: a bid plan that leaves out the bidder's holding (the recipient of the
-/// collateral and payer of the charge), or the evidence for the fresh buffer holding, is caught
-/// by the SDK's simulation path as `WouldRevert` naming the problem, without a panic; the plan as
-/// built simulates.
+/// Review Focus 4: a bid plan that leaves out the bidder's token actor (the payer of the charge)
+/// or the fresh buffer stablecoin holding (the penalty's recipient) is caught by the SDK's
+/// simulation path as `WouldRevert` naming the actor, without a panic; the plan as built carries
+/// no evidence (the fresh holding is granted by the token's `HOLDING` seed) and simulates.
 #[test]
 fn undeclared_fresh_recipient_is_caught_in_simulation() {
     let mut w = World::new_at(RAY / 2);
@@ -237,48 +247,41 @@ fn undeclared_fresh_recipient_is_caught_in_simulation() {
         min_collateral_out: 0,
         now_ms: T,
     };
-    let plan = plan_bid(&InProcess(&w.chain), &d, &args).expect("bid plan");
+    let plan = plan_bid(&d, &args).expect("bid plan");
+    let buffer_stable = w.holding(w.buffer().account_id, w.stable_def);
     assert!(
-        !w.chain.account_exists(w.buffer().account_id),
-        "the buffer is fresh before the first bid"
+        !w.chain.account_exists(buffer_stable.account_id),
+        "the buffer holding is fresh before the first bid"
     );
-    assert_eq!(plan.evidence.len(), 1, "the fresh buffer carries evidence");
+    assert!(
+        plan.evidence.is_empty(),
+        "a fresh holding needs no evidence"
+    );
 
-    let holding = Actor::new(bidder.account, w.token);
-    let without_holding = Plan {
-        actors: plan
-            .actors
-            .iter()
-            .copied()
-            .filter(|actor| *actor != holding)
-            .collect(),
-        ..plan.clone()
-    };
-    match simulate(&w, &without_holding) {
-        Err(SdkError::WouldRevert(reason)) => {
-            println!("undeclared holding: {reason}");
-            assert!(
-                reason.contains("UndeclaredActor") && reason.contains(&bidder.account.to_string()),
-                "the revert names the undeclared holding: {reason}"
-            );
+    for (label, left_out) in [
+        ("bidder's token actor", Actor::new(bidder.account, w.token)),
+        ("fresh buffer holding", buffer_stable),
+    ] {
+        let without = Plan {
+            actors: plan
+                .actors
+                .iter()
+                .copied()
+                .filter(|actor| *actor != left_out)
+                .collect(),
+            ..plan.clone()
+        };
+        match simulate(&w, &without) {
+            Err(SdkError::WouldRevert(reason)) => {
+                println!("undeclared {label}: {reason}");
+                assert!(
+                    reason.contains("UndeclaredActor")
+                        && reason.contains(&left_out.account_id.to_string()),
+                    "the revert names the undeclared {label}: {reason}"
+                );
+            }
+            other => panic!("expected WouldRevert for the undeclared {label}, got {other:?}"),
         }
-        other => panic!("expected WouldRevert for the undeclared holding, got {other:?}"),
-    }
-
-    let without_evidence = Plan {
-        evidence: Vec::new(),
-        ..plan.clone()
-    };
-    match simulate(&w, &without_evidence) {
-        Err(SdkError::WouldRevert(reason)) => {
-            println!("missing buffer evidence: {reason}");
-            assert!(
-                reason.contains("UnadmittedPublicActor")
-                    && reason.contains(&w.buffer().account_id.to_string()),
-                "the revert names the unadmitted buffer: {reason}"
-            );
-        }
-        other => panic!("expected WouldRevert for the missing evidence, got {other:?}"),
     }
 
     let cycles = simulate(&w, &plan).expect("the plan as built simulates");

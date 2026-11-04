@@ -146,9 +146,11 @@ fn host_that_never_replies_leaves_no_auction() {
     expect_revert(h.liquidate(), &fail_text(EngineError::NotAuctioning));
     assert_eq!(h.w.chain.raw_state(h.auction()), None, "no auction");
     assert_eq!(h.w.chain.raw_state(h.w.record(p)), None, "no record bump");
-    assert_eq!(h.w.chain.raw_state(h.vault()), None, "no vault");
+    let vault_collateral = h.w.holding(h.vault().account_id, h.w.collateral_def);
+    assert_eq!(h.w.chain.raw_state(vault_collateral), None, "no vault");
     assert_eq!(
-        h.w.chain.raw_state(Actor::new(h.w.keeper, h.w.token)),
+        h.w.chain
+            .raw_state(h.w.holding(h.w.keeper, h.w.collateral_def)),
         None,
         "no reward"
     );

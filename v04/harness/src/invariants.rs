@@ -2,7 +2,7 @@
 //! `programs/integration_tests` invariants, design note §4.3 a), over every auction the world's
 //! positions have had (found through their liquidation records, so nothing has to be tracked):
 //!
-//! - **R6 (as a floor, ruling R-5e):** each auction's vault holds at least
+//! - **R6 (as a floor, ruling R-5e):** each auction vault's collateral holding holds at least
 //!   `collateral_seized − keeper_reward − collateral_sold − leftover_claimed`. Donations into a
 //!   host vault before a seizure land in the auction vault unbooked, so equality cannot hold.
 //! - **Reservations:** the collateral actor's `type_reserved` and the config's `global_reserved`

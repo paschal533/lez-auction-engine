@@ -136,8 +136,13 @@ fn donate_to_vault(w: &mut World, position: AccountId, amount: u128) {
         amount,
     };
     let key = w.whale_key.clone();
+    let actors = [
+        whale,
+        w.holding(w.whale, w.collateral_def),
+        w.holding(vault.account_id, w.collateral_def),
+    ];
     w.chain
-        .send(whale, &[whale, vault], &[&key], &donate)
+        .send(whale, &actors, &[&key], &donate)
         .expect("the donation lands");
 }
 
@@ -158,7 +163,8 @@ fn partial_bid_then_final_bid_settles_once() {
     assert_eq!(w.collateral_balance(bidder.account), OUT_100K);
     assert_eq!(w.stable_balance(bidder.account), FUNDS - 100_000);
     assert_eq!(stable_supply(&w), supply - 100_000, "the debt part burns");
-    assert_eq!(w.chain.raw_state(w.buffer()), None, "no penalty yet");
+    let buffer_stable = w.holding(w.buffer().account_id, w.stable_def);
+    assert_eq!(w.chain.raw_state(buffer_stable), None, "no penalty yet");
     assert_eq!(
         accounting(&w),
         AccountingState::new(),
@@ -377,7 +383,8 @@ fn lot_emptying_final_bid_sweeps_the_vault_and_books_the_shortfall() {
         ),
         (DEBT - charged, DEBT - charged, charged)
     );
-    assert_eq!(w.chain.raw_state(w.buffer()), None, "no penalty raised");
+    let buffer_stable = w.holding(w.buffer().account_id, w.stable_def);
+    assert_eq!(w.chain.raw_state(buffer_stable), None, "no penalty raised");
     assert_eq!(
         (
             collateral_state(&w).type_reserved,
@@ -613,10 +620,7 @@ fn claim_before_liquidation_reverts_with_engine_error() {
 fn bid_and_claim_cycles_fit_the_budget() {
     let (mut w, position, bidder) = liquidated();
     let measure = |w: &World, msg: &EngineMsg, root: Actor, actors: &[Actor]| {
-        let evidence = w.bid_evidence();
-        let (cycles, outcome) =
-            w.chain
-                .cycles_with_evidence(root, actors, &[&bidder.key], &evidence, msg);
+        let (cycles, outcome) = w.chain.cycles(root, actors, &[&bidder.key], msg);
         outcome.expect("simulates");
         cycles
     };

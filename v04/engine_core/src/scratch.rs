@@ -71,7 +71,9 @@ pub enum AuctionScratch {
     /// Set by `Open` (phase `AwaitingSeize`): what the `Seized` report is quoted with.
     Quote(Box<QuoteCtx>),
     /// Set by `Seized` (phase `Auctioning`): the vault read must show at least `at_least` of
-    /// `definition` (R6 as a floor, ruling R-5e).
+    /// `definition` (R6 as a floor, ruling R-5e). `vault` is the actor read, the only one whose
+    /// reply counts: the vault's per-definition holding `holding_actor(T, vault, definition)`
+    /// (ADR-062), not the vault's stateless token actor.
     VaultRead {
         vault: Actor,
         definition: AccountId,

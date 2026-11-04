@@ -12,6 +12,8 @@ lee.workspace = true
 lee_core.workspace = true
 borsh.workspace = true
 engine_core.workspace = true
+# `holding_actor` (ADR-062): plans declare per-definition token holdings.
+token_core.workspace = true
 auction_engine_params.workspace = true
 # The live-sequencer half (`live`): RPC client, transaction wire type, wallet keys and program loader.
 common.workspace = true
@@ -22,7 +24,6 @@ tokio = { workspace = true, features = ["time"] }
 [dev-dependencies]
 harness.workspace = true
 # The live example (`examples/slice.rs`) speaks the other guests' messages and reads the clock.
-token_core.workspace = true
 oracle_core.workspace = true
 mock_host_core.workspace = true
 clock_core.workspace = true

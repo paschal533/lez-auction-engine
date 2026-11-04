@@ -1,14 +1,15 @@
 //! Cycles and fees per instruction of the liquidation slice (`--nocapture` prints the table; it
 //! is also written to `target/cycles-v04.md`, see `v04/CYCLES.md`).
 //!
-//! Each transaction is the one the other tests send: built by the same `World` helpers, with the
-//! admission evidence it needs, and measured with `Chain::cycles*` right before it is sent.
+//! Each transaction is the one the other tests send: built by the same `World` helpers (no
+//! admission evidence: fresh holdings are granted by the token's `HOLDING` seed, ADR-062), and
+//! measured with `Chain::cycles` right before it is sent.
 
 use std::{env, fs, path::PathBuf};
 
 use engine_core::msg::EngineMsg;
 use harness::{World, bidding::Bidder, world::RAY};
-use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence};
+use lee::{AccountId, Actor, PrivateKey};
 
 /// `max_gas_exec`, the per-transaction gas cap (spike S8).
 const GAS_CAP: u64 = 10_000_000;
@@ -22,13 +23,14 @@ const FUNDS: u128 = 1_000_000;
 const T: u64 = 1_000_000;
 
 /// Executions (messages delivered, replies included) of each transaction, counted from the
-/// as-built message sequences: `lee::simulate_public_transaction` returns cycles only.
+/// as-built message sequences: `lee::simulate_public_transaction` returns cycles only. Each token
+/// debit is two executions since ADR-062 (the owner's token actor, then its holding).
 const INIT_EXECUTIONS: u32 = 7;
 const SET_COLLATERAL_EXECUTIONS: u32 = 11;
-const LIQUIDATE_EXECUTIONS: u32 = 27;
-const PARTIAL_BID_EXECUTIONS: u32 = 13;
-const FINAL_BID_EXECUTIONS: u32 = 18;
-const CLAIM_EXECUTIONS: u32 = 5;
+const LIQUIDATE_EXECUTIONS: u32 = 29;
+const PARTIAL_BID_EXECUTIONS: u32 = 15;
+const FINAL_BID_EXECUTIONS: u32 = 21;
+const CLAIM_EXECUTIONS: u32 = 6;
 const SETTLE_EMPTY_EXECUTIONS: u32 = 6;
 
 struct Row {
@@ -99,9 +101,7 @@ fn bid_cycles(
     position: AccountId,
 ) -> (u64, Result<(), lee::error::LeeError>) {
     let actors = w.bid_actors(bidder.account, position, 0);
-    let evidence = w.bid_evidence();
-    w.chain
-        .cycles_with_evidence(w.collateral, &actors, &[&bidder.key], &evidence, msg)
+    w.chain.cycles(w.collateral, &actors, &[&bidder.key], msg)
 }
 
 #[test]
@@ -126,28 +126,26 @@ fn every_slice_instruction_fits_the_gas_cap() {
         proxied(&w, admin, &admin_key, &set),
     ));
 
-    // Liquidate at the keeper's proxy, with the auction vault's admission evidence.
+    // Liquidate at the keeper's proxy.
     let mut w = World::new_at(RAY / 2);
     w.set_now_ms(T);
     let position = w.open_unsafe_position(COLLATERAL, DEBT);
     w.set_price(RAY / 2);
     let msg = w.liquidate_msg(position, 0, w.now_ms);
     let actors = w.proxy_actors(w.keeper, &msg);
-    let evidence: [PublicAccountEvidence; 1] = w.liquidate_evidence(position, 0);
     let keeper_key = w.keeper_key.clone();
     rows.push(measured(
         "Liquidate",
         LIQUIDATE_EXECUTIONS,
-        w.chain.cycles_with_evidence(
+        w.chain.cycles(
             Actor::new(w.keeper, w.engine),
             &actors,
             &[&keeper_key],
-            &evidence,
             &msg,
         ),
     ));
 
-    // Partial and final Bid (the first carries the buffer's admission evidence), ClaimLeftover.
+    // Partial and final Bid, ClaimLeftover.
     let (mut w, position, bidder) = liquidated();
     let partial = w.bid_msg(bidder.account, position, 0, (100_000, 0), w.now_ms);
     rows.push(measured(

@@ -4,12 +4,10 @@
 
 use borsh::BorshSerialize;
 use engine_core::{
-    actors::{
-        auction_actor, collateral_actor, config_actor, record_actor, vault_holding, vault_seed,
-    },
+    actors::{auction_actor, collateral_actor, config_actor, record_actor, vault_holding},
     msg::EngineMsg,
 };
-use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence, error::LeeError};
+use lee::{AccountId, Actor, PrivateKey, error::LeeError};
 use lee_core::program::TransactionEvent;
 use mock_host_core::{Params, TAG_PARAMS};
 use token_core::TokenMsg;
@@ -155,42 +153,35 @@ impl World {
         self.impostor_with_state(label, script(&[(auction, encode(&seized))]))
     }
 
-    /// The vault of auction 0 of `(config, position)`.
+    /// The vault's token actor of auction 0 of `(config, position)`.
     pub fn vault_of(&self, config: AccountId, position: AccountId) -> Actor {
         let auction = auction_actor(self.engine, config, position, 0);
         vault_holding(self.engine, self.token, auction.account_id)
     }
 
-    /// The fresh-vault evidence of auction 0 of `(config, position)`, if the vault is absent.
-    fn vault_evidence(&self, config: AccountId, position: AccountId) -> Vec<PublicAccountEvidence> {
-        if self
-            .chain
-            .raw_state(self.vault_of(config, position))
-            .is_some()
-        {
-            return Vec::new();
-        }
-        let auction = auction_actor(self.engine, config, position, 0);
-        vec![PublicAccountEvidence::Pda {
-            program: self.engine,
-            seed: vault_seed(auction.account_id),
-        }]
+    /// The collateral holding of the vault of auction 0 of `(config, position)`.
+    fn vault_collateral_of(&self, config: AccountId, position: AccountId) -> Actor {
+        let vault = self.vault_of(config, position).account_id;
+        self.holding(vault, self.collateral_def)
     }
 
     /// The whale funds the vault of auction 0 of `(config, position)` with `amount` collateral,
     /// so a scripted seizure is really in custody.
     pub fn fund_vault(&mut self, config: AccountId, position: AccountId, amount: u128) {
         let whale = Actor::new(self.whale, self.token);
-        let vault = self.vault_of(config, position);
         let donate = TokenMsg::Transfer {
             definition: self.collateral_def,
-            to: vault.account_id,
+            to: self.vault_of(config, position).account_id,
             amount,
         };
-        let evidence = self.vault_evidence(config, position);
+        let actors = [
+            whale,
+            self.holding(self.whale, self.collateral_def),
+            self.vault_collateral_of(config, position),
+        ];
         let key = self.whale_key.clone();
         self.chain
-            .send_with_evidence(whale, &[whale, vault], &[&key], &evidence, &donate)
+            .send(whale, &actors, &[&key], &donate)
             .expect("the vault is funded");
     }
 
@@ -222,11 +213,10 @@ impl World {
             auction_actor(e, config, p, 0),
             position,
             self.vault_of(config, p),
-            Actor::new(self.keeper, self.token),
+            self.vault_collateral_of(config, p),
+            self.holding(self.keeper, self.collateral_def),
         ];
-        let evidence = self.vault_evidence(config, p);
         let key = self.keeper_key.clone();
-        self.chain
-            .send_with_evidence(keeper_root, &actors, &[&key], &evidence, &msg)
+        self.chain.send(keeper_root, &actors, &[&key], &msg)
     }
 }

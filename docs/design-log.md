@@ -1677,3 +1677,36 @@ The check reads our mock's `Params` layout (`mock_host_core::Params`), which is 
 Accepted (Plan 7, Task 3)
 
 ---
+
+## ADR-066: Discovery by Root-Call Block Scan, Candidates Confirmed by State Reads
+
+**Context**
+A keeper has to find the auctions, positions, surplus auctions and debt auctions of a config. LEZ 0.4 has no account-listing RPC and no event stream a client can rely on: a standalone sequencer never finalizes, so anything that waits for finality never fires. Plan 7 needs the discovery core before the live wiring (Task 5).
+
+**Options**
+- (A) Subscribe to events.
+- (B) Scan the blocks and read the root call of each transaction.
+- (C) Keep an index in the engine's own state.
+
+**Decision**
+(B) (Plan 7, Task 4), ported from the v0.2.4 scanner (ADR-008, ADR-043).
+- **Root-call discovery**: every user-initiated action that creates or touches an auction is a root call to the engine program whose message names the config. `collect` reads a transaction only if it did not revert, its `root_to` is an actor of the engine program, and its message decodes as an `EngineMsg` naming the scan's config. `Liquidate` yields the auction `(position, nonce)` and the position; `Bid`, `ClaimLeftover` and `SettleEmpty` yield the auction; `StartSurplus` and `StartDebt` yield the nonce. All other variants are ignored, and a message that does not decode is skipped, not an error.
+- **Candidate, then state read**: what the scan finds are candidates. A transaction can be included and still have been built to look right (a message a different version would decode, an auction since settled). The caller confirms each candidate by reading its actor's state, as the v0.2.4 list commands read each id and dropped those that no longer decoded. The sets are sets, so a rescan never duplicates, and a candidate that no longer exists is harmless.
+- **No events**: (A) is rejected because a standalone sequencer never finalizes. (C) is rejected because the engine's state is frozen and the index would cost every transaction.
+- **The anchor**: the cursor records the hash of block 2 (`ANCHOR_BLOCK`). Block 1 is not usable: the genesis block has a fixed timestamp, so a restarted node reproduces its hash. Block 2 is the first block stamped with the wall clock, so two runs of one node differ there. A node with another anchor, or an anchorless cursor that has passed block 2, discards the cursor and rescans from block 1 (`restarted`). The cursor also keeps the hashes of its last `reorg_depth + 1` blocks (`recent`). A rewind (after a changed cursor block or a cursor above the head) goes back `reorg_depth` blocks and is accepted only if it reaches genesis or the node's hash of the rewind block equals the recorded one. Otherwise the scan fails with `SdkError::ScanFork { at }` (also for a block that does not extend the last, or for block 2 changing mid-scan), and the caller rescans from block 1. A block the node does not return is `SdkError::MissingBlock(id)`.
+- **Shape**: `BlockSource` is two async methods (`last_block_id`, `blocks(from, to)` inclusive), so the core runs against an in-memory chain in tests and the live `SequencerClient` supplies it in Task 5. `scan` is a loop over `scan_page`, which reads at most `max_blocks` new blocks (0 counts as 1) so a caller with a time budget can page. Neither `scan` nor `collect` mutates its input: a failed scan leaves the caller's cursor as it was.
+- **Persistence**: the cursor is plain data with borsh derives, and the caller stores it. Hashes are `[u8; 32]`, not hex strings, and absent values are `Option`, not empty strings. `Found` holds `AccountId`s directly, because `AccountId` is `Ord` and borsh-serializable in the pinned version.
+
+**Trade-offs**
+- Work is O(blocks) off-chain, with no push. A persisted cursor and paging bound it.
+- `recent` bounds a reorganisation to `reorg_depth` (default 10); deeper needs a rescan from block 1.
+- `collect` clones the sets once per call; the scan itself uses an in-place variant on its own copy.
+- A discovered candidate is not proof of an auction; the state read is mandatory.
+
+**Evidence**
+- Tests (`v04/sdk/tests/scan.rs`, 17): `finds_auctions_and_positions_incrementally`, `rewinds_on_changed_hash`, `rewind_arithmetic_is_exact`, `replaced_chain_rescans_from_genesis`, `matching_anchor_scans_incrementally`, `anchorless_cursor_is_rebuilt_once`, `cursor_above_head_rewinds_only_when_provable`, `fork_deeper_than_reorg_depth_fails`, `missing_cursor_block_is_an_error`, `cursor_unchanged_on_missing_block`, `scan_page_stops_at_max_blocks_and_reports_done`, `collect_finds_liquidate_bid_surplus_debt`, `collect_ignores_other_config`, `collect_skips_reverted_tx`, `collect_ignores_other_program`, `collect_skips_undecodable_root_message`, `cursor_round_trips_through_borsh`.
+
+**Status**
+Accepted (Plan 7, Task 4)
+
+---

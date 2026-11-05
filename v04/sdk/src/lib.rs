@@ -7,6 +7,7 @@
 pub mod builder;
 pub mod decode;
 pub mod live;
+pub mod scan;
 #[cfg(feature = "session")]
 pub mod session;
 pub mod simulate;
@@ -43,6 +44,10 @@ pub enum SdkError {
     MissingKey(lee::AccountId),
     /// The transaction was included (and charged) but its action reverted.
     Reverted(String),
+    /// The node's chain diverged from the scan cursor deeper than the reorg depth, at block `at`.
+    ScanFork { at: u64 },
+    /// The node did not return a block the scan needs (its id).
+    MissingBlock(u64),
 }
 
 impl fmt::Display for SdkError {
@@ -55,6 +60,11 @@ impl fmt::Display for SdkError {
             Self::Rpc(reason) => write!(f, "sequencer: {reason}"),
             Self::MissingKey(account) => write!(f, "no signing key for {account}"),
             Self::Reverted(reason) => write!(f, "reverted on chain: {reason}"),
+            Self::ScanFork { at } => write!(
+                f,
+                "the chain diverged from the scan cursor at block {at}, deeper than the reorg depth; rescan from block 1"
+            ),
+            Self::MissingBlock(id) => write!(f, "the node did not return block {id}"),
         }
     }
 }

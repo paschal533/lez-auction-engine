@@ -165,7 +165,6 @@ stays under 3 % of the cap.
   needs a schema derive the crates do not have.
 - **Native collateral.** Collateral is a `T` token; native collateral would need Read + exact `Transfer`
   instead of `Sweep` (design note §6).
-- **First hosted e2e run** (`v04-e2e.yml` is in place; its first run is not recorded yet).
 
 ## Time in-process
 

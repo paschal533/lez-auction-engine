@@ -11,8 +11,8 @@
 #      finding both system auctions),
 #   8. stop the sequencer by its exact process name.
 # `e2e.sh` (or `e2e.sh all`) runs every step; `up`, `deploy`, `slice`, `system`, `down` run them in
-# stages. Exits non-zero on any failed step. Local only (no CI): it needs a few GB of LEZ build and
-# about 25 minutes of 15 s blocks.
+# stages. Exits non-zero on any failed step. Runs locally and on hosted CI (.github/workflows/v04-e2e.yml,
+# which runs the stages as separate steps): it needs a few GB of LEZ build and about 25 minutes of 15 s blocks.
 #
 # Environment (all optional):
 #   LEZ_DIR        LEZ checkout at v0.4.0-rc1      (default ~/lez-spikes/lez-v04, cloned if absent)
@@ -52,15 +52,21 @@ step() { echo; echo "== $*"; }
 die() { echo "e2e: $*" >&2; exit 1; }
 wallet() { "$BIN/wallet" "$@"; }
 
-build_lez() {
-  if [[ -x "$BIN/sequencer_service" && -x "$BIN/wallet" ]]; then
-    echo "reusing $BIN/{sequencer_service,wallet}"; return
-  fi
+# The checkout is always needed (sequencer and wallet configs), even when the binaries are reused
+# (a CI cache restores the binaries only).
+ensure_lez_checkout() {
   if [[ ! -d "$LEZ_DIR" ]]; then
     git clone --depth 1 --branch "$LEZ_TAG" \
       https://github.com/logos-blockchain/logos-execution-zone.git "$LEZ_DIR"
   fi
   [[ "$(git -C "$LEZ_DIR" describe --tags)" == "$LEZ_TAG" ]] || die "$LEZ_DIR is not at $LEZ_TAG"
+}
+
+build_lez() {
+  ensure_lez_checkout
+  if [[ -x "$BIN/sequencer_service" && -x "$BIN/wallet" ]]; then
+    echo "reusing $BIN/{sequencer_service,wallet}"; return
+  fi
   ( cd "$LEZ_DIR" && CARGO_TARGET_DIR="$LEZ_TARGET" RISC0_SKIP_BUILD=1 \
       cargo build --release --features standalone -p sequencer_service \
     && CARGO_TARGET_DIR="$LEZ_TARGET" RISC0_SKIP_BUILD=1 cargo build --release -p wallet )

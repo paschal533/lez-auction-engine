@@ -37,8 +37,9 @@ Memory-constrained machines: `CARGO_BUILD_JOBS=2`. The first build compiles LEZ 
 match the tag's.
 
 CI: `.github/workflows/v04.yml` runs fmt, clippy and `cargo test --workspace` on changes under `v04/`,
-`crates/auction_core/` or `crates/auction_engine_params/`. The e2e below stays local, like the v0.2.4
-localnet story: it needs a LEZ build and about 25 minutes of 15 s blocks.
+`crates/auction_core/` or `crates/auction_engine_params/`. The e2e below also runs on hosted runners
+(`.github/workflows/v04-e2e.yml`: pushes to `main` that touch those paths, weekly, and on dispatch); it needs
+a LEZ build and about 25 minutes of 15 s blocks.
 
 ## End to end on a standalone sequencer
 
@@ -164,7 +165,7 @@ stays under 3 % of the cap.
   needs a schema derive the crates do not have.
 - **Native collateral.** Collateral is a `T` token; native collateral would need Read + exact `Transfer`
   instead of `Sweep` (design note §6).
-- **CI for the e2e** (it stays local).
+- **First hosted e2e run** (`v04-e2e.yml` is in place; its first run is not recorded yet).
 
 ## Time in-process
 

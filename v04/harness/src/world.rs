@@ -283,6 +283,14 @@ impl World {
         }
     }
 
+    /// `SetSlack` for salt [`SALT`] with `slack_ms`.
+    pub fn set_slack_msg(&self, slack_ms: u64) -> EngineMsg {
+        EngineMsg::SetSlack {
+            salt: SALT,
+            slack_ms,
+        }
+    }
+
     /// The protocol token's definition account of the world's config, `protocol_def(E, K)`.
     pub fn protocol_def(&self) -> AccountId {
         protocol_def(self.engine, self.config.account_id)
@@ -348,6 +356,19 @@ impl World {
             let config = config_actor(self.engine, proxy, *salt);
             let accounting = accounting_actor(self.engine, config.account_id);
             let mut actors = vec![at, config, accounting];
+            let recorded = self
+                .chain
+                .raw_state(config)
+                .and_then(|bytes| ConfigState::decode(&bytes))
+                .and_then(|state| state.collateral_def);
+            actors
+                .extend(recorded.map(|def| collateral_actor(self.engine, config.account_id, def)));
+            return actors;
+        }
+        if let EngineMsg::SetSlack { salt, .. } = msg {
+            // The config's recorded collateral type (`SlackUpdate`), read from its state.
+            let config = config_actor(self.engine, proxy, *salt);
+            let mut actors = vec![at, config];
             let recorded = self
                 .chain
                 .raw_state(config)

@@ -397,3 +397,30 @@ fn seized_index_matches_the_host_encoding() {
     assert_eq!(borsh::to_vec(&ours).expect("encodes"), host);
     assert_eq!(EngineMsg::try_from_slice(&host).expect("decodes"), ours);
 }
+
+/// `SetSlack` (Plan 7 Task 2) is appended after `Freeze`: variant 45.
+#[test]
+fn set_slack_round_trips_at_index_45() {
+    let msg = EngineMsg::SetSlack {
+        salt: 7,
+        slack_ms: 30_000,
+    };
+    let bytes = borsh::to_vec(&msg).expect("encodes");
+    assert_eq!(bytes.first(), Some(&45));
+    assert_eq!(
+        borsh::from_slice::<EngineMsg>(&bytes).expect("decodes"),
+        msg
+    );
+}
+
+/// `SlackUpdate` (Plan 7 fix round 1) is appended after `SetSlack`: variant 46.
+#[test]
+fn slack_update_round_trips_at_index_46() {
+    let msg = EngineMsg::SlackUpdate { slack_ms: 30_000 };
+    let bytes = borsh::to_vec(&msg).expect("encodes");
+    assert_eq!(bytes.first(), Some(&46));
+    assert_eq!(
+        borsh::from_slice::<EngineMsg>(&bytes).expect("decodes"),
+        msg
+    );
+}

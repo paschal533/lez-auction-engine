@@ -185,7 +185,8 @@ pub enum EngineMsg {
     ///     the parameters, then asks the collateral actor of its recorded type (if any, behind a
     ///     seeded `Probe { Collateral }`) for `AssertCapAtMost`, and, if the protocol token, the
     ///     reference oracle or the system parameters change, the accounting for
-    ///     `AssertSystemIdle`. `slack_ms` and the actors fixed at `Init` are not settable.
+    ///     `AssertSystemIdle`. The actors fixed at `Init` are not settable; `slack_ms` is, by
+    ///     [`EngineMsg::SetSlack`].
     SetEngineParams {
         salt: u64,
         params: Box<EngineParamsArgs>,
@@ -355,6 +356,16 @@ pub enum EngineMsg {
     /// 44. Accounting to its config `K`: freeze new debt at the host. `K` accepts it only from
     ///     `accounting_actor(E, K)` and sends `EngineFreezeNewDebt` to its bound host.
     Freeze,
+    /// 45. Root at the admin's proxy (ADR-064): a seeded `Probe { Config }`, then this message
+    ///     unseeded to the config, which checks the admin and
+    ///     [`slack_in_range`](crate::check::slack_in_range), writes `slack_ms` and sends
+    ///     the recorded collateral actor a [`EngineMsg::SlackUpdate`], if any. The system
+    ///     instructions copy the new value from the config at their next relay.
+    SetSlack { salt: u64, slack_ms: u64 },
+    /// 46. Config to its recorded collateral actor, behind a seeded `Probe { Collateral }`, from
+    ///     `SetSlack` (ADR-064): the collateral actor accepts it only from its own config, writes
+    ///     `ctx.slack_ms` and sends nothing. Not sent while the config has no collateral type.
+    SlackUpdate { slack_ms: u64 },
 }
 
 /// The protocol token's genesis at `Init`: `supply` credited to `to`'s holding.

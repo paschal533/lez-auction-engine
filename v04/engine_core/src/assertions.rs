@@ -36,8 +36,8 @@ fn engine_config_sender(input: &ReceiveInput) -> Result<AccountId, EngineError> 
     }
 }
 
-/// `AssertCapAtMost { global_cap }` at a collateral actor, from exactly its config.
-pub fn cap_at_most(input: &ReceiveInput, global_cap: u128) -> Result<(), EngineError> {
+/// The collateral state at the receiver, whose config is exactly the sender.
+fn collateral_of_sender(input: &ReceiveInput) -> Result<CollateralState, EngineError> {
     let config = engine_config_sender(input)?;
     let coll = CollateralState::decode(input.pre_state.as_ref())
         .ok_or(EngineError::WrongAccount("coll_config"))?;
@@ -47,6 +47,17 @@ pub fn cap_at_most(input: &ReceiveInput, global_cap: u128) -> Result<(), EngineE
     {
         return Err(EngineError::NotAdmin);
     }
+    Ok(coll)
+}
+
+/// `SlackUpdate` at a collateral actor, from exactly its config: the decoded state to update.
+pub fn slack_update(input: &ReceiveInput) -> Result<CollateralState, EngineError> {
+    collateral_of_sender(input)
+}
+
+/// `AssertCapAtMost { global_cap }` at a collateral actor, from exactly its config.
+pub fn cap_at_most(input: &ReceiveInput, global_cap: u128) -> Result<(), EngineError> {
+    let coll = collateral_of_sender(input)?;
     if coll.type_cap > global_cap {
         return Err(EngineError::TypeCapAboveGlobal);
     }

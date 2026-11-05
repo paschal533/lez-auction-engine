@@ -1609,3 +1609,36 @@ Design note §4.2 rows 9-16 root `settle_debt` at `Acc` and the surplus and debt
 Accepted (Plan 6, Tasks 2-9)
 
 ---
+
+## ADR-064: Bounded `slack_ms` and a `SetSlack` Admin Instruction
+
+**Context**
+`slack_ms` is the clock slack for claimed time (ADR-058). It was set at `Init` only and had no bounds. A value too small makes every timed transaction miss the claim window, and each revert pays its whole gas limit (S8). A value too large lets a caller backdate a claim by that much. A wrong value meant a new config. Plan 6 kept it unsettable because each collateral actor caches it in its `ObserveCtx`.
+
+**Options**
+- (A) Leave it fixed at `Init`, unbounded.
+- (B) Bound it at `Init` and let the admin change it, within the same bounds, with the collateral actor's copy updated in the same transaction.
+
+**Decision**
+(B) (Plan 7, Task 2 and fix round 1, ruling R-2a).
+- **Bounds**: `MIN_SLACK_MS = 1_000` and `MAX_SLACK_MS = 300_000`, in `engine_core::check` with `slack_in_range`. Outside them the engine returns the existing `InvalidConfig` (code 5). No new error variant: the error enum is in a frozen crate.
+- **Floor**: 1 s only guards against an obviously wrong value, such as 0, whose every timed transaction would revert at its full gas limit (S8). It is not a safe value. The operator must still set at least the block interval plus the inclusion wait (ADR-058).
+- **Ceiling**: 300 s is the most a claim can be backdated. Backdating moves value to takers and brings auction starts forward (ADR-058, ADR-063), so it must have a limit.
+- **`Init`** checks the bounds next to `params.validate()`.
+- **`SetSlack { salt, slack_ms }`** is variant 45, appended after `Freeze`. It follows the `SetEngineParams` route: the admin's proxy sends a seeded `Probe { Config }`, then the message to the config. The config checks the admin and the bounds and writes `slack_ms`.
+- **The relay**: if the config has a recorded collateral type, it also sends `SlackUpdate { slack_ms }` (variant 46) to `collateral_actor(E, K, def)`, behind a seeded `Probe { Collateral }`, as `SetEngineParams` does for `AssertCapAtMost`. The collateral actor accepts it only from its own config (the same whole-actor sender check as `Configure` and `AssertCapAtMost`), writes only `ctx.slack_ms` and sends nothing. With no recorded type there is nothing to relay. This supersedes Plan 6's "slack is not settable because each collateral actor caches it in `ObserveCtx`": the cache is now refreshed by `SlackUpdate` as well as by `SetCollateral`.
+- **No lock check**: `SetSlack` skips the cap check and `AssertSystemIdle`. Slack is not a locked field, and no live auction's stored terms change, because an auction keeps the `start_ms` it already has.
+- **When the new value applies**: the config and the collateral actor hold it when the transaction lands, so the next `ObserveFeed` or `Liquidate` uses it. Each system instruction copies it from the config when it relays its context, so the next one uses it too. A transaction already included keeps the value it ran with.
+
+**Trade-offs**
+- `SetSlack` costs two more executions while a collateral type is recorded.
+- An admin can raise the slack up to the ceiling at any time. The ceiling is the limit on that power.
+
+**Evidence**
+- Tests: `set_slack_updates_config_and_next_observation_uses_it`, `set_slack_without_collateral_type_only_updates_config`, `slack_update_rejected_from_non_config_sender`, `set_slack_accepts_bounds`, `set_slack_rejects_out_of_range`, `set_slack_rejects_non_admin`, `init_rejects_out_of_range_slack`, `set_slack_round_trips_at_index_45`, `slack_update_round_trips_at_index_46`, `plan_set_slack_declares_proxy_and_config`.
+- Cost: the `SetSlack` row in `v04/CYCLES.md` (5 executions with a recorded type).
+
+**Status**
+Accepted (Plan 7, Task 2)
+
+---

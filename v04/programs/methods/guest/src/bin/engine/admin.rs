@@ -1,5 +1,5 @@
-//! `Init`, `SetEngineParams` and `SetCollateral` past the proxy (design note §4.2 rows 0-2;
-//! v0.2.4 `admin.rs` `init_config` / `set_engine_params` / `set_collateral_config`).
+//! `Init`, `SetEngineParams`, `SetSlack` and `SetCollateral` past the proxy (design note §4.2
+//! rows 0-2; v0.2.4 `admin.rs` `init_config` / `set_engine_params` / `set_collateral_config`).
 //!
 //! - Config `K = config_actor(E, admin, salt)`: accepts only `from == (admin, E)` and re-derives
 //!   its own address from that sender and the salt.
@@ -13,6 +13,8 @@
 //! - `SetEngineParams` at `K` writes the validated parameters, then asks its recorded collateral
 //!   actor for `AssertCapAtMost` and, if a locked field changes, the accounting for
 //!   `AssertSystemIdle`; both accept only their config and send nothing.
+//! - `SetSlack` at `K` writes a bounded `slack_ms`, then relays it to its recorded collateral
+//!   actor as `SlackUpdate`, which accepts it only from its config (ADR-064).
 
 use auction_engine_params::{
     EngineError,
@@ -24,7 +26,7 @@ use engine_core::{
         protocol_def, protocol_def_seed,
     },
     assertions,
-    check::{expect_from, fail},
+    check::{expect_from, fail, slack_in_range},
     msg::{EngineMsg, ProbeKind, ProtocolGenesis},
     state::{
         AccountingState, CollateralState, ConfigState, ObserveCtx, SystemParamsRec, TAG_COLL,
@@ -166,6 +168,7 @@ fn init_config(input: &ReceiveInput, c: &InitConfig<'_>) -> Response {
         fail(EngineError::WrongAccount("config"));
     }
     let system = c.params.validate().unwrap_or_else(|err| fail(err));
+    slack_in_range(c.slack_ms).unwrap_or_else(|err| fail(err));
     nonzero_actor(c.host);
     nonzero(c.token);
     nonzero(c.stable_def);
@@ -292,6 +295,48 @@ pub fn on_set_engine_params(input: &ReceiveInput, message: &EngineMsg) -> Respon
     }
 }
 
+/// `SetSlack` at the config, forwarded by the admin's proxy: admin, bounds, write. Slack is not a
+/// locked field, so there is no cap check and no `AssertSystemIdle` (ADR-064).
+pub fn on_set_slack(input: &ReceiveInput, message: &EngineMsg) -> Response {
+    let EngineMsg::SetSlack { salt, slack_ms } = message else {
+        panic!("engine: BadMessage")
+    };
+    let admin = expect_admin_proxy(input, *salt);
+    let config = ConfigState::decode(input.pre_state.as_ref())
+        .unwrap_or_else(|| fail(EngineError::WrongAccount("config")));
+    if config.admin != admin {
+        fail(EngineError::NotAdmin);
+    }
+    slack_in_range(*slack_ms).unwrap_or_else(|err| fail(err));
+    let next = ConfigState {
+        slack_ms: *slack_ms,
+        ..config
+    };
+    let response = Response::set_state(next.encode());
+    match next.collateral_def {
+        Some(def) => to_collateral(
+            input,
+            response,
+            def,
+            &EngineMsg::SlackUpdate {
+                slack_ms: *slack_ms,
+            },
+        ),
+        None => response,
+    }
+}
+
+/// `SlackUpdate` at a collateral actor, from exactly its config: writes `ctx.slack_ms`, sends
+/// nothing.
+pub fn on_slack_update(input: &ReceiveInput, slack_ms: u64) -> Response {
+    let coll = assertions::slack_update(input).unwrap_or_else(|err| fail(err));
+    let next = CollateralState {
+        ctx: ObserveCtx { slack_ms, ..coll.ctx },
+        ..coll
+    };
+    Response::set_state(next.encode())
+}
+
 /// `config` with the validated `params` and reference oracle (v0.2.4 checks and codes).
 fn updated_config(
     input: &ReceiveInput,
@@ -332,17 +377,28 @@ fn cap_check(input: &ReceiveInput, response: Response, config: &ConfigState) -> 
     let Some(def) = config.collateral_def else {
         return response;
     };
+    let assert = EngineMsg::AssertCapAtMost {
+        global_cap: config.global_cap,
+    };
+    to_collateral(input, response, def, &assert)
+}
+
+/// Appends `msg` for the config's collateral actor of type `def`: a seeded `Probe { Collateral }`,
+/// then `msg` unseeded (R-8b).
+fn to_collateral(
+    input: &ReceiveInput,
+    response: Response,
+    def: AccountId,
+    msg: &EngineMsg,
+) -> Response {
     let k = input.receiver.account_id;
     let collateral = collateral_actor(engine(input), k, def);
     let probe = EngineMsg::Probe {
         kind: ProbeKind::Collateral,
     };
-    let assert = EngineMsg::AssertCapAtMost {
-        global_cap: config.global_cap,
-    };
     response
         .send(SyncMessage::new(collateral, &probe).with_pda_seeds([collateral_seed(k, def)]))
-        .send_sync(collateral, &assert)
+        .send_sync(collateral, msg)
 }
 
 /// `AssertCapAtMost` at a collateral actor, from exactly its config (`assertions::cap_at_most`).

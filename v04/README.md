@@ -158,9 +158,8 @@ stays under 3 % of the cap.
 
 ## Deferred
 
-- **The IDL.** The hand-kept IDL with a drift test waits for SPEL on 0.4: a drift test over 45 borsh variants
+- **The IDL.** The hand-kept IDL with a drift test waits for SPEL on 0.4: a drift test over 47 borsh variants
   needs a schema derive the crates do not have.
-- **A `slack_ms` setter.** `slack_ms` is set at `Init` only (ADR-058); a wrong value means a new config.
 - **Host `ProtocolParameters` validation at `Init`** (ruling R-7c): `Init` does not yet read the host's
   parameters to check the stablecoin definition and oracle.
 - **Native collateral.** Collateral is a `T` token; native collateral would need Read + exact `Transfer`

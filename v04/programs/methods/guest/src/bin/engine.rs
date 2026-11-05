@@ -269,6 +269,8 @@ fn handle_message(input: &ReceiveInput) -> Response {
             nonce,
         } => settle::on_settle_empty(input, config, position, nonce),
         EngineMsg::SetEngineParams { .. } => admin::on_set_engine_params(input, &message),
+        EngineMsg::SetSlack { .. } => admin::on_set_slack(input, &message),
+        EngineMsg::SlackUpdate { slack_ms } => admin::on_slack_update(input, slack_ms),
         EngineMsg::ObserveFeed {
             config,
             collateral_def,

@@ -59,6 +59,7 @@ these rows, and the SDK fits each send's gas from its own simulation anyway.
 | Instruction | Executions | Cycles | Fee at base fee 8 (cycles x 8) |
 |---|---|---|---|
 | SetEngineParams | 6 | 193,353 | 1,546,824 |
+| SetSlack | 5 | 155,069 | 1,240,552 |
 | ObserveFeed | 7 | 176,218 | 1,409,744 |
 | SettleDebt | 8 | 206,767 | 1,654,136 |
 | StartSurplus | 10 | 255,298 | 2,042,384 |
@@ -70,6 +71,12 @@ these rows, and the SDK fits each send's gas from its own simulation anyway.
 | CloseDebt | 5 | 111,516 | 892,128 |
 | CheckSolvency (Healthy, burns the buffer) | 9 | 218,253 | 1,746,024 |
 | CheckSolvency (Freeze) | 8 | 236,486 | 1,891,888 |
+
+`SetSlack` (ADR-064), with the collateral type recorded, is the proxy, the config probe, the config,
+the collateral probe and `SlackUpdate` at the collateral actor (3 without a recorded type). It never
+touches the accounting. Re-measured with it, the other rows came out 0 to 41 cycles above their
+recorded figures, except `SetEngineParams` at +537 (0.3%). That is likely from the larger guest. They
+keep their earlier figures here.
 
 Path-dependent executions: an implicit settle that burns adds the buffer's `Burn` (+3) to
 `StartSurplus`, `StartDebt` and `CheckSolvency`; a configured reference oracle adds its read (+2) to

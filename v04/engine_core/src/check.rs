@@ -5,6 +5,24 @@ use lee_core::{account::Actor, program::ReceiveInput};
 
 use crate::state::{AuctionPhase, AuctionState};
 
+/// The least clock slack the config accepts, ms (ADR-064): below it a timed transaction can
+/// miss the claim window at the sequencer's block spacing and revert at its full gas.
+pub const MIN_SLACK_MS: u64 = 1_000;
+/// The most clock slack the config accepts, ms (ADR-064): it bounds how far a claim can be
+/// backdated.
+pub const MAX_SLACK_MS: u64 = 300_000;
+
+/// `slack_ms` must lie in `MIN_SLACK_MS..=MAX_SLACK_MS`.
+///
+/// # Errors
+/// [`EngineError::InvalidConfig`] outside the range.
+pub const fn slack_in_range(slack_ms: u64) -> Result<(), EngineError> {
+    if slack_ms < MIN_SLACK_MS || slack_ms > MAX_SLACK_MS {
+        return Err(EngineError::InvalidConfig);
+    }
+    Ok(())
+}
+
 /// The v0.2.4 failure text: `Program error [6000+code]: Program error {code}: <Name>`.
 #[must_use]
 pub fn fail_text(err: EngineError) -> String {

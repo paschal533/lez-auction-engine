@@ -40,9 +40,9 @@ pub(super) async fn chain_anchor(
 
 /// The cursor to continue from on a node whose anchor is `anchor`, or a fresh one (`true`).
 ///
-/// Block 1 is not the anchor: the genesis block carries a fixed timestamp, so a restarted node
-/// reproduces its hash. Block 2 is the first block stamped with the wall clock, so two runs of the
-/// same node differ there. A cursor without an anchor that recorded nothing past genesis cannot
+/// Block 1 is not the anchor: whether genesis differs between chains depends on how it is
+/// configured, so a fixed genesis would reproduce its hash. Block 2 is the first block stamped with
+/// the wall clock, so it differs on any re-created chain. A cursor without an anchor that recorded nothing past genesis cannot
 /// have missed anything and is kept; one that did is rebuilt, because the chain it was built on is
 /// unknown.
 pub(super) fn on_this_chain(cursor: &Cursor, anchor: Option<[u8; 32]>) -> (Cursor, bool) {

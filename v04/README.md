@@ -164,7 +164,7 @@ stays under 3 % of the cap.
   needs a schema derive the crates do not have.
 - **Native collateral.** Collateral is a `T` token; native collateral would need Read + exact `Transfer`
   instead of `Sweep` (design note §6).
-- **The SDK scanner** (design note §7) and CI for the e2e (it stays local).
+- **CI for the e2e** (it stays local).
 
 ## Time in-process
 

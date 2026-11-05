@@ -27,6 +27,7 @@ use engine_core::{
 };
 use lee::{AccountId, Actor};
 use mock_host_core::Params;
+use sdk::scan::{Cursor, ScanSettings, ScanTargets, live_auctions, scan};
 use sdk::{
     Deployment, InitArgs, LiquidateArgs, Snapshot, StateSource, TakeArgs,
     session::{Live, Programs, Res, Setup, Signer, clock, plan, print_summary},
@@ -305,6 +306,44 @@ async fn check_end_state(live: &Live, s: &Setup, d: &Deployment, taker: AccountI
     Ok(())
 }
 
+/// Scans the chain from the start (ADR-066) and checks it found the system auctions this run
+/// started (debt and surplus nonce 0), that a second scan from the returned cursor changes
+/// nothing, and how many of the liquidation auctions still hold state. Prints `scan ok: ...`,
+/// the marker `e2e.sh` waits for.
+async fn scan_check(live: &Live, d: &Deployment) -> Res<()> {
+    let targets = ScanTargets {
+        engine: d.engine,
+        config: d.config.account_id,
+    };
+    let settings = ScanSettings::default();
+    let first = scan(&live.client, &Cursor::default(), &targets, &settings).await?;
+    let found = &first.cursor.found;
+    if !found.debt.contains(&0) || !found.surplus.contains(&0) {
+        return Err(format!("the scan missed the system auctions: {found:?}").into());
+    }
+    if found.auctions.is_empty() || found.positions.is_empty() {
+        return Err(format!("the scan missed the liquidation auction: {found:?}").into());
+    }
+    let again = scan(&live.client, &first.cursor, &targets, &settings).await?;
+    if again.restarted || again.cursor.found != *found {
+        return Err("a second scan changed what the first found".into());
+    }
+    let accounts: Vec<AccountId> = found
+        .auctions
+        .iter()
+        .map(|(position, nonce)| d.auction(*position, *nonce).account_id)
+        .collect();
+    let snapshot = live.snapshot(&accounts).await?;
+    let auctions = live_auctions(&snapshot, d, found)?;
+    println!(
+        "scan ok: {} auctions, {} surplus, {} debt",
+        auctions.len(),
+        found.surplus.len(),
+        found.debt.len()
+    );
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Res<()> {
     let programs = Programs::from_env()?;
@@ -320,7 +359,10 @@ async fn main() -> Res<()> {
     let setup = Setup::deploy(&mut live, programs, ("oracle: price 0.5", PRICE_RAY)).await?;
     let taker = live.signer("taker");
     let outcome = match engine_up(&mut live, &setup, taker.account, slack_ms).await {
-        Ok(d) => system(&mut live, &setup, &d, &taker).await,
+        Ok(d) => match system(&mut live, &setup, &d, &taker).await {
+            Ok(()) => scan_check(&live, &d).await,
+            Err(err) => Err(err),
+        },
         Err(err) => Err(err),
     };
     print_summary(&live.rows);

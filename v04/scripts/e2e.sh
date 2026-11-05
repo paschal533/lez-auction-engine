@@ -7,7 +7,8 @@
 #   5. deploy token, oracle, mock_host, relay and engine with `wallet program-loader deploy`,
 #   6. run `cargo run -p sdk --example slice` against it (expects "slice complete"),
 #   7. run `cargo run -p sdk --example system` (Plan 6: settle_debt, one debt auction, one surplus
-#      auction, check_solvency; expects "system complete"),
+#      auction, check_solvency; expects "system complete" and "scan ok:", the SDK block scanner
+#      finding both system auctions),
 #   8. stop the sequencer by its exact process name.
 # `e2e.sh` (or `e2e.sh all`) runs every step; `up`, `deploy`, `slice`, `system`, `down` run them in
 # stages. Exits non-zero on any failed step. Local only (no CI): it needs a few GB of LEZ build and
@@ -142,6 +143,8 @@ run_example() {
     die "the $1 example failed (log $log)"
   fi
   grep -q "^$1 complete\$" "$log" || die "no '$1 complete' in $log"
+  # The system example also scans the chain it just wrote (Plan 7, ADR-066).
+  if [[ "$1" == system ]]; then grep -q '^scan ok: ' "$log" || die "no 'scan ok:' in $log"; fi
 }
 
 load_env() {

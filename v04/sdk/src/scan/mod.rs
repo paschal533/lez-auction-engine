@@ -9,6 +9,7 @@
 
 mod collect;
 mod cursor;
+mod live;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,10 +19,12 @@ use lee::{AccountId, Actor};
 use crate::SdkError;
 pub use collect::collect;
 use cursor::{chain_anchor, on_this_chain, rewind_target};
+pub use live::live_auctions;
 
-/// The block whose hash identifies a chain. Not block 1: the genesis block is built with a fixed
-/// timestamp, so a restarted node reproduces its hash. Block 2 is the first block stamped with the
-/// wall clock, so two runs of the same node differ there.
+/// The block whose hash identifies a chain. Block 2 is the first block whose contents depend on the
+/// run (the first stamped with the wall clock), so it differs on any re-created chain whatever
+/// genesis holds. Block 1 is not relied on: it differed across re-created chains on 0.4, but that
+/// depends on how genesis is configured, and a fixed genesis would reproduce it.
 pub const ANCHOR_BLOCK: u64 = 2;
 
 /// One transaction of a block, reduced to what discovery reads.

@@ -24,8 +24,8 @@ concurrency:
 jobs:
   v04-e2e:
     runs-on: ubuntu-22.04
-    # Provisional until the first hosted run is measured (step budgets sum to 195).
-    timeout-minutes: 240
+    # First hosted run (cold LEZ cache) took 59m30s; step budgets sum to 135, about twice each measured step.
+    timeout-minutes: 150
     env:
       RISC0_DEV_MODE: "0"
     steps:
@@ -79,13 +79,13 @@ jobs:
       # e2e.sh takes one stage per call, so `deploy slice system` cannot be one step. `all` would wipe
       # the sequencer `up` started (and refuses to run beside it), so the stages run separately.
       - name: deploy the guests
-        timeout-minutes: 60
+        timeout-minutes: 30
         run: v04/scripts/e2e.sh deploy
       - name: slice
-        timeout-minutes: 30
+        timeout-minutes: 15
         run: v04/scripts/e2e.sh slice
       - name: system
-        timeout-minutes: 30
+        timeout-minutes: 15
         run: v04/scripts/e2e.sh system
       - name: stop the sequencer
         if: always()

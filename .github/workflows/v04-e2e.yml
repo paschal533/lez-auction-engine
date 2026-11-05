@@ -26,6 +26,8 @@ jobs:
     runs-on: ubuntu-22.04
     # Provisional until the first hosted run is measured (step budgets sum to 195).
     timeout-minutes: 240
+    env:
+      RISC0_DEV_MODE: "0"
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }

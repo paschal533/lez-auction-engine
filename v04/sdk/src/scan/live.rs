@@ -20,12 +20,39 @@ impl BlockSource for SequencerClient {
     }
 
     async fn blocks(&self, from: u64, to: u64) -> Result<Vec<BlockSummary>, SdkError> {
-        let blocks = self
-            .get_block_range(from, to)
-            .await
-            .map_err(|err| SdkError::Rpc(format!("getBlockRange {from}..={to}: {err}")))?;
-        Ok(blocks.iter().map(summarize).collect())
+        let mut out = Vec::new();
+        for (lo, hi) in chunks(from, to, MAX_RANGE_BLOCKS) {
+            let blocks = self
+                .get_block_range(lo, hi)
+                .await
+                .map_err(|err| SdkError::Rpc(format!("getBlockRange {lo}..={hi}: {err}")))?;
+            let short = u64::try_from(blocks.len()).is_ok_and(|n| n <= hi.saturating_sub(lo));
+            out.extend(blocks.iter().map(summarize));
+            if short {
+                break; // the node lacks the next block; later chunks would be empty too
+            }
+        }
+        Ok(out)
     }
+}
+
+/// The widest range `getBlockRange` accepts, in blocks.
+const MAX_RANGE_BLOCKS: u64 = 1024;
+
+/// `from..=to` cut into inclusive sub-ranges of at most `max` blocks, in order; empty when
+/// `from > to`.
+fn chunks(from: u64, to: u64, max: u64) -> Vec<(u64, u64)> {
+    let mut out = Vec::new();
+    let mut lo = from;
+    while lo <= to {
+        let hi = lo.saturating_add(max.max(1).saturating_sub(1)).min(to);
+        out.push((lo, hi));
+        match hi.checked_add(1) {
+            Some(next) => lo = next,
+            None => break,
+        }
+    }
+    out
 }
 
 /// A block reduced to what a scan reads. Only a public transaction has a root call; every other
@@ -71,4 +98,22 @@ pub fn live_auctions(
         .map(|(position, nonce)| d.auction(*position, *nonce))
         .filter(|auction| src.actor_state(*auction).is_some_and(|s| !s.is_empty()))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chunks;
+
+    #[test]
+    fn chunks_cover_the_inclusive_range_in_order() {
+        assert_eq!(chunks(1, 5, 1024), vec![(1, 5)]);
+        assert_eq!(chunks(1, 1024, 1024), vec![(1, 1024)]);
+        assert_eq!(chunks(1, 1025, 1024), vec![(1, 1024), (1025, 1025)]);
+        assert_eq!(chunks(10, 12, 1), vec![(10, 10), (11, 11), (12, 12)]);
+        assert!(chunks(5, 4, 1024).is_empty());
+        assert_eq!(
+            chunks(u64::MAX - 1, u64::MAX, 1024),
+            vec![(u64::MAX - 1, u64::MAX)]
+        );
+    }
 }

@@ -42,9 +42,9 @@ pub(super) async fn chain_anchor(
 ///
 /// Block 1 is not the anchor: whether genesis differs between chains depends on how it is
 /// configured, so a fixed genesis would reproduce its hash. Block 2 is the first block stamped with
-/// the wall clock, so it differs on any re-created chain. A cursor without an anchor that recorded nothing past genesis cannot
-/// have missed anything and is kept; one that did is rebuilt, because the chain it was built on is
-/// unknown.
+/// the wall clock, so it differs on any re-created chain. A cursor without an anchor that recorded
+/// nothing past genesis cannot have missed anything and is kept; one that did is rebuilt, because
+/// the chain it was built on is unknown.
 pub(super) fn on_this_chain(cursor: &Cursor, anchor: Option<[u8; 32]>) -> (Cursor, bool) {
     match cursor.anchor {
         None if cursor.last_block < ANCHOR_BLOCK => (cursor.clone(), false),

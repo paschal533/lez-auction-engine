@@ -1,4 +1,5 @@
-//! The `SetSlack` plan (ADR-064): the admin's proxy and the config, nothing else.
+//! The `SetSlack` plan (ADR-064): the admin's proxy, the config and, when a collateral type is recorded,
+//! the collateral actor; nothing else.
 
 use engine_core::msg::EngineMsg;
 use harness::World;
@@ -19,7 +20,7 @@ impl StateSource for InProcess<'_> {
 }
 
 #[test]
-fn plan_set_slack_declares_proxy_and_config() {
+fn plan_set_slack_declares_proxy_config_and_collateral() {
     let w = World::new();
     let d = Deployment::load(&InProcess(&w.chain), w.engine, w.config.account_id)
         .expect("config loads");

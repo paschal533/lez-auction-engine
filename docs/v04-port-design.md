@@ -489,7 +489,7 @@ conversation design and the invariants, and turns §5's interface into an execut
 `check_solvency`, in-process with R6, the reservation and the system-auction invariants checked after every
 step, ported security tests and CYCLES.md rows, and on a standalone sequencer (`v04/sdk/examples/system.rs`:
 one debt auction, `settle_debt`, one surplus auction and `check_solvency`, run recorded in `v04/README.md`).
-Still open from tasks 0-10: the IDL (task 6); the SDK scanner (task 9) is done except the CLI that drives it (task 11).
+Still open from tasks 0-10: the IDL (task 6); the SDK scanner (task 9) is done except the CLI that drives it (task 11); task 10's `v04-e2e` workflow has not yet had its first hosted run.
 
 ## 9. Open questions for Logos
 

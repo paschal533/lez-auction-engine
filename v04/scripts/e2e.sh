@@ -11,8 +11,9 @@
 #      finding both system auctions),
 #   8. stop the sequencer by its exact process name.
 # `e2e.sh` (or `e2e.sh all`) runs every step; `up`, `deploy`, `slice`, `system`, `down` run them in
-# stages. Exits non-zero on any failed step. Runs locally and on hosted CI (.github/workflows/v04-e2e.yml,
-# which runs the stages as separate steps): it needs a few GB of LEZ build and about 25 minutes of 15 s blocks.
+# stages. Exits non-zero on any failed step. Runs locally and on hosted CI
+# (.github/workflows/v04-e2e.yml, which runs the stages as separate steps): it needs a few GB of
+# LEZ build and about 25 minutes of 15 s blocks.
 #
 # Environment (all optional):
 #   LEZ_DIR        LEZ checkout at v0.4.0-rc1      (default ~/lez-spikes/lez-v04, cloned if absent)

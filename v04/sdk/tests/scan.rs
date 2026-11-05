@@ -521,6 +521,24 @@ fn collect_ignores_other_config() {
     );
 }
 
+/// `SetSlack` and `Init` carry no config id (they name it by salt), so `collect` leaves them to the
+/// wildcard arm: neither is a discovery event for the target config.
+#[test]
+fn collect_ignores_set_slack_and_init_root_calls() {
+    let init = harness::World::bare().init_msg();
+    let block = block_with(vec![
+        tx(&EngineMsg::SetSlack {
+            salt: 0,
+            slack_ms: 30_000,
+        }),
+        tx(&init),
+    ]);
+    assert_eq!(
+        collect(&Found::default(), &block, &targets()),
+        Found::default()
+    );
+}
+
 #[test]
 fn collect_skips_reverted_tx() {
     let message = borsh::to_vec(&liquidate(CONFIG, POSITION_A, 0)).expect("encodes");

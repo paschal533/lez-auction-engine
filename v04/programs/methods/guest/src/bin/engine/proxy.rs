@@ -71,12 +71,13 @@ pub fn root(input: &ReceiveInput, message: &EngineMsg) -> Option<Response> {
     }
 }
 
-/// Forwards a root `Init` / `SetCollateral` / `SetEngineParams` / `SetSlack` to the signer's config.
+/// Forwards a root `Init` / `SetCollateral` / `SetEngineParams` / `SetSlack` to the signer's
+/// config.
 ///
 /// `Init`: the seeded `Init` creates the config (and sends nothing), then the unseeded `InitReads`
 /// runs its reads and creates the accounting and the protocol definition. `SetCollateral` /
-/// `SetEngineParams` / `SetSlack`: a seeded `Probe` makes a missing config fail with the engine's v0.2.4
-/// `WrongAccount("config")` rather than LEZ's admission error, then the unseeded message
+/// `SetEngineParams` / `SetSlack`: a seeded `Probe` makes a missing config fail with the engine's
+/// v0.2.4 `WrongAccount("config")` rather than LEZ's admission error, then the unseeded message
 /// follows.
 fn forward_admin(input: &ReceiveInput, message: &EngineMsg, salt: u64) -> Response {
     if !input.is_authorized {

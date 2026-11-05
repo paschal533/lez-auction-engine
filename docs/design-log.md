@@ -1635,7 +1635,7 @@ Accepted (Plan 6, Tasks 2-9)
 - An admin can raise the slack up to the ceiling at any time. The ceiling is the limit on that power.
 
 **Evidence**
-- Tests: `set_slack_updates_config_and_next_observation_uses_it`, `set_slack_without_collateral_type_only_updates_config`, `slack_update_rejected_from_non_config_sender`, `set_slack_accepts_bounds`, `set_slack_rejects_out_of_range`, `set_slack_rejects_non_admin`, `init_rejects_out_of_range_slack`, `set_slack_round_trips_at_index_45`, `slack_update_round_trips_at_index_46`, `plan_set_slack_declares_proxy_and_config`.
+- Tests: `set_slack_updates_config_and_next_observation_uses_it`, `set_slack_without_collateral_type_only_updates_config`, `slack_update_rejected_from_non_config_sender`, `set_slack_accepts_bounds`, `set_slack_rejects_out_of_range`, `set_slack_rejects_non_admin`, `init_rejects_out_of_range_slack`, `set_slack_round_trips_at_index_45`, `slack_update_round_trips_at_index_46`, `plan_set_slack_declares_proxy_config_and_collateral`, `plan_set_slack_without_collateral_declares_proxy_and_config`.
 - Cost: the `SetSlack` row in `v04/CYCLES.md` (5 executions with a recorded type).
 
 **Status**
@@ -1670,7 +1670,7 @@ The check reads our mock's `Params` layout (`mock_host_core::Params`), which is 
 - The check is made once, at `Init`. A host that later rebinds to another oracle is not noticed here; that is the host's own authority to guard.
 
 **Evidence**
-- Tests: `host_params_match_accepts_equal`, `host_params_match_rejects_stable_def`, `host_params_match_rejects_token`, `host_params_match_rejects_oracle` (unit); `init_succeeds_with_matching_host`, `init_reverts_when_host_names_another_stablecoin`, `init_reverts_when_host_names_another_token`, `init_reverts_when_host_names_another_oracle`, `init_reverts_when_host_never_replies` (harness).
+- Tests: `host_params_match_accepts_equal`, `host_params_match_rejects_stable_def`, `host_params_match_rejects_token`, `host_params_match_rejects_oracle` (unit); `init_succeeds_with_matching_host`, `init_reverts_when_host_names_another_stablecoin`, `init_reverts_when_host_names_another_token`, `init_reverts_when_host_names_another_oracle`, `init_reverts_when_host_never_replies`, `init_refuses_a_matching_params_reply_from_an_actor_that_is_not_the_host` (harness).
 - Cost: the `Init` row in `v04/CYCLES.md`.
 
 **Status**
@@ -1705,7 +1705,7 @@ A keeper has to find the auctions, positions, surplus auctions and debt auctions
 - A discovered candidate is not proof of an auction; the state read is mandatory.
 
 **Evidence**
-- Tests (`v04/sdk/tests/scan.rs`, 17): `finds_auctions_and_positions_incrementally`, `rewinds_on_changed_hash`, `rewind_arithmetic_is_exact`, `replaced_chain_rescans_from_genesis`, `matching_anchor_scans_incrementally`, `anchorless_cursor_is_rebuilt_once`, `cursor_above_head_rewinds_only_when_provable`, `fork_deeper_than_reorg_depth_fails`, `missing_cursor_block_is_an_error`, `cursor_unchanged_on_missing_block`, `scan_page_stops_at_max_blocks_and_reports_done`, `collect_finds_liquidate_bid_surplus_debt`, `collect_ignores_other_config`, `collect_skips_reverted_tx`, `collect_ignores_other_program`, `collect_skips_undecodable_root_message`, `cursor_round_trips_through_borsh`.
+- Tests (`v04/sdk/tests/scan.rs`, 18): `finds_auctions_and_positions_incrementally`, `rewinds_on_changed_hash`, `rewind_arithmetic_is_exact`, `replaced_chain_rescans_from_genesis`, `matching_anchor_scans_incrementally`, `anchorless_cursor_is_rebuilt_once`, `cursor_above_head_rewinds_only_when_provable`, `fork_deeper_than_reorg_depth_fails`, `missing_cursor_block_is_an_error`, `cursor_unchanged_on_missing_block`, `scan_page_stops_at_max_blocks_and_reports_done`, `collect_finds_liquidate_bid_surplus_debt`, `collect_ignores_other_config`, `collect_skips_reverted_tx`, `collect_ignores_other_program`, `collect_skips_undecodable_root_message`, `cursor_round_trips_through_borsh`, `collect_ignores_set_slack_and_init_root_calls`; and in `v04/sdk/tests/scan_live.rs`: `live_auctions_drops_candidates_without_state`, `live_auctions_empty_when_nothing_found`.
 
 **Status**
 Accepted (Plan 7, Task 4; live wiring and e2e check Task 5)

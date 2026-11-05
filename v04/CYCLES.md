@@ -39,7 +39,9 @@ The ADR-062 proxy hop adds one execution per token debit: `Liquidate` +2, `Bid` 
 parameters, the protocol token, the system scratch) cost more to decode and commit everywhere, so
 the deltas are not all the hop. `Init` grew again with ADR-065: the host's `ReadState` and its reply are
 two more executions and 52,655 more cycles than the 216,571 it cost before; the other rows are not
-re-recorded for it.
+re-recorded for it. Re-measured on the final tree, the other slice rows differ from the figures above
+by between 549 cycles below (`SetCollateral`) and 1,060 above (`Liquidate`); they keep their
+recorded figures.
 
 ## System instructions (Plan 6)
 
@@ -61,7 +63,7 @@ these rows, and the SDK fits each send's gas from its own simulation anyway.
 | Instruction | Executions | Cycles | Fee at base fee 8 (cycles x 8) |
 |---|---|---|---|
 | SetEngineParams | 6 | 193,353 | 1,546,824 |
-| SetSlack | 5 | 155,069 | 1,240,552 |
+| SetSlack | 5 | 155,235 | 1,241,880 |
 | ObserveFeed | 7 | 176,218 | 1,409,744 |
 | SettleDebt | 8 | 206,767 | 1,654,136 |
 | StartSurplus | 10 | 255,298 | 2,042,384 |
@@ -76,9 +78,10 @@ these rows, and the SDK fits each send's gas from its own simulation anyway.
 
 `SetSlack` (ADR-064), with the collateral type recorded, is the proxy, the config probe, the config,
 the collateral probe and `SlackUpdate` at the collateral actor (3 without a recorded type). It never
-touches the accounting. Re-measured with it, the other rows came out 0 to 41 cycles above their
-recorded figures, except `SetEngineParams` at +537 (0.3%). That is likely from the larger guest. They
-keep their earlier figures here.
+touches the accounting. Re-measured on the final tree, the other system rows came out between 338
+cycles below (`TakeSurplus`) and 343 above (`SettleDebt`) their recorded figures, except
+`SetEngineParams` at +740 (0.4%). That is likely from the larger guest. They keep their earlier
+figures here.
 
 Path-dependent executions: an implicit settle that burns adds the buffer's `Burn` (+3) to
 `StartSurplus`, `StartDebt` and `CheckSolvency`; a configured reference oracle adds its read (+2) to

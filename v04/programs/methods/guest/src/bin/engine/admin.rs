@@ -301,7 +301,9 @@ pub fn on_set_engine_params(input: &ReceiveInput, message: &EngineMsg) -> Respon
 }
 
 /// `SetSlack` at the config, forwarded by the admin's proxy: admin, bounds, write. Slack is not a
-/// locked field, so there is no cap check and no `AssertSystemIdle` (ADR-064).
+/// locked field, so there is no cap check and no `AssertSystemIdle` (ADR-064). With a recorded
+/// collateral type it also relays `SlackUpdate` to the collateral actor, which keeps its own copy
+/// of the slack in step.
 pub fn on_set_slack(input: &ReceiveInput, message: &EngineMsg) -> Response {
     let EngineMsg::SetSlack { salt, slack_ms } = message else {
         panic!("engine: BadMessage")

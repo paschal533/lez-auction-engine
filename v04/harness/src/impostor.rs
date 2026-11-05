@@ -99,6 +99,9 @@ impl World {
     /// impostor token program, ADR-065), the world's oracle and stablecoin.
     /// Every holding its system ops read is then an impostor actor the attacker scripts
     /// ([`World::impostor_holding`]), which lets a test answer the engine's reads at will.
+    /// The rogue config binds its own impostor host, so the victim sets' `w.params`
+    /// (security_surplus.rs, security_system.rs) stay unchanged trivially: those tests never reach
+    /// a host.
     /// Returns the config actor.
     pub fn impostor_token_config(&mut self, label: &str, params: EngineParamsArgs) -> Actor {
         let (key, admin) = self.chain.key(label);

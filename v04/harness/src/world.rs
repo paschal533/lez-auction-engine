@@ -15,7 +15,7 @@ use engine_core::{
 };
 use lee::{AccountId, Actor, PrivateKey, error::LeeError};
 use lee_core::program::TransactionEvent;
-use mock_host_core::{HostMsg, is_unsafe, position_id, vault_id};
+use mock_host_core::{HostMsg, Params, TAG_PARAMS, is_unsafe, position_id, vault_id};
 use oracle_core::OracleMsg;
 use token_core::{Holding, TokenMsg, holding_actor};
 
@@ -112,6 +112,13 @@ impl World {
 
     /// [`World::bare`] with the host's redemption price `redemption_price_ray`.
     pub fn bare_at(redemption_price_ray: u128) -> Self {
+        Self::bare_with(redemption_price_ray, |_| {})
+    }
+
+    /// [`World::bare_at`] with the host's `Params` edited by `edit` before the host is
+    /// initialised, so the host can disagree with the engine's `Init` (ADR-065). `edit` must
+    /// leave `admin` (the params actor itself) alone.
+    pub(crate) fn bare_with(redemption_price_ray: u128, edit: impl FnOnce(&mut Params)) -> Self {
         let mut chain = Chain::new(&[
             ("token", methods::TOKEN_ELF),
             ("oracle", methods::ORACLE_ELF),
@@ -193,7 +200,8 @@ impl World {
             .expect("the oracle is initialised");
         w.set_price(SAFE_PRICE_RAY);
 
-        let init_host = HostMsg::Init {
+        let mut host = Params {
+            tag: TAG_PARAMS,
             admin: params,
             token,
             stable_def,
@@ -201,6 +209,19 @@ impl World {
             oracle,
             redemption_price_ray,
             min_cr_ray: MIN_CR_RAY,
+            engine_actor: None,
+            pending: None,
+            is_frozen: false,
+        };
+        edit(&mut host);
+        let init_host = HostMsg::Init {
+            admin: host.admin,
+            token: host.token,
+            stable_def: host.stable_def,
+            collateral_def: host.collateral_def,
+            oracle: host.oracle,
+            redemption_price_ray: host.redemption_price_ray,
+            min_cr_ray: host.min_cr_ray,
         };
         w.chain
             .send(params, &[params], &[&w.params_key], &init_host)
@@ -211,12 +232,23 @@ impl World {
     /// [`World::bare`], then the admin's `Init` and `SetCollateral` and the host bound to the
     /// config actor.
     pub fn new() -> Self {
-        Self::new_at(RAY)
+        Self::new_with_host(|_| {})
     }
 
     /// [`World::new`] with the host's redemption price `redemption_price_ray`.
     pub fn new_at(redemption_price_ray: u128) -> Self {
-        let mut w = Self::bare_at(redemption_price_ray);
+        Self::new_with(redemption_price_ray, |_| {})
+    }
+
+    /// [`World::new`] with the host's `Params` edited by `edit` before the host is initialised.
+    /// Only an edit the engine's `Init` accepts leaves a world to return (ADR-065); for one it
+    /// refuses use [`World::bare_with_host`].
+    pub fn new_with_host(edit: impl FnOnce(&mut Params)) -> Self {
+        Self::new_with(RAY, edit)
+    }
+
+    fn new_with(redemption_price_ray: u128, edit: impl FnOnce(&mut Params)) -> Self {
+        let mut w = Self::bare_with(redemption_price_ray, edit);
         let key = w.admin_key.clone();
         let init = w.init_msg();
         w.send_engine(w.admin, &[&key], &init)
@@ -329,6 +361,7 @@ impl World {
         if let EngineMsg::Init {
             salt,
             oracle,
+            host,
             token,
             protocol_genesis,
             ..
@@ -342,6 +375,7 @@ impl World {
                 at,
                 config,
                 *oracle,
+                *host,
                 accounting,
                 Actor::new(definition, *token),
             ];

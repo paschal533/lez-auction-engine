@@ -37,6 +37,7 @@ use lee_core::{
     account::{AccountId, Actor},
     program::{ReceiveInput, Response, SyncMessage},
 };
+use mock_host_core::HostMsg;
 use oracle_core::OracleMsg;
 use token_core::TokenMsg;
 
@@ -160,8 +161,8 @@ fn protocol_token(engine: AccountId, k: AccountId, enabled: bool) -> Option<Acco
     enabled.then(|| protocol_def(engine, k))
 }
 
-/// Creates the config (v0.2.4 checks and codes) with its oracle read pending, and sends nothing:
-/// the seed it was granted stays with this message (ruling R-8b). `InitReads` follows.
+/// Creates the config (v0.2.4 checks and codes) with its oracle and host reads pending, and sends
+/// nothing: the seed it was granted stays with this message (ruling R-8b). `InitReads` follows.
 fn init_config(input: &ReceiveInput, c: &InitConfig<'_>) -> Response {
     // Uninitialised = empty state; without the proxy's seed grant the PDA is not ours to create.
     if !input.pre_state.as_ref().is_empty() || !input.is_authorized {
@@ -208,15 +209,16 @@ fn init_config(input: &ReceiveInput, c: &InitConfig<'_>) -> Response {
         pending_read: Some(c.oracle),
         pending_genesis: c.protocol_genesis,
         collateral_def: None,
+        pending_host_read: true,
     };
     Response::set_state(state.encode())
 }
 
 /// `InitReads` from an engine actor: at the sender's accounting actor it is the config's
 /// creation relay; at a config just created by `Init`, it is the admin proxy's continuation:
-/// read the oracle once, create the accounting (ACCT seed, a message that sends nothing), create
-/// the protocol definition (PROTOCOL seed; the genesis scratch is consumed), and end with the
-/// `Proceed` sentinel.
+/// read the oracle and the host's parameters once each (ADR-065), create the accounting (ACCT seed,
+/// a message that sends nothing), create the protocol definition (PROTOCOL seed; the genesis
+/// scratch is consumed), and end with the `Proceed` sentinel.
 pub fn on_init_reads(input: &ReceiveInput) -> Response {
     let from = engine_sender(input, EngineError::NotAdmin);
     let (e, k) = (engine(input), input.receiver);
@@ -226,7 +228,9 @@ pub fn on_init_reads(input: &ReceiveInput) -> Response {
     let config = ConfigState::decode(input.pre_state.as_ref())
         .unwrap_or_else(|| fail(EngineError::WrongAccount("config")));
     expect_from(input, Actor::new(config.admin, e), EngineError::NotAdmin);
-    if k != config_actor(e, config.admin, config.salt) || config.pending_read != Some(config.oracle)
+    if k != config_actor(e, config.admin, config.salt)
+        || config.pending_read != Some(config.oracle)
+        || !config.pending_host_read
     {
         fail(EngineError::WrongAccount("config"));
     }
@@ -241,13 +245,14 @@ pub fn on_init_reads(input: &ReceiveInput) -> Response {
     let definition = Actor::new(protocol_def(e, k.account_id), config.token);
     let create = SyncMessage::new(definition, &new_definition)
         .with_pda_seeds([protocol_def_seed(k.account_id)]);
-    let oracle = config.oracle;
+    let (oracle, host) = (config.oracle, config.host);
     let consumed = ConfigState {
         pending_genesis: None,
         ..config
     };
     Response::set_state(consumed.encode())
         .send_sync(oracle, &OracleMsg::ReadState)
+        .send_sync(host, &HostMsg::ReadState)
         .send(accounting)
         .send(create)
         .send_sync(k, &EngineMsg::Proceed)
@@ -331,7 +336,10 @@ pub fn on_set_slack(input: &ReceiveInput, message: &EngineMsg) -> Response {
 pub fn on_slack_update(input: &ReceiveInput, slack_ms: u64) -> Response {
     let coll = assertions::slack_update(input).unwrap_or_else(|err| fail(err));
     let next = CollateralState {
-        ctx: ObserveCtx { slack_ms, ..coll.ctx },
+        ctx: ObserveCtx {
+            slack_ms,
+            ..coll.ctx
+        },
         ..coll
     };
     Response::set_state(next.encode())

@@ -1503,7 +1503,7 @@ The engine can no longer read a position and the host vault before calling the h
 **Trade-offs**
 - Two fewer executions than (A), and the host stays the only reader of its own state.
 - Donated surplus stays in the vault, unaccounted. This does not affect the invariant on booked amounts.
-- The interface is our proposal until upstream ports the stablecoin (design note §8 task 12). The mock's layout is not upstream's, so `Init` does not validate the host's `ProtocolParameters` yet (ruling R-7c).
+- The interface is our proposal until upstream ports the stablecoin (design note §8 task 12). The mock's layout is not upstream's, so `Init` validates the host's `ProtocolParameters` only since ADR-065 (ruling R-7c), and only against the mock's `Params`.
 
 **Evidence**
 - Design note §4.3 (a), §5; spike S9 (engine → host → engine reply, rogue config refused).
@@ -1640,5 +1640,40 @@ Accepted (Plan 6, Tasks 2-9)
 
 **Status**
 Accepted (Plan 7, Task 2)
+
+---
+
+## ADR-065: `Init` Checks the Host's Parameters Against Its Own (R-7c)
+
+**Context**
+`Init` takes `host`, `token`, `stable_def` and `oracle` as separate arguments and checked none of them against each other. An admin could bind a config to a host that mints a different stablecoin, uses another token program, or reads another oracle; every later liquidation would then judge positions by one oracle and seize by another, or settle in a stablecoin the host does not mint. Ruling R-7c deferred the check because the upstream host's parameters were not ported (ADR-060).
+
+**Options**
+- (A) Leave the arguments unchecked and rely on the admin (ADR-060's position).
+- (B) The config reads the host in the same transaction as the oracle read and compares.
+- (C) Compare at `SetCollateral`, which already reads the host for the redemption price.
+
+**Decision**
+(B). The config is created with `pending_host_read: true` (a new last field of `ConfigState`, so the layout of the fields before it is unchanged). `InitReads` sends `ReadState` to `config.host` beside the oracle's. A `StateReply` is accepted at the config only from exactly `config.host` while `pending_host_read` is set. It must decode as the mock's `Params`, and `check::host_params_match` compares:
+- `stable_def` and `token` with the config's: otherwise `HostMismatch` (11);
+- `oracle` with the config's oracle, whole actor: otherwise `OracleMismatch` (13).
+
+A reply that is not `Params` is `HostMismatch`. The `Proceed` sentinel fails with `HostMismatch` while `pending_host_read` is set, so a host that never answers reverts the whole transaction and nothing `Init` creates survives. No new error code or message variant: `EngineError` is frozen and `EngineMsg` is append-only.
+
+**Re-point when the upstream host lands (design note §8 task 12)**
+The check reads our mock's `Params` layout (`mock_host_core::Params`), which is not upstream's. When the upstream host is ported, `on_host_reply` in `read.rs` and the arguments of `host_params_match` are replaced by the upstream `ProtocolParameters` and its oracle slot; the flag, the sentinel and the tests stay.
+
+**Trade-offs**
+- `Init` costs one more read (two executions) and the host's actor joins its declared actors: the SDK's `plan_init` and the harness's `proxy_actors` list `args.host`.
+- A host that cannot be read at `Init` cannot be used. That is intended: the engine needs the host's state for every later read.
+- Threat model: the check catches admin mis-configuration. It does not authenticate the host program: any program whose state decodes as `Params` with matching fields passes.
+- The check is made once, at `Init`. A host that later rebinds to another oracle is not noticed here; that is the host's own authority to guard.
+
+**Evidence**
+- Tests: `host_params_match_accepts_equal`, `host_params_match_rejects_stable_def`, `host_params_match_rejects_token`, `host_params_match_rejects_oracle` (unit); `init_succeeds_with_matching_host`, `init_reverts_when_host_names_another_stablecoin`, `init_reverts_when_host_names_another_token`, `init_reverts_when_host_names_another_oracle`, `init_reverts_when_host_never_replies` (harness).
+- Cost: the `Init` row in `v04/CYCLES.md`.
+
+**Status**
+Accepted (Plan 7, Task 3)
 
 ---

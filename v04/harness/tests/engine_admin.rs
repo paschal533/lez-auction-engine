@@ -67,6 +67,7 @@ fn expected_config(w: &World) -> ConfigState {
         pending_read: None,
         pending_genesis: None,
         collateral_def: None,
+        pending_host_read: false,
     }
 }
 

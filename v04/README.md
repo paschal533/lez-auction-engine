@@ -113,6 +113,8 @@ mock-host (init, bind), 3 × (fund owner, open position, generate debt) and the 
 This run predates the final fix round, whose `protocol_def` check (refusing the config's own protocol
 definition as stablecoin or collateral) adds about 1.8k cycles to `Init` and `SetCollateral`; the re-run after
 it gave `Init` 244,095 and `SetCollateral` 327,635, every other engine row unchanged, 31,699,608 in fees.
+`Init` has since gained the host-parameter read (ADR-065): in-process it costs 269,226 cycles in 9 executions
+(was 216,571 in 7); the sequencer runs above predate it.
 
 End state: shortfall `U` = 10,000 booked by the empty lot-3 auction; the debt take burned 500 stablecoin and
 minted 325 protocol tokens (30 % growth after more than a second); 9,500 donated and settled, `unbacked_debt`
@@ -160,8 +162,6 @@ stays under 3 % of the cap.
 
 - **The IDL.** The hand-kept IDL with a drift test waits for SPEL on 0.4: a drift test over 47 borsh variants
   needs a schema derive the crates do not have.
-- **Host `ProtocolParameters` validation at `Init`** (ruling R-7c): `Init` does not yet read the host's
-  parameters to check the stablecoin definition and oracle.
 - **Native collateral.** Collateral is a `T` token; native collateral would need Read + exact `Transfer`
   instead of `Sweep` (design note §6).
 - **The SDK scanner** (design note §7) and CI for the e2e (it stays local).

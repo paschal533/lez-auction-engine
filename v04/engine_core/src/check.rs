@@ -1,9 +1,12 @@
 //! Checks every handler starts with (design note §3: compare whole actors, never bare ids).
 
 use auction_engine_params::EngineError;
-use lee_core::{account::Actor, program::ReceiveInput};
+use lee_core::{
+    account::{AccountId, Actor},
+    program::ReceiveInput,
+};
 
-use crate::state::{AuctionPhase, AuctionState};
+use crate::state::{AuctionPhase, AuctionState, ConfigState};
 
 /// The least clock slack the config accepts, ms (ADR-064): below it a timed transaction can
 /// miss the claim window at the sequencer's block spacing and revert at its full gas.
@@ -19,6 +22,28 @@ pub const MAX_SLACK_MS: u64 = 300_000;
 pub const fn slack_in_range(slack_ms: u64) -> Result<(), EngineError> {
     if slack_ms < MIN_SLACK_MS || slack_ms > MAX_SLACK_MS {
         return Err(EngineError::InvalidConfig);
+    }
+    Ok(())
+}
+
+/// What the host's parameters must say about the config that names it (ADR-065): its stablecoin
+/// definition and token program are the config's, and its oracle is the config's oracle. This
+/// reads the mock host's `Params` layout, so it is re-pointed when the upstream host lands.
+///
+/// # Errors
+/// [`EngineError::HostMismatch`] if `stable_def` or `token` differ;
+/// [`EngineError::OracleMismatch`] if `oracle` differs.
+pub fn host_params_match(
+    config: &ConfigState,
+    stable_def: AccountId,
+    token: AccountId,
+    oracle: Actor,
+) -> Result<(), EngineError> {
+    if stable_def != config.stablecoin_definition_id || token != config.token {
+        return Err(EngineError::HostMismatch);
+    }
+    if oracle != config.oracle {
+        return Err(EngineError::OracleMismatch);
     }
     Ok(())
 }
@@ -83,6 +108,52 @@ mod tests {
             pre_state: Vec::new().into(),
             message: Vec::new(),
         }
+    }
+
+    fn matches_config(stable_def: AccountId, token: AccountId, oracle: Actor) -> Option<u32> {
+        let config = crate::state::fixtures::config();
+        host_params_match(&config, stable_def, token, oracle)
+            .err()
+            .map(|err| err.code())
+    }
+
+    #[test]
+    fn host_params_match_accepts_equal() {
+        let c = crate::state::fixtures::config();
+        assert_eq!(
+            matches_config(c.stablecoin_definition_id, c.token, c.oracle),
+            None
+        );
+    }
+
+    #[test]
+    fn host_params_match_rejects_stable_def() {
+        let c = crate::state::fixtures::config();
+        assert_eq!(matches_config(id(99), c.token, c.oracle), Some(11));
+    }
+
+    #[test]
+    fn host_params_match_rejects_token() {
+        let c = crate::state::fixtures::config();
+        assert_eq!(
+            matches_config(c.stablecoin_definition_id, id(99), c.oracle),
+            Some(11)
+        );
+    }
+
+    #[test]
+    fn host_params_match_rejects_oracle() {
+        let c = crate::state::fixtures::config();
+        assert_eq!(
+            matches_config(c.stablecoin_definition_id, c.token, actor(99, 98)),
+            Some(13)
+        );
+        // The whole actor: the right account at another program is another oracle.
+        let other_program = Actor::new(c.oracle.account_id, id(97));
+        assert_eq!(
+            matches_config(c.stablecoin_definition_id, c.token, other_program),
+            Some(13)
+        );
     }
 
     #[test]

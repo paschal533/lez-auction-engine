@@ -33,7 +33,7 @@ const T: u64 = 1_000_000;
 /// Executions (messages delivered, replies included) of each transaction, counted from the
 /// as-built message sequences: `lee::simulate_public_transaction` returns cycles only. Each token
 /// debit is two executions since ADR-062 (the owner's token actor, then its holding).
-const INIT_EXECUTIONS: u32 = 7;
+const INIT_EXECUTIONS: u32 = 9;
 const SET_COLLATERAL_EXECUTIONS: u32 = 11;
 const LIQUIDATE_EXECUTIONS: u32 = 29;
 const PARTIAL_BID_EXECUTIONS: u32 = 15;

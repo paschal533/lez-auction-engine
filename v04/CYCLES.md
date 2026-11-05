@@ -25,7 +25,7 @@ Scenario: collateral 500_000, debt 600_000, redemption price and oracle 0.5; `Se
 
 | Instruction | Executions | Cycles | Fee at base fee 8 | Plan 5 (2026-11-01) | Delta |
 |---|---|---|---|---|---|
-| Init | 7 | 216,571 | 1,732,568 | 7 / 178,715 | +37,856 |
+| Init | 9 | 269,226 | 2,153,808 | 7 / 178,715 | +90,511 |
 | SetCollateral | 11 | 325,765 | 2,606,120 | 11 / 309,596 | +16,169 |
 | Liquidate | 29 | 839,357 | 6,714,856 | 27 / 772,287 | +67,070 |
 | Bid (partial) | 15 | 407,700 | 3,261,600 | 13 / 363,522 | +44,178 |
@@ -37,7 +37,9 @@ The ADR-062 proxy hop adds one execution per token debit: `Liquidate` +2, `Bid` 
 `Bid` (final) +3, `ClaimLeftover` +1. Rows without a debit (`Init`, `SetCollateral`,
 `SettleEmpty`) grew too: Plan 6's larger config and accounting states and message set (the system
 parameters, the protocol token, the system scratch) cost more to decode and commit everywhere, so
-the deltas are not all the hop.
+the deltas are not all the hop. `Init` grew again with ADR-065: the host's `ReadState` and its reply are
+two more executions and 52,655 more cycles than the 216,571 it cost before; the other rows are not
+re-recorded for it.
 
 ## System instructions (Plan 6)
 

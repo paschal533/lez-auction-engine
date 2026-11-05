@@ -251,9 +251,10 @@ pub struct BidArgs {
     pub now_ms: u64,
 }
 
-/// `Init` at the admin's proxy `(admin, E)`, signed by the admin: proxy, config, oracle,
-/// accounting, the protocol definition `(protocol_def(E, K), T)` and, with a genesis, its
-/// recipient's holding (a fresh holding is granted by the token's `Credit`, so no evidence).
+/// `Init` at the admin's proxy `(admin, E)`, signed by the admin: proxy, config, oracle, host
+/// params (whose parameters the config checks, ADR-065), accounting, the protocol definition
+/// `(protocol_def(E, K), T)` and, with a genesis, its recipient's holding (a fresh holding is
+/// granted by the token's `Credit`, so no evidence).
 ///
 /// # Errors
 /// [`SdkError::Encode`] if the message does not encode.
@@ -266,6 +267,7 @@ pub fn plan_init(engine: AccountId, admin: AccountId, args: InitArgs) -> Result<
         proxy,
         config,
         args.oracle,
+        args.host,
         accounting,
         Actor::new(definition, args.token),
     ];

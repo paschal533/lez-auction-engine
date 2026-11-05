@@ -127,6 +127,32 @@ pub fn plan_set_engine_params(
     Plan::new(proxy, actors, vec![admin], Vec::new(), &msg)
 }
 
+/// `SetSlack` at the admin's proxy, signed by the admin: the proxy and the config, and the
+/// config's recorded collateral actor (`SlackUpdate`) if it has one, as read from `source`.
+///
+/// # Errors
+/// [`SdkError::MissingState`] if the config is absent or does not decode; [`SdkError::Encode`].
+pub fn plan_set_slack(
+    source: &impl StateSource,
+    d: &Deployment,
+    admin: AccountId,
+    slack_ms: u64,
+) -> Result<Plan, SdkError> {
+    let proxy = Actor::new(admin, d.engine);
+    let state = config_state(source, d.config)?;
+    let mut actors = vec![proxy, d.config];
+    actors.extend(
+        state
+            .collateral_def
+            .map(|def| collateral_actor(d.engine, d.config.account_id, def)),
+    );
+    let msg = EngineMsg::SetSlack {
+        salt: d.salt,
+        slack_ms,
+    };
+    Plan::new(proxy, actors, vec![admin], Vec::new(), &msg)
+}
+
 /// `ObserveFeed` at the collateral actor, permissionless: collateral actor, host params, oracle,
 /// clock.
 ///

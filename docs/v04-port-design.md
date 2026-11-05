@@ -465,11 +465,11 @@ moves to transaction-status polling (ADR-053 already polls `txStatus` through `l
 | 3 | Rust 1.98.1, edition 2024 where needed; pin `lee`/`lee_core` to v0.4.0-rc1 in a new workspace member | 1 d | done: `v04/` workspace (Plan 5, Task 1) |
 | 4 | Token actor port (§6) and a minimal oracle actor | 4-6 d | done: oracle with relay publisher (Plan 5, Tasks 3-4); holdings moved from one map per account (R-3b) to one actor per `(owner, definition)` (Plan 6, Task 1, ADR-062) |
 | 5 | Mock CDP host implementing the F7 interface (§5 option B) | 3-5 d | done (Plan 5, Task 5) |
-| 6 | Engine guest on `actor_entrypoint!`: messages, building blocks, all 17 instructions; hand-kept SPEL-schema IDL with a drift test | 2-3 wk | done except the IDL: the liquidation slice (Plan 5, Tasks 6-9); `set_engine_params`, `observe_feed`, `settle_debt`, surplus and debt auctions (start, take, close), `check_solvency` with the host freeze (Plan 6, Tasks 2-6, ADR-063). The hand-kept IDL with a drift test is deferred: no SPEL for 0.4, and a drift test over 45 borsh variants needs a schema derive the crates do not have |
+| 6 | Engine guest on `actor_entrypoint!`: messages, building blocks, all 17 instructions; hand-kept SPEL-schema IDL with a drift test | 2-3 wk | done except the IDL: the liquidation slice (Plan 5, Tasks 6-9); `set_engine_params`, `observe_feed`, `settle_debt`, surplus and debt auctions (start, take, close), `check_solvency` with the host freeze (Plan 6, Tasks 2-6, ADR-063). The hand-kept IDL with a drift test is deferred: no SPEL for 0.4, and a drift test over 47 borsh variants needs a schema derive the crates do not have |
 | 7 | In-process harness on `lee` v0.4; port security (§4.3 (c)), invariant (R6, inv 2/7/9-11/17) and two-instance tests | 1-1.5 wk | done: `harness`, security and invariant tests (Plan 5, Tasks 2, 10); system-message impostor, rogue-config and read-window tests, system-auction invariants after every step (Plan 6, Tasks 3-7b) |
 | 8 | Measure cycles and gas per instruction; new CYCLES.md baseline (ADR-048) | 2-3 d | done: `v04/CYCLES.md`, slice rows re-measured after ADR-062 and system rows (Plan 5, Task 11; Plan 6, Task 8) |
-| 9 | SDK: tx builder, decoders, PDA math, simulate-then-send with fitted `gas_limit`, scanner, confirmation | 1.5-2 wk | partial: plans, decoders, simulate-then-send, block-level confirmation (Plan 5, Tasks 12-13); system plans with may-touch actors and buffer evidence (Plan 6, Task 8, ruling R-8b); the scanner is not built |
-| 10 | Scripts and CI: bootstrap from the v0.4 tag, e2e on a standalone sequencer with `RISC0_DEV_MODE=0`, no reliance on events | 3-5 d | partial: `v04/scripts/e2e.sh` (local; stages `slice` and, since Plan 6 Task 9, `system`) and the `v04` CI workflow (Plan 5, Task 13) |
+| 9 | SDK: tx builder, decoders, PDA math, simulate-then-send with fitted `gas_limit`, scanner, confirmation | 1.5-2 wk | partial: plans, decoders, simulate-then-send, block-level confirmation (Plan 5, Tasks 12-13); system plans with may-touch actors and buffer evidence (Plan 6, Task 8, ruling R-8b); the scanner (`sdk::scan`, ADR-066: cursor, reorg handling and `BlockSource` for `SequencerClient`) is done and checked in the e2e (Plan 7, Tasks 4-5), except the CLI that drives it (task 11) |
+| 10 | Scripts and CI: bootstrap from the v0.4 tag, e2e on a standalone sequencer with `RISC0_DEV_MODE=0`, no reliance on events | 3-5 d | done: `v04-e2e.yml` (hosted), pending its first run; `v04/scripts/e2e.sh` (stages `slice` and, since Plan 6 Task 9, `system`) and the `v04` CI workflow (Plan 5, Task 13) |
 | 11 | CLI, `auction_ffi`, Basecamp module on `lez_core` 0.6.0 | 1 wk | blocked: lez_core #72 |
 | 12 | Replace the mock host with upstream's port (or our own, §5 option A) | 1 wk after upstream; 3-4 wk alone | blocked upstream |
 | 13 | Reproducible guests, ImageIDs, immutable deploys, DEPLOYMENTS.md (ADR-047), real proofs (ADR-045) | 3-5 d | after 12 |
@@ -489,7 +489,7 @@ conversation design and the invariants, and turns §5's interface into an execut
 `check_solvency`, in-process with R6, the reservation and the system-auction invariants checked after every
 step, ported security tests and CYCLES.md rows, and on a standalone sequencer (`v04/sdk/examples/system.rs`:
 one debt auction, `settle_debt`, one surplus auction and `check_solvency`, run recorded in `v04/README.md`).
-Still open from tasks 0-10: the IDL (task 6), the SDK scanner (task 9) and CI for the e2e (task 10).
+Still open from tasks 0-10: the IDL (task 6); the SDK scanner (task 9) is done except the CLI that drives it (task 11); task 10's `v04-e2e` workflow has not yet had its first hosted run.
 
 ## 9. Open questions for Logos
 

@@ -1503,7 +1503,7 @@ The engine can no longer read a position and the host vault before calling the h
 **Trade-offs**
 - Two fewer executions than (A), and the host stays the only reader of its own state.
 - Donated surplus stays in the vault, unaccounted. This does not affect the invariant on booked amounts.
-- The interface is our proposal until upstream ports the stablecoin (design note §8 task 12). The mock's layout is not upstream's, so `Init` does not validate the host's `ProtocolParameters` yet (ruling R-7c).
+- The interface is our proposal until upstream ports the stablecoin (design note §8 task 12). The mock's layout is not upstream's, so `Init` validates the host's `ProtocolParameters` only since ADR-065 (ruling R-7c), and only against the mock's `Params`.
 
 **Evidence**
 - Design note §4.3 (a), §5; spike S9 (engine → host → engine reply, rogue config refused).
@@ -1607,5 +1607,107 @@ Design note §4.2 rows 9-16 root `settle_debt` at `Acc` and the surplus and debt
 
 **Status**
 Accepted (Plan 6, Tasks 2-9)
+
+---
+
+## ADR-064: Bounded `slack_ms` and a `SetSlack` Admin Instruction
+
+**Context**
+`slack_ms` is the clock slack for claimed time (ADR-058). It was set at `Init` only and had no bounds. A value too small makes every timed transaction miss the claim window, and each revert pays its whole gas limit (S8). A value too large lets a caller backdate a claim by that much. A wrong value meant a new config. Plan 6 kept it unsettable because each collateral actor caches it in its `ObserveCtx`.
+
+**Options**
+- (A) Leave it fixed at `Init`, unbounded.
+- (B) Bound it at `Init` and let the admin change it, within the same bounds, with the collateral actor's copy updated in the same transaction.
+
+**Decision**
+(B) (Plan 7, Task 2 and fix round 1, ruling R-2a).
+- **Bounds**: `MIN_SLACK_MS = 1_000` and `MAX_SLACK_MS = 300_000`, in `engine_core::check` with `slack_in_range`. Outside them the engine returns the existing `InvalidConfig` (code 5). No new error variant: the error enum is in a frozen crate.
+- **Floor**: 1 s only guards against an obviously wrong value, such as 0, whose every timed transaction would revert at its full gas limit (S8). It is not a safe value. The operator must still set at least the block interval plus the inclusion wait (ADR-058).
+- **Ceiling**: 300 s is the most a claim can be backdated. Backdating moves value to takers and brings auction starts forward (ADR-058, ADR-063), so it must have a limit.
+- **`Init`** checks the bounds next to `params.validate()`.
+- **`SetSlack { salt, slack_ms }`** is variant 45, appended after `Freeze`. It follows the `SetEngineParams` route: the admin's proxy sends a seeded `Probe { Config }`, then the message to the config. The config checks the admin and the bounds and writes `slack_ms`.
+- **The relay**: if the config has a recorded collateral type, it also sends `SlackUpdate { slack_ms }` (variant 46) to `collateral_actor(E, K, def)`, behind a seeded `Probe { Collateral }`, as `SetEngineParams` does for `AssertCapAtMost`. The collateral actor accepts it only from its own config (the same whole-actor sender check as `Configure` and `AssertCapAtMost`), writes only `ctx.slack_ms` and sends nothing. With no recorded type there is nothing to relay. This supersedes Plan 6's "slack is not settable because each collateral actor caches it in `ObserveCtx`": the cache is now refreshed by `SlackUpdate` as well as by `SetCollateral`.
+- **No lock check**: `SetSlack` skips the cap check and `AssertSystemIdle`. Slack is not a locked field, and no live auction's stored terms change, because an auction keeps the `start_ms` it already has.
+- **When the new value applies**: the config and the collateral actor hold it when the transaction lands, so the next `ObserveFeed` or `Liquidate` uses it. Each system instruction copies it from the config when it relays its context, so the next one uses it too. A transaction already included keeps the value it ran with.
+
+**Trade-offs**
+- `SetSlack` costs two more executions while a collateral type is recorded.
+- An admin can raise the slack up to the ceiling at any time. The ceiling is the limit on that power.
+
+**Evidence**
+- Tests: `set_slack_updates_config_and_next_observation_uses_it`, `set_slack_without_collateral_type_only_updates_config`, `slack_update_rejected_from_non_config_sender`, `set_slack_accepts_bounds`, `set_slack_rejects_out_of_range`, `set_slack_rejects_non_admin`, `init_rejects_out_of_range_slack`, `set_slack_round_trips_at_index_45`, `slack_update_round_trips_at_index_46`, `plan_set_slack_declares_proxy_config_and_collateral`, `plan_set_slack_without_collateral_declares_proxy_and_config`.
+- Cost: the `SetSlack` row in `v04/CYCLES.md` (5 executions with a recorded type).
+
+**Status**
+Accepted (Plan 7, Task 2)
+
+---
+
+## ADR-065: `Init` Checks the Host's Parameters Against Its Own (R-7c)
+
+**Context**
+`Init` takes `host`, `token`, `stable_def` and `oracle` as separate arguments and checked none of them against each other. An admin could bind a config to a host that mints a different stablecoin, uses another token program, or reads another oracle; every later liquidation would then judge positions by one oracle and seize by another, or settle in a stablecoin the host does not mint. Ruling R-7c deferred the check because the upstream host's parameters were not ported (ADR-060).
+
+**Options**
+- (A) Leave the arguments unchecked and rely on the admin (ADR-060's position).
+- (B) The config reads the host in the same transaction as the oracle read and compares.
+- (C) Compare at `SetCollateral`, which already reads the host for the redemption price.
+
+**Decision**
+(B). The config is created with `pending_host_read: true` (a new last field of `ConfigState`, so the layout of the fields before it is unchanged). `InitReads` sends `ReadState` to `config.host` beside the oracle's. A `StateReply` is accepted at the config only from exactly `config.host` while `pending_host_read` is set. It must decode as the mock's `Params`, and `check::host_params_match` compares:
+- `stable_def` and `token` with the config's: otherwise `HostMismatch` (11);
+- `oracle` with the config's oracle, whole actor: otherwise `OracleMismatch` (13).
+
+A reply that is not `Params` is `HostMismatch`. The `Proceed` sentinel fails with `HostMismatch` while `pending_host_read` is set, so a host that never answers reverts the whole transaction and nothing `Init` creates survives. No new error code or message variant: `EngineError` is frozen and `EngineMsg` is append-only.
+
+**Re-point when the upstream host lands (design note §8 task 12)**
+The check reads our mock's `Params` layout (`mock_host_core::Params`), which is not upstream's. When the upstream host is ported, `on_host_reply` in `read.rs` and the arguments of `host_params_match` are replaced by the upstream `ProtocolParameters` and its oracle slot; the flag, the sentinel and the tests stay.
+
+**Trade-offs**
+- `Init` costs one more read (two executions) and the host's actor joins its declared actors: the SDK's `plan_init` and the harness's `proxy_actors` list `args.host`.
+- A host that cannot be read at `Init` cannot be used. That is intended: the engine needs the host's state for every later read.
+- Threat model: the check catches admin mis-configuration. It does not authenticate the host program: any program whose state decodes as `Params` with matching fields passes.
+- The check is made once, at `Init`. A host that later rebinds to another oracle is not noticed here; that is the host's own authority to guard.
+
+**Evidence**
+- Tests: `host_params_match_accepts_equal`, `host_params_match_rejects_stable_def`, `host_params_match_rejects_token`, `host_params_match_rejects_oracle` (unit); `init_succeeds_with_matching_host`, `init_reverts_when_host_names_another_stablecoin`, `init_reverts_when_host_names_another_token`, `init_reverts_when_host_names_another_oracle`, `init_reverts_when_host_never_replies`, `init_refuses_a_matching_params_reply_from_an_actor_that_is_not_the_host` (harness).
+- Cost: the `Init` row in `v04/CYCLES.md`.
+
+**Status**
+Accepted (Plan 7, Task 3)
+
+---
+
+## ADR-066: Discovery by Root-Call Block Scan, Candidates Confirmed by State Reads
+
+**Context**
+A keeper has to find the auctions, positions, surplus auctions and debt auctions of a config. LEZ 0.4 has no account-listing RPC and no event stream a client can rely on: a standalone sequencer never finalizes, so anything that waits for finality never fires. Plan 7 needs the discovery core before the live wiring (Task 5).
+
+**Options**
+- (A) Subscribe to events.
+- (B) Scan the blocks and read the root call of each transaction.
+- (C) Keep an index in the engine's own state.
+
+**Decision**
+(B) (Plan 7, Task 4), ported from the v0.2.4 scanner (ADR-008, ADR-043).
+- **Root-call discovery**: every user-initiated action that creates or touches an auction is a root call to the engine program whose message names the config. `collect` reads a transaction only if it did not revert, its `root_to` is an actor of the engine program, and its message decodes as an `EngineMsg` naming the scan's config. `Liquidate` yields the auction `(position, nonce)` and the position; `Bid`, `ClaimLeftover` and `SettleEmpty` yield the auction; `StartSurplus` and `StartDebt` yield the nonce. All other variants are ignored, and a message that does not decode is skipped, not an error.
+- **Candidate, then state read**: what the scan finds are candidates. A transaction can be included and still have been built to look right (a message a different version would decode, an auction since settled). The caller confirms each candidate by reading its actor's state, as the v0.2.4 list commands read each id and dropped those that no longer decoded. The sets are sets, so a rescan never duplicates, and a candidate that no longer exists is harmless.
+- **No events**: (A) is rejected because a standalone sequencer never finalizes. (C) is rejected because the engine's state is frozen and the index would cost every transaction.
+- **The anchor**: the cursor records the hash of block 2 (`ANCHOR_BLOCK`). Block 2 is the first block whose contents depend on the run (it is the first stamped with the wall clock), so it differs on any re-created chain whatever genesis holds. Block 1 (genesis, timestamp 0) also differed across our re-created chains on 0.4, so genesis evidently carries per-run data there; but that depends on how genesis is configured and a fixed-genesis deployment could reproduce it, so block 1 is not relied on (ruling R-5a). A restart on the same data directory was not exercised. A node with another anchor, or an anchorless cursor that has passed block 2, discards the cursor and rescans from block 1 (`restarted`). The cursor also keeps the hashes of its last `reorg_depth + 1` blocks (`recent`). A rewind (after a changed cursor block or a cursor above the head) goes back `reorg_depth` blocks and is accepted only if it reaches genesis or the node's hash of the rewind block equals the recorded one. Otherwise the scan fails with `SdkError::ScanFork { at }` (also for a block that does not extend the last, or for block 2 changing mid-scan), and the caller rescans from block 1. A block the node does not return is `SdkError::MissingBlock(id)`.
+- **Live check (Plan 7, Task 5)**: on a standalone LEZ v0.4.0-rc1 sequencer, an `e2e.sh down` / `e2e.sh up` cycle (`up` wipes the home and sets the chain up afresh, so this re-created the chain; it was not a restart on the same data directory) gave block 1 hash `aee83220...fc3a` and `22ddf4bd...9531`, both with timestamp 0, and block 2 hashes `69c1eb7f...2de7` and `dde300d4...0b63` with wall-clock timestamps. So block 1's hash did NOT repeat across the down/up cycle. Block 2 stays the anchor (R-5a). `SequencerClient` supplies `BlockSource`: `getBlockRange(from, to)` is inclusive and stops at the first block the node lacks, block timestamps are milliseconds, hashes are `HashType([u8; 32])`; `live_auctions` confirms the candidates by reading each auction's engine state.
+- **Shape**: `BlockSource` is two async methods (`last_block_id`, `blocks(from, to)` inclusive), so the core runs against an in-memory chain in tests and the live `SequencerClient` supplies it in Task 5. `scan` is a loop over `scan_page`, which reads at most `max_blocks` new blocks (0 counts as 1) so a caller with a time budget can page. Neither `scan` nor `collect` mutates its input: a failed scan leaves the caller's cursor as it was.
+- **Persistence**: the cursor is plain data with borsh derives, and the caller stores it. Hashes are `[u8; 32]`, not hex strings, and absent values are `Option`, not empty strings. `Found` holds `AccountId`s directly, because `AccountId` is `Ord` and borsh-serializable in the pinned version.
+
+**Trade-offs**
+- Work is O(blocks) off-chain, with no push. A persisted cursor and paging bound it.
+- `recent` bounds a reorganisation to `reorg_depth` (default 10); deeper needs a rescan from block 1.
+- `collect` clones the sets once per call; the scan itself uses an in-place variant on its own copy.
+- A discovered candidate is not proof of an auction; the state read is mandatory.
+
+**Evidence**
+- Tests (`v04/sdk/tests/scan.rs`, 18): `finds_auctions_and_positions_incrementally`, `rewinds_on_changed_hash`, `rewind_arithmetic_is_exact`, `replaced_chain_rescans_from_genesis`, `matching_anchor_scans_incrementally`, `anchorless_cursor_is_rebuilt_once`, `cursor_above_head_rewinds_only_when_provable`, `fork_deeper_than_reorg_depth_fails`, `missing_cursor_block_is_an_error`, `cursor_unchanged_on_missing_block`, `scan_page_stops_at_max_blocks_and_reports_done`, `collect_finds_liquidate_bid_surplus_debt`, `collect_ignores_other_config`, `collect_skips_reverted_tx`, `collect_ignores_other_program`, `collect_skips_undecodable_root_message`, `cursor_round_trips_through_borsh`, `collect_ignores_set_slack_and_init_root_calls`; and in `v04/sdk/tests/scan_live.rs`: `live_auctions_drops_candidates_without_state`, `live_auctions_empty_when_nothing_found`.
+
+**Status**
+Accepted (Plan 7, Task 4; live wiring and e2e check Task 5)
 
 ---

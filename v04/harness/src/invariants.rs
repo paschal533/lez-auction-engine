@@ -71,6 +71,7 @@ pub fn check(w: &World) {
     }
     if let Some(config) = decoded(w, w.config, ConfigState::decode) {
         assert_eq!(config.pending_read, None, "F6: config scratch cleared");
+        assert!(!config.pending_host_read, "F6: config host read answered");
         assert_eq!(config.pending_genesis, None, "F6: config genesis consumed");
         if let Some(def) = config.collateral_def {
             let recorded = collateral_actor(w.engine, w.config.account_id, def);

@@ -170,6 +170,11 @@ pub struct ConfigState {
     /// The config's one collateral type (ruling R-F3), recorded by its first `SetCollateral`;
     /// `SetEngineParams` checks this type's cap against a new global cap.
     pub collateral_def: Option<AccountId>,
+    /// `Init` scratch (ADR-065): the config awaits the host's `StateReply` and checks its
+    /// parameters against its own. Set by `Init`, cleared by the reply, and refused by the
+    /// `Proceed` sentinel, so it is `false` in every committed state. Appended last, so the
+    /// layout of the fields before it is unchanged.
+    pub pending_host_read: bool,
 }
 tagged_state!(ConfigState, TAG_CONFIG);
 
@@ -543,6 +548,7 @@ pub(crate) mod fixtures {
             pending_read: None,
             pending_genesis: None,
             collateral_def: None,
+            pending_host_read: false,
         }
     }
 

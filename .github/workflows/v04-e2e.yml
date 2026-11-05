@@ -1,0 +1,109 @@
+name: v04-e2e
+# The LEZ v0.4.0-rc1 port end to end on a hosted runner: v04/scripts/e2e.sh starts a standalone
+# sequencer, deploys the five guests, and runs the `slice` and `system` examples against it.
+# It takes one stage per call, so each stage is its own step (the sequencer keeps running between
+# them). A cold run builds LEZ (sequencer and wallet, cached below) and the guests, then waits on
+# 15 s blocks; plan for well over an hour cold.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "v04/**"
+      - "crates/auction_core/**"
+      - "crates/auction_engine_params/**"
+      - ".github/workflows/v04-e2e.yml"
+  schedule:
+    - cron: "13 5 * * 0"
+  workflow_dispatch:
+permissions:
+  contents: read
+# One run per ref at a time; a newer push waits instead of running a second multi-hour job.
+concurrency:
+  group: v04-e2e-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  v04-e2e:
+    runs-on: ubuntu-22.04
+    # Provisional until the first hosted run is measured (step budgets sum to 195).
+    timeout-minutes: 240
+    env:
+      RISC0_DEV_MODE: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      # The runner context is not available in job-level env, so the paths are exported here.
+      - name: e2e.sh paths
+        run: |
+          {
+            echo "LEZ_DIR=$HOME/lez-spikes/lez-v04"
+            echo "LEZ_TARGET=$HOME/lez-target/v04"
+            echo "CARGO_TARGET_DIR=$HOME/lez-target/v04-port"
+            echo "E2E_HOME=$RUNNER_TEMP/e2e"
+          } >> "$GITHUB_ENV"
+      - run: scripts/ci/free-disk.sh
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang libclang-dev pkg-config libssl-dev libpcsclite-dev build-essential
+      # Reads v04/rust-toolchain.toml (channel 1.98.1, rustfmt and clippy in the default profile).
+      - name: Rust 1.98.1 from the toolchain file
+        working-directory: v04
+        run: |
+          rustup toolchain install || rustup toolchain install 1.98.1 --profile default
+          cargo --version | grep -q "1.98.1"
+      - uses: ./.github/actions/install-risc0
+      # Restore only: the v04 job owns the `v04` cache (save-if: false, as in real-proofs.yml).
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: v04, shared-key: v04, save-if: false }
+      # The cache holds the two LEZ binaries only. The clone is not cached: e2e.sh clones for the
+      # sequencer and wallet configs and skips the build when the binaries exist.
+      - name: restore the LEZ v0.4 sequencer and wallet binaries
+        id: lez-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/lez-target/v04/release/sequencer_service
+            ~/lez-target/v04/release/wallet
+          key: lez-v04-${{ hashFiles('v04/scripts/e2e.sh', 'v04/rust-toolchain.toml') }}-ubuntu-22.04-v1
+      # up: LEZ build (cache miss), guests, examples, sequencer start, wallet and payer.
+      - name: up (LEZ, guests, examples, sequencer, wallet)
+        id: lez
+        timeout-minutes: 75
+        run: v04/scripts/e2e.sh up
+      # Saved as soon as the LEZ build is done, so a failing e2e does not throw the cold build away.
+      - name: save the LEZ binaries
+        if: always() && steps.lez.outcome == 'success' && steps.lez-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/lez-target/v04/release/sequencer_service
+            ~/lez-target/v04/release/wallet
+          key: lez-v04-${{ hashFiles('v04/scripts/e2e.sh', 'v04/rust-toolchain.toml') }}-ubuntu-22.04-v1
+      # e2e.sh takes one stage per call, so `deploy slice system` cannot be one step. `all` would wipe
+      # the sequencer `up` started (and refuses to run beside it), so the stages run separately.
+      - name: deploy the guests
+        timeout-minutes: 60
+        run: v04/scripts/e2e.sh deploy
+      - name: slice
+        timeout-minutes: 30
+        run: v04/scripts/e2e.sh slice
+      - name: system
+        timeout-minutes: 30
+        run: v04/scripts/e2e.sh system
+      - name: stop the sequencer
+        if: always()
+        run: v04/scripts/e2e.sh down
+      - name: e2e summary
+        if: always()
+        run: |
+          for f in sequencer slice system; do
+            { echo "### $f.log (last 50 lines)"; echo '```'; tail -n 50 "$E2E_HOME/$f.log" 2>/dev/null || echo "missing $E2E_HOME/$f.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          done
+      # Explicit files only: never $E2E_HOME itself (the wallet directory holds the throwaway keys).
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v04-e2e
+          path: |
+            ${{ env.E2E_HOME }}/sequencer.log
+            ${{ env.E2E_HOME }}/slice.log
+            ${{ env.E2E_HOME }}/system.log
+            ${{ env.E2E_HOME }}/programs.env
+          if-no-files-found: warn

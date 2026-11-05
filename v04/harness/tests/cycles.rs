@@ -33,7 +33,7 @@ const T: u64 = 1_000_000;
 /// Executions (messages delivered, replies included) of each transaction, counted from the
 /// as-built message sequences: `lee::simulate_public_transaction` returns cycles only. Each token
 /// debit is two executions since ADR-062 (the owner's token actor, then its holding).
-const INIT_EXECUTIONS: u32 = 7;
+const INIT_EXECUTIONS: u32 = 9;
 const SET_COLLATERAL_EXECUTIONS: u32 = 11;
 const LIQUIDATE_EXECUTIONS: u32 = 29;
 const PARTIAL_BID_EXECUTIONS: u32 = 15;
@@ -213,6 +213,7 @@ fn write_table(name: &str, markdown: &str) {
 ///
 /// - `SetEngineParams` (a locked field changes, the type recorded): proxy, config probe, config,
 ///   collateral probe, `AssertCapAtMost`, `AssertSystemIdle`.
+/// - `SetSlack` (the type recorded): proxy, config probe, config, collateral probe, `SlackUpdate`.
 /// - `ObserveFeed`: collateral actor, two reads, the clock, `Proceed`.
 /// - `SettleDebt` (burns): config, `System`, buffer read, `Proceed`, the buffer's `Burn`.
 /// - `StartSurplus` (no burn, no reference oracle): config, clock, `System`, buffer read,
@@ -229,6 +230,7 @@ fn write_table(name: &str, markdown: &str) {
 /// - `CheckSolvency` `Healthy` (burns): config, clock, `System`, buffer read, `Proceed`, `Burn`;
 ///   `Freeze` (no burn): the same without the burn, then `Freeze` and `EngineFreezeNewDebt`.
 const SET_ENGINE_PARAMS_EXECUTIONS: u32 = 6;
+const SET_SLACK_EXECUTIONS: u32 = 5;
 const OBSERVE_FEED_EXECUTIONS: u32 = 7;
 const SETTLE_DEBT_EXECUTIONS: u32 = 8;
 const START_SURPLUS_EXECUTIONS: u32 = 10;
@@ -275,6 +277,12 @@ fn plain_rows(rows: &mut Vec<Row>) {
     let mut w = World::new();
     w.set_now_ms(T);
     assert_eq!(w.book_shortfall(), SHORTFALL);
+    let (admin_key, slack) = (w.admin_key.clone(), w.set_slack_msg(30_000));
+    rows.push(measured(
+        "SetSlack",
+        SET_SLACK_EXECUTIONS,
+        proxied(&w, w.admin, &admin_key, &slack),
+    ));
     let observe = EngineMsg::ObserveFeed {
         config: w.config.account_id,
         collateral_def: w.collateral_def,
@@ -443,8 +451,9 @@ fn debt_rows(rows: &mut Vec<Row>) {
 }
 
 /// The table's row order.
-const SYSTEM_ROWS: [&str; 12] = [
+const SYSTEM_ROWS: [&str; 13] = [
     "SetEngineParams",
+    "SetSlack",
     "ObserveFeed",
     "SettleDebt",
     "StartSurplus",

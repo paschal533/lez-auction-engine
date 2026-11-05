@@ -95,9 +95,13 @@ impl World {
     }
 
     /// An attacker's own config of the engine whose token program is the impostor: the signer
-    /// `label`'s `Init` (salt [`SALT`]) with `params`, the world's host, oracle and stablecoin.
+    /// `label`'s `Init` (salt [`SALT`]) with `params`, an impostor host (`{label}-host`, naming the
+    /// impostor token program, ADR-065), the world's oracle and stablecoin.
     /// Every holding its system ops read is then an impostor actor the attacker scripts
     /// ([`World::impostor_holding`]), which lets a test answer the engine's reads at will.
+    /// The rogue config binds its own impostor host, so the victim sets' `w.params`
+    /// (security_surplus.rs, security_system.rs) stay unchanged trivially: those tests never reach
+    /// a host.
     /// Returns the config actor.
     pub fn impostor_token_config(&mut self, label: &str, params: EngineParamsArgs) -> Actor {
         let (key, admin) = self.chain.key(label);
@@ -105,8 +109,16 @@ impl World {
             self.chain.fund(admin, 1);
         }
         let mut init = self.init_msg_with(params);
-        if let EngineMsg::Init { token, .. } = &mut init {
-            *token = self.chain.program("impostor");
+        // The host must agree with the config (ADR-065): an impostor host naming the impostor
+        // token program.
+        let impostor_program = self.chain.program("impostor");
+        let host = self.impostor_host_for(&format!("{label}-host"), None, impostor_program);
+        if let EngineMsg::Init {
+            token, host: bound, ..
+        } = &mut init
+        {
+            *token = impostor_program;
+            *bound = host;
         }
         self.send_engine(admin, &[&key], &init)
             .expect("the attacker's config with an impostor token");
@@ -123,12 +135,17 @@ impl World {
     /// definitions and oracle and redemption price 1 RAY. On `LiquidatePosition` it pings `admin`;
     /// with `admin = None` it pings nobody (a host that never replies).
     pub fn impostor_host(&mut self, label: &str, admin: Option<Actor>) -> Actor {
+        self.impostor_host_for(label, admin, self.token)
+    }
+
+    /// [`World::impostor_host`] whose `Params` name the token program `token`.
+    fn impostor_host_for(&mut self, label: &str, admin: Option<Actor>, token: AccountId) -> Actor {
         let (_, account) = self.chain.key(label);
         let host = self.impostor(account);
         let params = Params {
             tag: TAG_PARAMS,
             admin: admin.unwrap_or(host),
-            token: self.token,
+            token,
             stable_def: self.stable_def,
             collateral_def: self.collateral_def,
             oracle: self.oracle,

@@ -7,11 +7,13 @@
 #   5. deploy token, oracle, mock_host, relay and engine with `wallet program-loader deploy`,
 #   6. run `cargo run -p sdk --example slice` against it (expects "slice complete"),
 #   7. run `cargo run -p sdk --example system` (Plan 6: settle_debt, one debt auction, one surplus
-#      auction, check_solvency; expects "system complete"),
+#      auction, check_solvency; expects "system complete" and "scan ok:", the SDK block scanner
+#      finding both system auctions),
 #   8. stop the sequencer by its exact process name.
 # `e2e.sh` (or `e2e.sh all`) runs every step; `up`, `deploy`, `slice`, `system`, `down` run them in
-# stages. Exits non-zero on any failed step. Local only (no CI): it needs a few GB of LEZ build and
-# about 25 minutes of 15 s blocks.
+# stages. Exits non-zero on any failed step. Runs locally and on hosted CI
+# (.github/workflows/v04-e2e.yml, which runs the stages as separate steps): it needs a few GB of
+# LEZ build and about 25 minutes of 15 s blocks.
 #
 # Environment (all optional):
 #   LEZ_DIR        LEZ checkout at v0.4.0-rc1      (default ~/lez-spikes/lez-v04, cloned if absent)
@@ -51,22 +53,28 @@ step() { echo; echo "== $*"; }
 die() { echo "e2e: $*" >&2; exit 1; }
 wallet() { "$BIN/wallet" "$@"; }
 
-build_lez() {
-  if [[ -x "$BIN/sequencer_service" && -x "$BIN/wallet" ]]; then
-    echo "reusing $BIN/{sequencer_service,wallet}"; return
-  fi
+# The checkout is always needed (sequencer and wallet configs), even when the binaries are reused
+# (a CI cache restores the binaries only).
+ensure_lez_checkout() {
   if [[ ! -d "$LEZ_DIR" ]]; then
     git clone --depth 1 --branch "$LEZ_TAG" \
       https://github.com/logos-blockchain/logos-execution-zone.git "$LEZ_DIR"
   fi
   [[ "$(git -C "$LEZ_DIR" describe --tags)" == "$LEZ_TAG" ]] || die "$LEZ_DIR is not at $LEZ_TAG"
+}
+
+build_lez() {
+  ensure_lez_checkout
+  if [[ -x "$BIN/sequencer_service" && -x "$BIN/wallet" ]]; then
+    echo "reusing $BIN/{sequencer_service,wallet}"; return
+  fi
   ( cd "$LEZ_DIR" && CARGO_TARGET_DIR="$LEZ_TARGET" RISC0_SKIP_BUILD=1 \
       cargo build --release --features standalone -p sequencer_service \
     && CARGO_TARGET_DIR="$LEZ_TARGET" RISC0_SKIP_BUILD=1 cargo build --release -p wallet )
 }
 
 build_v04() {
-  ( cd "$V04" && cargo build -p methods && cargo build -p sdk --example slice --example system )
+  ( cd "$V04" && cargo build -p methods && cargo build -p sdk --features session --example slice --example system )
   for g in token oracle mock_host relay engine; do
     [[ -f "$GUESTS/$g.bin" ]] || die "missing guest $GUESTS/$g.bin"
   done
@@ -138,10 +146,12 @@ run_example() {
   local log="$E2E_HOME/$1.log"
   # Tested by `if !`, so `set -e` does not abort here and the message is printed (`pipefail`
   # makes a failed example fail the pipeline even though `tee` succeeds).
-  if ! ( cd "$V04" && cargo run -q -p sdk --example "$1" ) 2>&1 | tee "$log"; then
+  if ! ( cd "$V04" && cargo run -q -p sdk --features session --example "$1" ) 2>&1 | tee "$log"; then
     die "the $1 example failed (log $log)"
   fi
   grep -q "^$1 complete\$" "$log" || die "no '$1 complete' in $log"
+  # The system example also scans the chain it just wrote (Plan 7, ADR-066).
+  if [[ "$1" == system ]]; then grep -q '^scan ok: ' "$log" || die "no 'scan ok:' in $log"; fi
 }
 
 load_env() {

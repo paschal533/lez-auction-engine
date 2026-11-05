@@ -37,8 +37,9 @@ Memory-constrained machines: `CARGO_BUILD_JOBS=2`. The first build compiles LEZ 
 match the tag's.
 
 CI: `.github/workflows/v04.yml` runs fmt, clippy and `cargo test --workspace` on changes under `v04/`,
-`crates/auction_core/` or `crates/auction_engine_params/`. The e2e below stays local, like the v0.2.4
-localnet story: it needs a LEZ build and about 25 minutes of 15 s blocks.
+`crates/auction_core/` or `crates/auction_engine_params/`. The e2e below also runs on hosted runners
+(`.github/workflows/v04-e2e.yml`: pushes to `main` that touch those paths, weekly, and on dispatch); it needs
+a LEZ build and about 25 minutes of 15 s blocks.
 
 ## End to end on a standalone sequencer
 
@@ -113,6 +114,8 @@ mock-host (init, bind), 3 × (fund owner, open position, generate debt) and the 
 This run predates the final fix round, whose `protocol_def` check (refusing the config's own protocol
 definition as stablecoin or collateral) adds about 1.8k cycles to `Init` and `SetCollateral`; the re-run after
 it gave `Init` 244,095 and `SetCollateral` 327,635, every other engine row unchanged, 31,699,608 in fees.
+`Init` has since gained the host-parameter read (ADR-065): in-process it costs 269,226 cycles in 9 executions
+(was 216,571 in 7); the sequencer runs above predate it.
 
 End state: shortfall `U` = 10,000 booked by the empty lot-3 auction; the debt take burned 500 stablecoin and
 minted 325 protocol tokens (30 % growth after more than a second); 9,500 donated and settled, `unbacked_debt`
@@ -158,14 +161,11 @@ stays under 3 % of the cap.
 
 ## Deferred
 
-- **The IDL.** The hand-kept IDL with a drift test waits for SPEL on 0.4: a drift test over 45 borsh variants
+- **The IDL.** The hand-kept IDL with a drift test waits for SPEL on 0.4: a drift test over 47 borsh variants
   needs a schema derive the crates do not have.
-- **A `slack_ms` setter.** `slack_ms` is set at `Init` only (ADR-058); a wrong value means a new config.
-- **Host `ProtocolParameters` validation at `Init`** (ruling R-7c): `Init` does not yet read the host's
-  parameters to check the stablecoin definition and oracle.
 - **Native collateral.** Collateral is a `T` token; native collateral would need Read + exact `Transfer`
   instead of `Sweep` (design note §6).
-- **The SDK scanner** (design note §7) and CI for the e2e (it stays local).
+- **First hosted e2e run** (`v04-e2e.yml` is in place; its first run is not recorded yet).
 
 ## Time in-process
 

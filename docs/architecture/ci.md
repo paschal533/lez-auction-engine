@@ -1,8 +1,8 @@
 # Continuous integration
 
-Workflows: `.github/workflows/core.yml` (every push and pull request), `fuzz.yml` (weekly), `guests.yml` (every push and pull request that touches a build input of the guests, weekly on Sunday at 04:05 UTC and on dispatch), `real-proofs.yml` and `e2e.yml` (pushes to `main`, tags where noted, schedule and dispatch), `basecamp-module.yml` (every push and pull request that touches `crates/auction_ffi`, `modules/`, `apps/` or the root flake, and on dispatch; Plan 4). Everything the hosted jobs run can be run locally in WSL; the commands are listed per job below.
+Workflows: `.github/workflows/core.yml` (every push and pull request), `fuzz.yml` (weekly), `guests.yml` (every push and pull request that touches a build input of the guests, weekly on Sunday at 04:05 UTC and on dispatch), `real-proofs.yml`, `e2e.yml` and `v04-e2e.yml` (pushes to `main`, tags where noted, schedule and dispatch), `basecamp-module.yml` (every push and pull request that touches `crates/auction_ffi`, `modules/`, `apps/` or the root flake, and on dispatch; Plan 4). Everything the hosted jobs run can be run locally in WSL; the commands are listed per job below.
 
-Schedules are weekly, on Sunday (UTC), not nightly: the repository is private, and its 2,000 free Actions minutes a month would not cover the estimated 100 to 190 minutes a night of the scheduled jobs. The job, artifact and variable names (`fuzz-nightly`, `real-proof-nightly`, `real-proofs-nightly`, `NIGHTLY_TIER`, `PPE_NIGHTLY`) keep the word "nightly" so that `REQUIREMENTS.md` and the evidence keep pointing at the same jobs; read it as "scheduled". Every scheduled job can also be dispatched by hand.
+Schedules are weekly, on Sunday (UTC), not nightly. The repository is now public, so Actions minutes are free; the schedule stays weekly because of runner time: the scheduled jobs take an estimated 100 to 190 minutes a night between them for the jobs measured so far, plus `v04-e2e` (240 minute provisional cap, its first hosted run still pending), and a weekly run is enough to catch drift in the pinned toolchains and the LEZ tags. The job, artifact and variable names (`fuzz-nightly`, `real-proof-nightly`, `real-proofs-nightly`, `NIGHTLY_TIER`, `PPE_NIGHTLY`) keep the word "nightly" so that `REQUIREMENTS.md` and the evidence keep pointing at the same jobs; read it as "scheduled". Every scheduled job can also be dispatched by hand.
 
 ## Jobs
 
@@ -20,7 +20,8 @@ Schedules are weekly, on Sunday (UTC), not nightly: the repository is private, a
 | `real-proof-push` | `real-proofs.yml` | Every push to `main`: `prove_settle_debt` proved with the risc0 prover (`RISC0_DEV_MODE=0`, po2 19) and its receipt verified; `scripts/check-proof-report.py` fails the job if the proof report is missing, empty, unverified or lacks `settle_debt` (ADR-045, tier B). |
 | `real-proof-nightly` | `real-proofs.yml` | Weekly (Sunday 02:17 UTC), on dispatch and on `v*` / `rfp014-*` tags, on a self-hosted runner only: the whole ADR-036 suite proved, every receipt verified. Off unless the repository variable `REAL_PROOF_SELF_HOSTED` is `true` (ADR-045, tier C). |
 | `localnet-e2e` | `e2e.yml` | `scripts/bootstrap-lez.sh` then `scripts/demo.sh --sequencer-dev-mode N` against a standalone LEZ v0.2.4 sequencer: every push to `main` with `RISC0_DEV_MODE=0` (RFP S2), weekly (Sunday 03:41 UTC) and on dispatch with both modes (matrix `sequencer_dev_mode`). Artifact `demo-<mode>`: `demo-summary.txt` and the sequencer log. |
-| `install-risc0` | `.github/actions/install-risc0` | Composite action used by `programs`, `coverage`, `guest-repro`, both real-proof jobs and `localnet-e2e`: rzup and the pinned components, cached in `~/.risc0`. |
+| `v04-e2e` | `v04-e2e.yml` | The LEZ v0.4.0-rc1 port end to end: `v04/scripts/e2e.sh` stages `up`, `deploy`, `slice`, `system`, `down` against a standalone sequencer. Pushes to `main` that touch `v04/**`, `crates/auction_core/**`, `crates/auction_engine_params/**` or the workflow; weekly (Sunday 05:13 UTC) and on dispatch. The two LEZ binaries are cached; the artifact holds the logs and `programs.env`, never the wallet. First hosted run: pending. |
+| `install-risc0` | `.github/actions/install-risc0` | Composite action used by `programs`, `coverage`, `guest-repro`, both real-proof jobs, `localnet-e2e` and `v04-e2e`: rzup and the pinned components, cached in `~/.risc0`. |
 
 ## What each job runs
 
@@ -152,7 +153,7 @@ The action ends with `r0vm --version | grep -q 3.0.5`, so a drifted prover fails
 
 - Hosted runner `ubuntu-22.04`: 2 vCPU, 7 GiB RAM, about 14 GB free disk.
 - Rust cache sharing: `guest-repro` and both `real-proofs.yml` jobs use `shared-key: programs` with `save-if: false`. They restore the `programs` cache but never write it, because cache keys are immutable and a shorter job finishing first on `main` would otherwise save a partial target under the key `programs` needs, leaving `programs` partly cold on every later run. A separate key was not chosen: it would cost a second cold build and cache quota for no gain.
-- Job limit 360 minutes; 2000 free minutes a month (Free plan, private repository).
+- Job limit 360 minutes. The repository is public, so hosted minutes are free; the limit that matters is runner time (a cold LEZ plus guest build is long).
 - The heavy job therefore runs `scripts/ci/free-disk.sh` first (removes dotnet, the Android SDK, ghc, the CodeQL toolcache and boost). If `programs` still fails with `No space left on device`, add `/opt/microsoft /usr/local/.ghcup` to that script.
 
 ## Running a job locally

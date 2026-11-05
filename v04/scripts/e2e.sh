@@ -66,7 +66,7 @@ build_lez() {
 }
 
 build_v04() {
-  ( cd "$V04" && cargo build -p methods && cargo build -p sdk --example slice --example system )
+  ( cd "$V04" && cargo build -p methods && cargo build -p sdk --features session --example slice --example system )
   for g in token oracle mock_host relay engine; do
     [[ -f "$GUESTS/$g.bin" ]] || die "missing guest $GUESTS/$g.bin"
   done
@@ -138,7 +138,7 @@ run_example() {
   local log="$E2E_HOME/$1.log"
   # Tested by `if !`, so `set -e` does not abort here and the message is printed (`pipefail`
   # makes a failed example fail the pipeline even though `tee` succeeds).
-  if ! ( cd "$V04" && cargo run -q -p sdk --example "$1" ) 2>&1 | tee "$log"; then
+  if ! ( cd "$V04" && cargo run -q -p sdk --features session --example "$1" ) 2>&1 | tee "$log"; then
     die "the $1 example failed (log $log)"
   fi
   grep -q "^$1 complete\$" "$log" || die "no '$1 complete' in $log"

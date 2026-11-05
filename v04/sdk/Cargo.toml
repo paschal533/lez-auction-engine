@@ -22,11 +22,24 @@ common.workspace = true
 sequencer_service_rpc.workspace = true
 wallet.workspace = true
 tokio = { workspace = true, features = ["time"] }
-# The examples' live session (`session`): the mock host's messages, the clock and derived keys.
-mock_host_core.workspace = true
-clock_core.workspace = true
-sha2.workspace = true
+# The examples' live session (`session`, behind the `session` feature): the mock host's messages, the clock and derived keys.
+mock_host_core = { workspace = true, optional = true }
+clock_core = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 harness.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[features]
+default = []
+# The e2e examples' live session (`sdk::session`); pulls in the mock host.
+session = ["dep:mock_host_core", "dep:clock_core", "dep:sha2"]
+
+[[example]]
+name = "slice"
+required-features = ["session"]
+
+[[example]]
+name = "system"
+required-features = ["session"]

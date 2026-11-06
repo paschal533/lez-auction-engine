@@ -156,6 +156,8 @@ Basecamp's log reads `Base data directory: /tmp/auctions-profile` and `Loading c
 
 Wall time: 1261 s for the whole command. The story itself took 329 s for 172 steps, of which 284 s were lane waits, the same as standalone. The rest went to evaluating the flakes, installing, and `demo.sh --setup-only`. The full `#app` and lgpm came from the Logos cache (the app was a 14.5 MiB download). The only local derivations were the `.lgx` packaging steps; neither Qt nor Basecamp was compiled.
 
+Re-run (2026-11-05, same command with a fresh profile `/tmp/auctions-profile-1105`, from the main checkout at `feat/plan-4`, whose `apps/`, `modules/`, `crates/auction_ffi`, `crates/auction_core`, flake and scripts equal `main` at 5913f0a; Basecamp `e09962f5`, sequencer in dev mode): passed, 1 passed and 0 failed, all 172 steps and all 13 figure checks `ok`. Wall time 1685 s (28m05s); the story took 330 s. The extra time over the first run went to rebuilding the demo's Rust binaries for `demo.sh --setup-only`. Run from a linked git worktree, the command fails at once: Nix in WSL cannot follow a worktree's `.git` file to its Windows path, so run it from a full clone.
+
 ## Known limits
 
 - **"Publish anyway" never sends (R46).** In Dev tools, a price outside `[R/2, 2R]` turns the button into "Publish anyway". The engine's own check (`prepare_oracle_publish`) refuses that price before anything is signed, so the button always ends in a `refused` notice. The board implies the collateral would pause instead.

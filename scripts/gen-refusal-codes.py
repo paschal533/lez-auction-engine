@@ -32,6 +32,10 @@ _ct = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_ct)
 mask_rust = _ct.mask_rust
 
+# Tests that only check .code() / From mappings / message format, so they never prove a refusal.
+NOT_PROOF = {"error_codes_are_stable", "fail_text_matches_v024_format"}
+CORE_ERRORS = "AuctionError|SystemAuctionError|PauseReason|MathError"
+
 # One short line per variant, written from the raising code.
 MEANINGS = {
     'NotAdmin': 'The signer is not the configured admin.',
@@ -48,7 +52,7 @@ MEANINGS = {
     'WrongAccount': 'A supplied account has the wrong id, owner, contents or signer flag (the name of the slot follows in the message).',
     'OracleMismatch': "The supplied oracle account is not the one the host's health gate uses.",
     'WrongClock': 'The clock account is not the system clock or does not decode.',
-    'ProtocolTokenLocked': 'Protocol-token fields cannot change while a debt or surplus auction is live.',
+    'ProtocolTokenLocked': 'The protocol token, the reference oracle and the system parameter set cannot change while a debt or surplus auction is live.',
     'RefPriceStepTooLarge': 'A reference-price update moves further than the allowed step.',
     'Paused': 'The engine is paused by the admin.',
     'PriceFeedStale': 'The price feed is older than its maximum age, which pauses the engine.',
@@ -58,7 +62,7 @@ MEANINGS = {
     'ZeroDebt': 'The position has no debt to liquidate.',
     'VaultBelowCollateral': 'The position vault holds less than the collateral the position books.',
     'CapacityExhausted': 'The global or per-type liquidation capacity has no room for this lot.',
-    'NotAuctioning': 'The auction is not live (never started, finished or cancelled).',
+    'NotAuctioning': 'The auction is not in its bidding phase (not yet seized, or already settled).',
     'ZeroFill': 'The bid fills nothing.',
     'Slippage': "The fill is worse than the bidder's stated minimum.",
     'BelowMinBid': 'The bid is below the minimum bid size.',
@@ -66,8 +70,8 @@ MEANINGS = {
     'NotOwner': 'The caller does not own the position or claim.',
     'NothingToClaim': 'There is no leftover collateral to claim.',
     'ChainEndAccountsMissing': 'The final bid of an auction omits the accounting account it must update.',
-    'InsufficientBalance': "The bidder's stablecoin balance cannot cover the charge.",
-    'RecipientMustSign': 'The recipient holding of a claim must sign.',
+    'InsufficientBalance': "The bidder's or taker's holding cannot cover the payment.",
+    'RecipientMustSign': 'A recipient holding that does not exist yet must sign the transaction.',
     'WrongDefinition': 'A token holding is not the expected fungible token definition or is not owned by the token program.',
     'VaultBelowBook': 'The auction vault holds less collateral than the fill or claim needs.',
     'TokenNotConfigured': 'The protocol token needed for a system auction is not configured.',
@@ -87,9 +91,8 @@ MEANINGS = {
 
 # Variants with no proving test yet: variant -> reason and the plan that closes it.
 KNOWN_GAPS = {
-    "VaultBelowCollateral": "Raised only through the `AuctionError` -> `EngineError` conversion "
-                            "(`quote_liquidation`); no test yet drives an under-funded position vault "
-                            "to the engine's wire code. Closes with the Tier 2/3 liquidation refusal tests.",
+    "VaultBelowCollateral": "Core refusal tested in auction_core (crates/auction_core/src/liquidation.rs:164-167); "
+                            "no engine-level test drives it to wire code 6032; engine-level test planned in Tier 2 (M1).",
 }
 
 CODE_ARM = re.compile(r"Self::(\w+)(?:\([^)]*\))?\s*=>\s*(\d+)\s*,")
@@ -190,16 +193,41 @@ def proof_pattern(variant, code):
     return re.compile("|".join(alts))
 
 
-def find_uses(root, variant, code=None, index=None):
-    """{"raised_in": [paths], "tests": [fn names]}; code (the engine code) enables wire-form matching."""
+def engine_label(rel):
+    """Which engine a test path belongs to: (sdk), (0.4), (v0.2.4) or (core)."""
+    if rel.startswith("v04/sdk/") or rel.startswith(("crates/auction_sdk/", "crates/auction_ffi/")):
+        return "sdk"
+    if rel.startswith("v04/"):
+        return "0.4"
+    if rel.startswith("programs/"):
+        return "v0.2.4"
+    return "core"
+
+
+def find_uses(root, variant, code=None, index=None, error_text=""):
+    """{"raised_in": [paths], "tests": [fn names that prove it], "labelled": ["(engine) name"]}.
+
+    code (the engine code) enables wire-form matching. NOT_PROOF fns are skipped; (sdk) tests predict
+    a refusal rather than prove the program raises it, so they never count as proof."""
     sources, tests = index or build_index(root)
     raise_re = re.compile(rf"EngineError::{variant}\b")
     pat = proof_pattern(variant, code)
-    names = []
-    for _, name, body in tests:
-        if pat.search(body) and name not in names:
+    seen, names, labelled = set(), [], []
+    for rel, name, body in tests:
+        label = engine_label(rel)
+        if name in NOT_PROOF or label == "sdk" or not pat.search(body) or (label, name) in seen:
+            continue
+        seen.add((label, name))
+        labelled.append(f"({label}) {name}")
+        if name not in names:
             names.append(name)
-    return {"raised_in": sorted(r for r, t in sources.items() if raise_re.search(t)), "tests": names}
+    raised = {r for r, t in sources.items() if raise_re.search(t)}
+    if from_conversion(error_text, variant):
+        core_re = re.compile(rf"\b(?:{CORE_ERRORS})::{variant}\b")
+        raised |= {r for r, t in sources.items() if core_re.search(t)}
+        if variant == "Math":
+            raised.add(ERROR_RS_PATH)
+    return {"raised_in": sorted(raised), "tests": names, "labelled": labelled}
 
 
 def capped(items, limit):
@@ -218,10 +246,9 @@ def render(root):
     index = build_index(root)
     rows, problems, gaps = [], [], []
     for name, code in codes:
-        uses = find_uses(root, name, code, index)
-        raised = capped(uses["raised_in"], MAX_PATHS) if uses["raised_in"] else (
-            "`error.rs` (`From` conversion)" if from_conversion(error_text, name) else "-")
-        proved = capped(uses["tests"], MAX_TESTS) if uses["tests"] else "**no test**"
+        uses = find_uses(root, name, code, index, error_text)
+        raised = capped(uses["raised_in"], MAX_PATHS) if uses["raised_in"] else "-"
+        proved = capped(uses["labelled"], MAX_TESTS) if uses["labelled"] else "**no test**"
         if name not in MEANINGS:
             problems.append(f"{name}: no MEANINGS line")
         if not uses["tests"]:

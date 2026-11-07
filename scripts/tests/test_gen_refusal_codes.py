@@ -86,6 +86,31 @@ class FindUsesTest(Fixture):
         self.assertEqual(["paused"], g.find_uses(self.root, "Paused")["tests"])
 
 
+class ProofRulesTest(Fixture):
+    def test_mapping_only_tests_are_not_proof(self):
+        self.write("programs/a/src/lib.rs",
+                   "#[test]\nfn error_codes_are_stable() { assert_eq!(EngineError::Paused.code(), 20); }\n")
+        self.assertEqual([], g.find_uses(self.root, "Paused", 20)["tests"])
+
+    def test_sdk_only_tests_do_not_prove(self):
+        self.write("v04/sdk/tests/q.rs", "#[test]\nfn predicts() { let _ = EngineError::Paused; }\n")
+        uses = g.find_uses(self.root, "Paused", 20)
+        self.assertEqual([], uses["tests"])
+        self.assertEqual([], uses["labelled"])
+
+    def test_tests_are_labelled_by_engine(self):
+        self.write("v04/h/tests/x.rs", "#[test]\nfn on_04() { let _ = EngineError::NotAdmin; }\n")
+        self.write("crates/auction_core/src/y.rs", "#[test]\nfn in_core() { let _ = EngineError::NotAdmin; }\n")
+        labelled = g.find_uses(self.root, "NotAdmin", 1)["labelled"]
+        self.assertEqual({"(v0.2.4) rejects_stranger", "(0.4) on_04", "(core) in_core"}, set(labelled))
+
+    def test_from_only_variant_lists_core_raise_sites(self):
+        text = ERROR_RS + "impl From<AuctionError> for EngineError { match e { AuctionError::Paused => Self::Paused } }\n"
+        self.write("crates/auction_core/src/liq.rs", "fn q() { return Err(AuctionError::Paused); }\n")
+        uses = g.find_uses(self.root, "Paused", 20, error_text=text)
+        self.assertEqual(["crates/auction_core/src/liq.rs"], uses["raised_in"])
+
+
 class CheckTest(Fixture):
     def test_variant_without_test_fails_check(self):
         code, _, _ = self.run_main()

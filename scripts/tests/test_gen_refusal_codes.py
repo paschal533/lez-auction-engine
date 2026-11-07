@@ -110,6 +110,29 @@ class ProofRulesTest(Fixture):
         uses = g.find_uses(self.root, "Paused", 20, error_text=text)
         self.assertEqual(["crates/auction_core/src/liq.rs"], uses["raised_in"])
 
+    RENAMED = ("impl From<PauseReason> for EngineError { fn from(r: PauseReason) -> Self { match r {"
+               " PauseReason::Stale | PauseReason::Old => Self::Paused } } }\n")
+
+    def test_renamed_from_mapping_is_followed(self):
+        self.assertEqual({"Paused": ["PauseReason::Stale", "PauseReason::Old"]},
+                         g.from_arms(ERROR_RS + self.RENAMED))
+        self.write("crates/auction_core/src/feed.rs", "fn q() { return Err(PauseReason::Stale); }\n")
+        uses = g.find_uses(self.root, "Paused", 20, error_text=ERROR_RS + self.RENAMED)
+        self.assertEqual(["crates/auction_core/src/feed.rs"], uses["raised_in"])
+
+    def test_from_only_variant_without_raise_site_fails_check(self):
+        self.write(g.ERROR_RS_PATH, ERROR_RS + self.RENAMED)
+        self.write("programs/it/tests/p.rs", '#[test]\nfn p() { assert_err(r, "Paused"); }\n')
+        saved = dict(g.MEANINGS)
+        try:
+            g.MEANINGS.update(NotAdmin="a", WrongAccount="b", Paused="c")
+            self.run_main()
+            code, _, err = self.run_main("--check")
+            self.assertEqual(1, code)
+            self.assertIn("Paused: mapped by a From impl but no raise site", err)
+        finally:
+            g.MEANINGS.clear(); g.MEANINGS.update(saved)
+
 
 class CheckTest(Fixture):
     def test_variant_without_test_fails_check(self):

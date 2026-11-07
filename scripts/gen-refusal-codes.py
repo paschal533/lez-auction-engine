@@ -34,7 +34,6 @@ mask_rust = _ct.mask_rust
 
 # Tests that only check .code() / From mappings / message format, so they never prove a refusal.
 NOT_PROOF = {"error_codes_are_stable", "fail_text_matches_v024_format"}
-CORE_ERRORS = "AuctionError|SystemAuctionError|PauseReason|MathError"
 
 # One short line per variant, written from the raising code.
 MEANINGS = {
@@ -222,8 +221,9 @@ def find_uses(root, variant, code=None, index=None, error_text=""):
         if name not in names:
             names.append(name)
     raised = {r for r, t in sources.items() if raise_re.search(t)}
-    if from_conversion(error_text, variant):
-        core_re = re.compile(rf"\b(?:{CORE_ERRORS})::{variant}\b")
+    core_names = from_arms(error_text).get(variant, [])
+    if core_names:
+        core_re = re.compile(r"\b(?:" + "|".join(re.escape(n) for n in core_names) + r")\b")
         raised |= {r for r, t in sources.items() if core_re.search(t)}
         if variant == "Math":
             raised.add(ERROR_RS_PATH)
@@ -235,8 +235,20 @@ def capped(items, limit):
     return shown + (f" and {len(items) - limit} more" if len(items) > limit else "")
 
 
-def from_conversion(error_text, variant):
-    return re.search(rf"=>\s*Self::{variant}\b", error_text) is not None
+FROM_ARM = re.compile(r"((?:\w+::\w+\s*\|\s*)*\w+::\w+)\s*=>\s*Self::(\w+)")
+
+
+def from_arms(error_text):
+    """{EngineVariant: ["CoreError::Name", ...]} from the `impl From<..> for EngineError` match arms
+    (`A::X | A::Y => Self::V`), so renamed mappings (PauseReason::Stale -> PriceFeedStale) are followed."""
+    start = error_text.find("impl From<")
+    out = {}
+    if start < 0:
+        return out
+    for m in FROM_ARM.finditer(error_text, start):
+        found = out.setdefault(m.group(2), [])
+        found.extend(n for n in (x.strip() for x in m.group(1).split("|")) if n not in found)
+    return out
 
 
 def render(root):
@@ -249,6 +261,8 @@ def render(root):
         uses = find_uses(root, name, code, index, error_text)
         raised = capped(uses["raised_in"], MAX_PATHS) if uses["raised_in"] else "-"
         proved = capped(uses["labelled"], MAX_TESTS) if uses["labelled"] else "**no test**"
+        if not uses["raised_in"] and from_arms(error_text).get(name):
+            problems.append(f"{name}: mapped by a From impl but no raise site found")
         if name not in MEANINGS:
             problems.append(f"{name}: no MEANINGS line")
         if not uses["tests"]:

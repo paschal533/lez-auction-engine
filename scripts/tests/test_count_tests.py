@@ -66,6 +66,21 @@ class CountTest(unittest.TestCase):
         counts = ct.count(self.root)
         self.assertEqual((counts["crates"], counts["fuzz_kani"]), (2, 1))
 
+    def test_block_open_inside_line_comment_or_string_does_not_swallow_tests(self):
+        self.write("crates/x/src/d.rs", "// see the /* note\n#[test]\nfn real_a() {}\n"
+                   'const P: &str = "/*";\n#[test]\nfn real_b() {}\n'
+                   'const R: &str = r#"/* "x" "#;\n#[test]\nfn real_c() {}\n'
+                   "const Q: char = '\"';\n#[test]\nfn real_d() {}\n")
+        self.assertEqual(ct.count(self.root)["crates"], 5)
+
+    def test_nested_block_comment_hides_tests(self):
+        self.write("crates/x/src/e.rs", "/* /* */\n#[test]\nfn hidden() {}\n*/\n#[test]\nfn real() {}\n")
+        self.assertEqual(ct.count(self.root)["crates"], 2)
+
+    def test_attribute_inside_multiline_string_is_not_counted(self):
+        self.write("crates/x/src/f.rs", 'const S: &str = "\n#[test]\nfn x() {}\n";\n')
+        self.assertEqual(ct.count(self.root)["crates"], 1)
+
     def test_bom_and_crlf_files_count(self):
         with open(os.path.join(self.root, "crates/x/src/b.rs"), "wb") as f:
             f.write(b"\xef\xbb\xbf#[test]\r\nfn a() {}\r\n#[test]\r\nfn b() {}\r\n")

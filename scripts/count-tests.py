@@ -30,7 +30,6 @@ LABELS = {
 }
 RUST_TEST = re.compile(r"^[ \t]*#\[(?:[A-Za-z_]\w*::)*test(?:\s*\([^\]]*\))?\]", re.M)
 KANI_PROOF = re.compile(r"^[ \t]*#\[kani::proof\b[^\]]*\]", re.M)
-BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 QML_TEST = re.compile(r"^\s*function\s+test_\w+\s*\(", re.M)
 CPP_TEST = re.compile(r"^\s*(?:LOGOS_TEST\(\w+\)|TEST\w*\(\w+\s*,|void\s+test\w*\s*\()", re.M)
 PY_TEST = re.compile(r"^\s*(?:async\s+)?def\s+test_\w+\s*\(", re.M)
@@ -50,11 +49,59 @@ def read(path):
         return f.read()
 
 
-def hits(pattern, path, strip_block_comments=False):
+RAW_STRING_OPEN = re.compile(r'b?r(#*)"')
+
+
+def blank(text, start, end):
+    """text[start:end] with everything but newlines replaced by spaces."""
+    return "".join(c if c == "\n" else " " for c in text[start:end])
+
+
+def mask_rust(src):
+    """Blank comments (// and nested /* */), string literals (plain and raw) and char literals,
+    keeping every newline, so line-anchored attribute regexes only see real code."""
+    out, i, n = [], 0, len(src)
+    while i < n:
+        c = src[i]
+        j = i + 1
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            j = n if j < 0 else j
+        elif src.startswith("/*", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if src.startswith("/*", j):
+                    depth, j = depth + 1, j + 2
+                elif src.startswith("*/", j):
+                    depth, j = depth - 1, j + 2
+                else:
+                    j += 1
+        elif c in "rb" and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] == "_")) \
+                and RAW_STRING_OPEN.match(src, i):
+            m = RAW_STRING_OPEN.match(src, i)
+            close = src.find('"' + m.group(1), m.end())
+            j = n if close < 0 else close + 1 + len(m.group(1))
+        elif c == '"':
+            while j < n and src[j] != '"':
+                j += 2 if src[j] == "\\" else 1
+            j = min(j + 1, n)
+        elif c == "'" and src.startswith("\\", i + 1):
+            close = src.find("'", i + 3)
+            j = n if close < 0 else close + 1
+        elif c == "'" and src.startswith("'", i + 2):
+            j = i + 3  # 'x'; anything else after ' is a lifetime, which is plain code
+        else:
+            out.append(c)
+            i += 1
+            continue
+        out.append(blank(src, i, j))
+        i = j
+    return "".join(out)
+
+
+def hits(pattern, path, rust=False):
     text = read(path)
-    if strip_block_comments:
-        text = BLOCK_COMMENT.sub("", text)  # non-nested; line comments never match the anchored patterns
-    return len(pattern.findall(text))
+    return len(pattern.findall(mask_rust(text) if rust else text))
 
 
 def count(root):

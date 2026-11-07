@@ -10,7 +10,8 @@ SPEC = importlib.util.spec_from_file_location(
 cr = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(cr)
 
-HEADER = "| ID | Requirement | Status | Evidence | Notes |\n|---|---|---|---|---|\n"
+HEADER = ("| ID | Requirement | Status | v04 evidence | v0.2.4 evidence | Notes |\n"
+          "|---|---|---|---|---|---|\n")
 
 
 class CheckerTest(unittest.TestCase):
@@ -40,46 +41,46 @@ fn slow_test() {}
         return cr.check(HEADER + rows, self.root, required)
 
     def test_valid_rows_pass(self):
-        rows = ("| F1 | x | PoC | `real_test`, `slow_test`[ignored], golden:bid, ci:core.yml/programs, doc:README.md | |\n")
+        rows = ("| F1 | x | PoC | `real_test`, `slow_test`[ignored], golden:bid, ci:core.yml/programs, doc:README.md | — | |\n")
         self.assertEqual(self.errors(rows), [])
 
     def test_name_only_in_a_comment_fails(self):
-        self.assertEqual(self.errors("| F1 | x | PoC | `only_in_a_comment` | |\n"),
+        self.assertEqual(self.errors("| F1 | x | PoC | `only_in_a_comment` | — | |\n"),
                          ["F1: no test `only_in_a_comment` (a #[test] fn of that name)"])
 
     def test_ignored_test_without_the_marker_fails(self):
-        self.assertEqual(self.errors("| F1 | x | PoC | `slow_test` | |\n"),
+        self.assertEqual(self.errors("| F1 | x | PoC | `slow_test` | — | |\n"),
                          ["F1: `slow_test` is #[ignore]d; write `slow_test`[ignored] and name the job that runs it"])
 
     def test_marker_on_a_running_test_fails(self):
-        self.assertEqual(self.errors("| F1 | x | PoC | `real_test`[ignored] | |\n"),
+        self.assertEqual(self.errors("| F1 | x | PoC | `real_test`[ignored] | — | |\n"),
                          ["F1: `real_test` is marked [ignored] but runs by default"])
 
     def test_renamed_golden_fails(self):
-        self.assertEqual(self.errors("| F1 | x | PoC | golden:bid_old | |\n"),
+        self.assertEqual(self.errors("| F1 | x | PoC | golden:bid_old | — | |\n"),
                          ["F1: golden:bid_old has no cli/tests/golden/bid_old.txt"])
 
     def test_unknown_ci_job_fails(self):
-        self.assertEqual(self.errors("| F1 | x | PoC | ci:core.yml/coverage | |\n"),
+        self.assertEqual(self.errors("| F1 | x | PoC | ci:core.yml/coverage | — | |\n"),
                          ["F1: ci:core.yml/coverage: no job coverage in .github/workflows/core.yml"])
 
     def test_poc_row_without_evidence_fails(self):
-        self.assertEqual(self.errors("| F1 | x | PoC |  | |\n"), ["F1: status PoC needs evidence"])
+        self.assertEqual(self.errors("| F1 | x | PoC |  |  | |\n"), ["F1: status PoC needs evidence"])
 
     def test_milestone_row_needs_a_note(self):
-        self.assertEqual(self.errors("| F1 | x | M4 |  |  |\n"), ["F1: status M4 needs a note (why, and where it is promised)"])
+        self.assertEqual(self.errors("| F1 | x | M4 |  |  |  |\n"), ["F1: status M4 needs a note (why, and where it is promised)"])
 
     def test_missing_required_id_fails(self):
-        self.assertEqual(self.errors("| F1 | x | PoC | `real_test` | |\n", required=("F1", "F2")),
+        self.assertEqual(self.errors("| F1 | x | PoC | `real_test` | — | |\n", required=("F1", "F2")),
                          ["F2: missing from REQUIREMENTS.md"])
 
     def test_ci_key_outside_the_jobs_block_fails(self):
         self.write(".github/workflows/e2e.yml",
                    "on:\n  push:\n    branches: [main]\njobs:\n  localnet-e2e:\n    runs-on: x\nenv:\n  other:\n    a: b\n")
-        self.assertEqual(self.errors("| F1 | x | PoC | ci:e2e.yml/push, ci:e2e.yml/other | |\n"),
+        self.assertEqual(self.errors("| F1 | x | PoC | ci:e2e.yml/push, ci:e2e.yml/other | — | |\n"),
                          ["F1: ci:e2e.yml/push: no job push in .github/workflows/e2e.yml",
                           "F1: ci:e2e.yml/other: no job other in .github/workflows/e2e.yml"])
-        self.assertEqual(self.errors("| F1 | x | PoC | ci:e2e.yml/localnet-e2e | |\n"), [])
+        self.assertEqual(self.errors("| F1 | x | PoC | ci:e2e.yml/localnet-e2e | — | |\n"), [])
 
     def test_ignore_before_test_is_detected(self):
         self.write("crates/y/src/lib.rs", """
@@ -92,20 +93,47 @@ fn early_ignored() {}
 #[ignore]
 fn middle_ignored() {}
 """)
-        self.assertEqual(self.errors("| F1 | x | PoC | `early_ignored`, `middle_ignored` | |\n"),
+        self.assertEqual(self.errors("| F1 | x | PoC | `early_ignored`, `middle_ignored` | — | |\n"),
                          ["F1: `early_ignored` is #[ignore]d; write `early_ignored`[ignored] and name the job that runs it",
                           "F1: `middle_ignored` is #[ignore]d; write `middle_ignored`[ignored] and name the job that runs it"])
-        self.assertEqual(self.errors("| F1 | x | PoC | `early_ignored`[ignored], `middle_ignored`[ignored] | |\n"), [])
+        self.assertEqual(self.errors("| F1 | x | PoC | `early_ignored`[ignored], `middle_ignored`[ignored] | — | |\n"), [])
 
     def test_golden_must_be_checked_not_merely_quoted(self):
         self.write("cli/tests/golden/other.txt", "exit: 0\n")
         self.write("cli/tests/other.rs", 'assert_eq!(name, "other");\n')
-        self.assertEqual(self.errors("| F1 | x | PoC | golden:other | |\n"),
+        self.assertEqual(self.errors("| F1 | x | PoC | golden:other | — | |\n"),
                          ['F1: golden:other is not checked by any CLI test (check("other", ..))'])
 
     def test_duplicate_id_fails(self):
-        row = "| F1 | x | PoC | `real_test` | |\n"
+        row = "| F1 | x | PoC | `real_test` | — | |\n"
         self.assertEqual(self.errors(row + row), ["F1: listed twice"])
+
+    def test_six_column_row_resolves_both_cells(self):
+        self.write("v04/engine_core/src/a.rs", "#[test]\nfn a_v04() {}\n")
+        self.write("crates/z/src/lib.rs", "#[test]\nfn b_v024() {}\n")
+        self.assertEqual(self.errors("| F1 | x | PoC | `a_v04` | `b_v024` | |\n"), [])
+
+    def test_v04_only_evidence_passes(self):
+        self.write("v04/engine_core/src/x.rs", "#[test]\nfn only_v04() {}\n")
+        self.assertEqual(self.errors("| F1 | x | PoC | `only_v04` | — | |\n"), [])
+
+    def test_v04_test_resolves(self):
+        self.write("v04/engine_core/src/x.rs", "#[test]\nfn deep_v04() {}\n")
+        self.assertEqual(self.errors("| F1 | x | PoC | `deep_v04` | `real_test` | |\n"), [])
+
+    def test_poc_with_no_evidence_in_either_cell_fails(self):
+        errs = self.errors("| F1 | x | PoC | — | — | |\n")
+        self.assertEqual(len(errs), 1)
+        self.assertIn("needs evidence", errs[0])
+
+    def test_f8_required(self):
+        errs = cr.check(HEADER + "| F1 | x | PoC | `real_test` | — | |\n", self.root)
+        self.assertIn("F8: missing from REQUIREMENTS.md", errs)
+
+    def test_five_column_row_reports_format_error(self):
+        errs = self.errors("| F1 | x | PoC | `real_test` | |\n")
+        self.assertEqual(len(errs), 1)
+        self.assertIn("expected 6 columns", errs[0])
 
 
 if __name__ == "__main__":

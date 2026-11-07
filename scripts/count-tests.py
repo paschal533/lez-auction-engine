@@ -30,6 +30,7 @@ LABELS = {
 }
 RUST_TEST = re.compile(r"^[ \t]*#\[(?:[A-Za-z_]\w*::)*test(?:\s*\([^\]]*\))?\]", re.M)
 KANI_PROOF = re.compile(r"^[ \t]*#\[kani::proof\b[^\]]*\]", re.M)
+BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 QML_TEST = re.compile(r"^\s*function\s+test_\w+\s*\(", re.M)
 CPP_TEST = re.compile(r"^\s*(?:LOGOS_TEST\(\w+\)|TEST\w*\(\w+\s*,|void\s+test\w*\s*\()", re.M)
 PY_TEST = re.compile(r"^\s*(?:async\s+)?def\s+test_\w+\s*\(", re.M)
@@ -45,12 +46,15 @@ def walk(root):
 
 
 def read(path):
-    with open(path, encoding="utf-8", errors="replace") as f:
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
         return f.read()
 
 
-def hits(pattern, path):
-    return len(pattern.findall(read(path)))
+def hits(pattern, path, strip_block_comments=False):
+    text = read(path)
+    if strip_block_comments:
+        text = BLOCK_COMMENT.sub("", text)  # non-nested; line comments never match the anchored patterns
+    return len(pattern.findall(text))
 
 
 def count(root):
@@ -58,10 +62,10 @@ def count(root):
     for rel, full in walk(root):
         parts = rel.split("/")
         if rel.endswith(".rs"):
-            counts["fuzz_kani"] += hits(KANI_PROOF, full)
+            counts["fuzz_kani"] += hits(KANI_PROOF, full, True)
             area = next((a for d, a in RUST_AREAS if parts[0] == d), None)
             if area:
-                counts[area] += hits(RUST_TEST, full)
+                counts[area] += hits(RUST_TEST, full, True)
         elif rel.endswith(".qml") and parts[0] == "apps" and "tests" in parts and parts[-2] == "qml":
             counts["qml"] += hits(QML_TEST, full)
         elif rel.endswith((".cpp", ".cc", ".h")) and parts[0] == "modules" and "tests" in parts[:-1]:

@@ -60,6 +60,20 @@ class CountTest(unittest.TestCase):
         self.write("crates/x/src/prop.rs", "proptest! {\n    #[test]\n    fn p(x: u8) {}\n}\n")
         self.assertEqual(ct.count(self.root)["crates"], 2)
 
+    def test_tests_in_comments_are_not_counted(self):
+        self.write("crates/x/src/c.rs", "/* old\n#[test]\nfn a() {}\n#[kani::proof]\nfn b() {}\n*/\n"
+                   "// #[test]\n/// #[test]\n//! #[test]\n#[test]\nfn real() {}\n")
+        counts = ct.count(self.root)
+        self.assertEqual((counts["crates"], counts["fuzz_kani"]), (2, 1))
+
+    def test_bom_and_crlf_files_count(self):
+        with open(os.path.join(self.root, "crates/x/src/b.rs"), "wb") as f:
+            f.write(b"\xef\xbb\xbf#[test]\r\nfn a() {}\r\n#[test]\r\nfn b() {}\r\n")
+        with open(os.path.join(self.root, "scripts/tests/test_b.py"), "wb") as f:
+            f.write(b"\xef\xbb\xbfdef test_b(): pass\r\n")
+        counts = ct.count(self.root)
+        self.assertEqual((counts["crates"], counts["python"]), (3, 2))
+
     def test_cpp_macros(self):
         self.write("modules/m/tests/a_test.cpp", "LOGOS_TEST(one) {}\nLOGOS_TEST(two) {}\n")
         self.write("modules/m/tests/harness.h", "#define LOGOS_TEST(name) void name()\n")

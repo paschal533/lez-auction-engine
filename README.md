@@ -42,8 +42,8 @@ Counted from the source by `scripts/count-tests.py`, one row per area. CI fails 
 | Fuzz + Kani proofs | 2 |
 | Basecamp QML | 162 |
 | Core module C++ | 51 |
-| Python tooling | 105 |
-| **Total** | 1875 |
+| Python tooling | 106 |
+| **Total** | 1876 |
 <!-- test-counts:end -->
 
 Counts include `#[ignore]`d tests (run by named jobs) and the two Kani harnesses, which no CI job runs yet (SOFT2).

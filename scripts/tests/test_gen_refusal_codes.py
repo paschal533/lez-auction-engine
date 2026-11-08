@@ -137,13 +137,13 @@ class ProofRulesTest(Fixture):
 class CheckTest(Fixture):
     def test_variant_without_test_fails_check(self):
         code, _, _ = self.run_main()
-        self.assertEqual(0, code)
+        self.assertEqual(1, code)
         self.assertRegex(self.doc(), r"\| `Paused` \|[^\n]*\*\*no test\*\*")
         saved = (dict(g.MEANINGS), set(g.KNOWN_GAPS))
         try:
             g.MEANINGS.update(NotAdmin="a", WrongAccount="b", Paused="c")
             g.KNOWN_GAPS.clear()
-            self.assertEqual(0, self.run_main()[0])
+            self.assertEqual(1, self.run_main()[0])
             code, _, err = self.run_main("--check")
             self.assertEqual(1, code)
             self.assertIn("Paused", err)
@@ -153,6 +153,23 @@ class CheckTest(Fixture):
         finally:
             g.MEANINGS.clear(); g.MEANINGS.update(saved[0])
             g.KNOWN_GAPS.clear(); g.KNOWN_GAPS.update({k: "" for k in saved[1]})
+
+    def test_write_mode_writes_the_doc_then_prints_problems_and_exits_1(self):
+        saved = (dict(g.MEANINGS), dict(g.KNOWN_GAPS))
+        try:
+            g.MEANINGS.update(NotAdmin="a", WrongAccount="b", Paused="c")
+            g.KNOWN_GAPS.clear()
+            code, _, err = self.run_main()
+            self.assertEqual(1, code)
+            self.assertIn("gen-refusal-codes: ", err)
+            self.assertIn("Paused", err)
+            self.assertRegex(self.doc(), r"\| `Paused` \|[^\n]*\*\*no test\*\*")
+            g.KNOWN_GAPS["Paused"] = "later"
+            code, _, err = self.run_main()
+            self.assertEqual((0, ""), (code, err))
+        finally:
+            g.MEANINGS.clear(); g.MEANINGS.update(saved[0])
+            g.KNOWN_GAPS.clear(); g.KNOWN_GAPS.update(saved[1])
 
     def test_check_detects_stale_doc(self):
         saved = (dict(g.MEANINGS), dict(g.KNOWN_GAPS))

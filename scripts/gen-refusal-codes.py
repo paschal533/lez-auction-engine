@@ -3,7 +3,9 @@
 (Plan 8 Task 4).
 
 usage: gen-refusal-codes.py [--root DIR] [--check]
-  (no flag)  write docs/architecture/refusal-codes.md under DIR (default: the current directory)
+  (no flag)  write docs/architecture/refusal-codes.md under DIR (default: the current directory); the doc
+             is written either way, then exit 1 with the problems on stderr if any of the --check rules
+             below other than staleness fails
   --check    exit 1 if the doc is stale, a variant lacks a MEANINGS line, a variant has no proving test
              and is not in KNOWN_GAPS, or a KNOWN_GAPS entry now has a test (exit 2 on bad usage)
 
@@ -313,7 +315,9 @@ def main(argv):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(doc)
-        return 0
+        for p in problems:
+            print(f"gen-refusal-codes: {p}", file=sys.stderr)
+        return 1 if problems else 0
     try:
         current = read(path)
     except OSError as e:

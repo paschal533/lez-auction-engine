@@ -15,7 +15,7 @@
 - No change to any file compiled into the v0.2.4 guest (`programs/**`, `crates/auction_core/src/**`, `crates/auction_engine_params/src/**`): the `rfp014-poc` ImageID must not move (D6). `scripts/check-guests.sh` must still pass.
 - Commits GPG-signed (`git commit -S`), conventional-commit messages, **no Claude / AI attribution, no Co-Authored-By trailer**. Never `--no-verify`, never bypass signing. If the GPG cache has expired, stop and leave the staged change plus the commit message for the author.
 - Do not push, open PRs or post anything; the author does that.
-- Never name a rival (Antumbra, Web3spell) in any committed file. The rival analysis stays out of the repo (S4).
+- Never name a rival (competing bids A and B) in any committed file. The rival analysis stays out of the repo (S4).
 - New scripts: Python 3 stdlib only, `#!/usr/bin/env python3`, module docstring with usage, exit 0/1/2 like `scripts/check-requirements.py`.
 - Every number written in a doc (test counts, cycles, run IDs, durations) must come from a script output, a CI run ID already recorded in `docs/architecture/ci.md` / `real-proofs.md`, or `CYCLES.md` / `v04/CYCLES.md`. No typed estimates.
 - Price $40,000 all-in incl. audit; 12 weeks; milestone payouts unchanged; durations M0 0.5 · M1 2.5 · M2 1.5 · M3 1 · M4 2.5 · M5 0.5 · M6 1.5 · M7 2.
@@ -46,7 +46,7 @@
 > come from search summaries or memory and must be re-checked before they are quoted in a proposal.
 ```
 
-- [ ] **Step 2:** `grep -niE "antumbra|web3spell|rival|#187|#159" docs/research/2026-11-07-*.md` → no output. Remove any hit (sentence-level), keeping the protocol research intact.
+- [ ] **Step 2:** `grep -niE "ant[u]mbra|web3[s]pell|rival|#18[7]|#15[9]" docs/research/2026-11-07-*.md` → no output. Remove any hit (sentence-level), keeping the protocol research intact.
 - [ ] **Step 3:** Commit: `git add docs/research/2026-11-07-*.md && git commit -S -m "docs(research): liquidation and auction engines across EVM and non-EVM chains"`
 
 ### Task 2: Requirements checker — per-engine evidence columns, v04 sources, F8
@@ -160,7 +160,7 @@
 
 - [ ] **Step 1:** Write the note with these sections (spec §4 T1.6): *Live price on every bid* (why no `redo`/`cusp`/`tail`; cannot stick when the market passes max discount; cannot sell far under market when it rises — cite `crates/auction_core/src/auction.rs` and the Maker Clipper docs from Task 1's research); *Stale feeds and R5* (today's behaviour with `bid_rejects_invalid_feed`; the decided rule D4 — bounded last-good TWAP — marked "planned, M1/M2"); *Oracle-extractable value* (rising discount auctions it back; capped trigger reward is the only fixed prize); *What a liquidation costs* (cycles from `v04/CYCLES.md` broken down by transfers / custody / buffer accounting, and a measured or clearly-labelled estimate of the counters-only share). No rival named.
 - [ ] **Step 2:** ADR-067 "Live oracle pricing on every bid; bounded last-good TWAP under a stale feed (decided, to build in M1/M2)" in the design log's existing ADR format.
-- [ ] **Step 3:** `grep -niE "antumbra|web3spell" docs/architecture/pricing-model.md docs/design-log.md` → none. Every path cited exists.
+- [ ] **Step 3:** `grep -niE "ant[u]mbra|web3[s]pell" docs/architecture/pricing-model.md docs/design-log.md` → none. Every path cited exists.
 - [ ] **Step 4:** Commit: `git commit -S -m "docs: pricing model note and ADR-067 (live pricing, bounded stale-feed bids)"`
 
 ### Task 9: Proposal draft rewrite (untracked file; not committed)
@@ -174,7 +174,7 @@
 - [ ] **Step 4:** Re-map milestones to spec §8: payouts unchanged; durations M0 0.5 · M1 2.5 · M2 1.5 · M3 1 · M4 2.5 · M5 0.5 · M6 1.5 · M7 2 (total 12); each milestone gets the spec §8 items in its Deliverables and a "**Built before the grant:**" line listing what already exists with links (for M0: Tasks 2–8 outputs). Remove the "knowingly below" M6 admission — the rebalance plus pre-built work replaces it.
 - [ ] **Step 5:** "Requirements status" section: every `PoC (partial)` row from REQUIREMENTS listed as "partial now, closed in M<n>".
 - [ ] **Step 6:** Refresh the checklist at the top: author items — audit quotes + named firm, upload demo video and link it, every `[FILL]`, final read; drop items already done.
-- [ ] **Step 7:** `grep -niE "antumbra|web3spell|880" <draft>` → none. Sum of payouts = $40,000; sum of durations = 12.
+- [ ] **Step 7:** `grep -niE "ant[u]mbra|web3[s]pell|880" <draft>` → none. Sum of payouts = $40,000; sum of durations = 12.
 
 ---
 

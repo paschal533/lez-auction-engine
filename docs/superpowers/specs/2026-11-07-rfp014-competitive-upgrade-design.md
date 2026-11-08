@@ -57,7 +57,7 @@ Research behind this design (to be committed under `docs/research/` as part of T
 Goals
 - Pass the hard-requirement filter of the current RFP text **and** the pending PR #229 text
   (new F8, tightened F3, dependency-naming clause).
-- Close the three places Antumbra leads on substance: R2 (TWAP / confidence-adjusted price),
+- Close the three places a competing bid leads on substance: R2 (TWAP / confidence-adjusted price),
   R5 (operations continue under a pause), R4 (two types isolated inside one instance, on chain).
 - Match or beat their evidence presentation: one-command verifier, refusal-code catalogue,
   honest-docs CI gates, reproducible guest build.

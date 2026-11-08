@@ -188,8 +188,10 @@ before it are excluded, so the TWAP restarts after an outage and needs `min_obs`
 new gap parameter: the feed's own maximum age is the definition of "too long". The anchor makes the
 last-good TWAP constant for the whole of an outage (it does not slide the window over nothing).
 
-Bounds: `T` lies within `[min p_i, max p_i]` of the used samples (Kani). Cost: at most 8
-`mul_div_floor` calls.
+Bounds: `T` lies within `[min p_i − 7, max p_i]` of the used samples, the lower end saturating at
+0 (Kani). The upper bound is exact. The lower one is not `min p_i`: each of the at most 8 terms
+floors away less than one unit, so `T` can sit up to 7 below the smallest price (prices 1 and 1
+with weights 1 and 2 give `T = 0`). Cost: at most 8 `mul_div_floor` calls.
 
 #### 3.1.4 The confidence edge, and the price per operation (ADR-071)
 
@@ -293,9 +295,10 @@ engine-wide, so a type at level 2 holds the engine's recovery path).
 
 The legacy flag `admin_paused` (`CollateralArgs`, locked in `args.rs`) stays and means level 3 **for
 that type's collateral operations only**, with its v0.2.4 code `Paused` (6020), so the existing
-tests (`admin_pause_toggle_runs_observe`, `liquidate_rejects_stale_feed_and_admin_pause`) keep their
-codes. It does not raise `system_level`. Effective collateral level:
-`max(pause_level, if admin_paused {3} else {0})`.
+tests (`admin_pause_toggle_runs_observe`, `stale_feed_pauses_and_reverts_liquidate` in
+`v04/harness/tests/liquidate.rs`, and `admin_pause_starts_the_clock_at_now_and_refuses_liquidation`
+in `v04/engine_core/src/feed.rs`) keep their codes. It does not raise `system_level`. Effective
+collateral level: `max(pause_level, if admin_paused {3} else {0})`.
 
 Discount clock: only an effective level 3 or an invalid feed stops it. `feed::observe`
 (`feed.rs:40-49`) passes `admin_paused: effective_level == 3` into the pause clock; levels 1 and 2
@@ -366,7 +369,13 @@ floor price; `min_collateral_out` protects the bidder. Live bids ignore the floo
 pricing follows the market).
 
 Parameter (`RiskArgs`): `stale_bid_max_age_ms` — legacy 0 (D4 off); recommended 3_600_000 (1 h);
-bound `0..=MAX_ORACLE_AGE_MS` (24 h), and `> 0` only if `twap_window_ms > 0`.
+bound `0..=MAX_ORACLE_AGE_MS` (24 h), and `> 0` only if `twap_window_ms > 0` and
+`twap_window_ms > max_oracle_age_ms + (twap_min_obs − 2) · twap_min_spacing_ms` (saturating,
+`twap_min_obs − 2` floors at 0; refused as `InvalidConfig` at `SetCollateral`). Reason: on a stale
+feed the TWAP anchor freezes at `newest.ts + max_oracle_age_ms` (§3.1.3), and the `k`-th newest
+sample is at most `newest.ts − (k − 1) · spacing`. A shorter window can never hold `min_obs`
+samples, so condition 3 of §3.2.3 would always fail and D4 could never fire. (Added by the Plan 9
+pre-flight, with the plan's ruling R9-3.)
 
 #### 3.2.5 Errors
 
@@ -717,17 +726,23 @@ Plans 9 and 10 together deliver R2 and R5; if RFP-014 stays closed long enough t
 message plumbing is merged; Plan 12 waits for both.
 
 e2e: the existing `slice` and `system` stages keep the legacy preset. Plan 9 adds a `tier2` stage
-to `v04/scripts/e2e.sh` with a time-compressed recommended preset (window 60 s, spacing 10 s,
-`min_obs` 3, grace 30 s) that shows: liquidation refused before warm-up, nonzero confidence, a
-level-1 pause with a bid still filling, a stale feed with a fallback bid, and `SettleEmpty`/claim at
-level 3. Later plans extend that stage.
+to `v04/scripts/e2e.sh` with a time-compressed recommended preset (window 300 s, first written as
+60 s: see the deviation below; spacing 10 s, `min_obs` 3, grace 30 s) that shows: liquidation
+refused before warm-up, nonzero confidence, a level-1 pause with a bid still filling, a stale feed
+with a fallback bid, and `SettleEmpty`/claim at level 3. Later plans extend that stage.
+
+Deviation (Plan 9 pre-flight): the `tier2` stage uses a **300 s** window, not 60 s. Its feed max
+age is 180 s, and by the §3.2.4 bound a window must exceed `180 s + (3 − 2) · 10 s = 190 s` for the
+fallback bid to be reachable: with 60 s the stale-feed TWAP holds only the newest sample and D4
+always refuses `TwapUnavailable`. The 300 s window also keeps every live sample in the window across
+the e2e's 15 s blocks. The other values stand (Plan 9 ruling R9-13).
 
 ## 6. New ADRs
 
 | ADR | Decision |
 |---|---|
 | ADR-069 | Tier 2 edits no file under `programs/`, `crates/auction_core/`, `crates/auction_engine_params/` or the root manifest (supersedes spec S2); new pure logic lives in `v04/risk_core`; checked by `git diff` + `check-guests.sh` + `guests.yml`. |
-| ADR-070 | On-chain TWAP: an 8-slot ring of validated mids at the collateral actor, time-weighted over a window anchored at `min(now, newest + max_age)`, broken by any gap longer than the feed's max age, valid only with `min_obs` samples. |
+| ADR-070 | On-chain TWAP: an 8-slot ring of validated mids at the collateral actor, time-weighted over a window anchored at `min(now, newest + max_age)`, broken by any gap longer than the feed's max age, valid only with `min_obs` samples. `T` lies in `[min p_i − 7, max p_i]` (lower end saturating at 0): the floor rounding of up to 8 terms can put it up to 7 units below the smallest sample, never above the largest. |
 | ADR-071 | One confidence rule: every engine price is a payout, so it values the collateral at the high edge (`edge(min(M, T))` for liquidation, `edge(M)` for bids); the unsafe test stays the host's. |
 | ADR-072 | Bids are anchored to the TWAP from above only (`P <= T(1 + dev)`); a liquidation is refused while spot deviates from the TWAP by more than `dev`. |
 | ADR-073 | Pause levels 0-3 per type with a config-level system level; `admin_paused` = level 3 for collateral operations with code 6020; risk-reducing operations are never gated; one rule table in `risk_core::pause` drives code and tests. |

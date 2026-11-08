@@ -33,8 +33,10 @@
   - Builds are slow: harness tests rebuild the risc0 guests, which can take 20+ minutes on a cold cache. Run cargo in the background.
   - A message such as `Blocking waiting for file lock` means another cargo is running. Wait for it. Never kill cargo, and never delete the lock.
   - During TDD, run one test target, e.g. `cargo test -p risk_core twap`. Run the full gate at the end of each task.
+  - cargo takes one test-name filter before `--`. For several, pass them to the test binary: `cargo test -p risk_core -- twap record ring`.
+  - `risk_core`'s tests that call `RiskArgs::legacy()`/`recommended()` are `#[cfg(feature = "presets")]`. Run them with `cargo test -p risk_core --features presets ..`.
 - **Gate (end of every task):**
-  - `cargo fmt -p risk_core -p engine_core -p methods -p mock_host_core -p oracle_core -p token_core -p harness -p sdk -- --check`
+  - `cargo fmt -p risk_core -p engine_core -p methods -p mock_host_core -p oracle_core -p token_core -p harness -p sdk -- --check`. Task 1 runs it without `-p risk_core`, because the crate arrives in Task 2.
   - `RISC0_SKIP_BUILD=1 cargo clippy --locked --workspace --all-targets -- -D warnings`
   - `RISC0_SKIP_BUILD=1 cargo clippy --locked -p sdk --all-targets --features session -- -D warnings`
   - `cargo test --locked --workspace`
@@ -42,6 +44,7 @@
   - `python3 -m unittest discover -s scripts/tests -v` (from the repo root)
 - **Existing tests keep their assertions.** Every existing v04 test, and the `slice` and `system` stages of `v04/scripts/e2e.sh`, must keep passing under the `legacy` preset.
   - The only allowed edit to an existing test is adding the new appended fields at their legacy values: `risk: Box::new(RiskArgs::legacy())`, `paused_since_ms: None`, `fallback: false`, `ext: ...`, `stale_cap_ray: 0`.
+  - So a legacy auction (D4 off) must store `stale_cap_ray: 0` at every phase. `harness/tests/liquidate.rs`'s `expected_auction` literal, compared at `:123` and `:241`, depends on it (Task 9).
   - Migration note (spec §3.0): local 0.4 state does not decode after this plan. Recreate it. Tags are unchanged.
 - **Wire format.** `EngineMsg` variants are append-only. The next free index is **47**: `SetPauseLevel` = 47, `PauseLevelUpdate` = 48. Indices 49 and 50 are reserved for Plan 12. Existing variants gain fields only at their end.
 - **State layout.** Append only:
@@ -75,6 +78,7 @@
    - A `twap_min_obs` the window and spacing cannot reach.
    - A spacing longer than the feed's max age.
    - `stale_bid_max_age_ms <= max_oracle_age_ms`, which makes D4 impossible for a stale feed.
+   - A window too short to hold `min_obs` samples once the feed is stale, which also makes D4 impossible: on a stale feed the TWAP anchor freezes at `newest.ts + max_age`.
    - Each must be refused at `SetCollateral` with `InvalidConfig`. Test `risk_args_reject_unreachable_twap_and_dead_d4` (Task 6).
 4. **A pause-level byte out of range** (4, 255). It must revert `InvalidConfig` and change nothing. Test `set_pause_level_rejects_level_above_3` (Task 8).
 5. **`SetCollateral` re-run on a type with a full ring and a raised level.** It must keep the ring and the level and change only the parameters. Test `set_collateral_keeps_the_ring_and_the_level` (Task 7).
@@ -97,7 +101,9 @@ Each ruling is marked *(Plan 9 ruling)* where it is used.
   - `twap_min_spacing_ms <= max_oracle_age_ms`
   - `twap_min_obs <= twap_window_ms / twap_min_spacing_ms`
   - `stale_bid_max_age_ms > max_oracle_age_ms` whenever `stale_bid_max_age_ms > 0`
-  - With `twap_window_ms = 0`, every other Plan 9 field must be 0.
+  - `twap_window_ms > max_oracle_age_ms + (twap_min_obs − 2) · twap_min_spacing_ms` (saturating; `twap_min_obs − 2` floors at 0) whenever `stale_bid_max_age_ms > 0`. Reason: on a stale feed `twap` anchors at `newest.ts + max_age`. The `k`-th newest sample is at most `newest.ts − (k − 1) · spacing`, so a window at or below this bound can never hold `min_obs` samples, and D4 would always refuse `TwapUnavailable`. The refused field is `twap_window_ms`.
+  - With `twap_window_ms = 0`, every other Plan 9 field must be 0. The refused field is the first nonzero one.
+  - `validate` checks the §3.1.6 and §3.2.4 ranges first, then these bounds in the order listed. The first failure is returned.
 - **R9-4 `Configure` (15) gains `risk: Box<RiskArgs>`.** The config relays the validated args to the collateral actor. §3.0 lists only `SetCollateral`.
 - **R9-5 Live bid with the TWAP unavailable or `dev = 0`.** The price is `band(edge(M))`, unanchored, and the bid is not refused. `dev = 0` also skips the deviation breaker (spec: "0 (off)").
 - **R9-6 Recording.**
@@ -112,16 +118,19 @@ Each ruling is marked *(Plan 9 ruling)* where it is used.
   - A config with no recorded type, or one naming another `collateral_def`, refuses with `WrongAccount("collateral_def")`.
   - The level is checked `<= 3` at the config.
 - **R9-10 Cycle budget.**
-  - §4 says `SetPauseLevel` is "~330,000" and "< 3 % of cap" (300,000). Those contradict. The assertion is `<= 400,000` (4 % of the cap), with executions pinned at 12.
-  - The budget rows (partial bid <= 520,000, final bid <= 720,000, `Liquidate` <= 1,000,000) are measured under the time-compressed recommended preset with a full ring, the worst case. The legacy rows are re-measured too.
+  - §4 says `SetPauseLevel` is "~330,000" and "< 3 % of cap" (300,000). Those contradict. The assertion is `<= 400,000` (4 % of the cap). Its executions are hand-counted at 12 and documented, not asserted, as `cycles.rs` does for every row: `Chain::cycles` returns cycles only.
+  - The budget rows (partial bid <= 520,000, final bid <= 720,000, `Liquidate` <= 1,000,000) are measured under `RiskArgs::recommended()` in `World::new_tier2` with a full ring, the worst case. The R9-13 e2e values are not used here: R9-3 refuses them at the harness's `TIER2_MAX_AGE_MS` (600_000). The legacy rows are re-measured too.
 - **R9-11 Generator order.** The refusal-generator change moves from the spec's second step to Task 13, after every new code has a proving test. Its `--check` would fail otherwise.
 - **R9-12 Test files.** The level tests stay in `harness/tests/pause_levels.rs` (spec). The D4 tests go in `harness/tests/stale_bids.rs`, and the two matrix tests in `harness/tests/pause_matrix.rs` (800-line limit).
 - **R9-13 e2e `tier2` stage values** (left to the builder):
-  - `RiskArgs`: window 60_000, spacing 10_000, `min_obs` 3, `dev` 2_000, `stale_bid_max_age_ms` 600_000.
+  - `RiskArgs`: window 300_000, spacing 10_000, `min_obs` 3, `dev` 2_000, `stale_bid_max_age_ms` 600_000.
   - Collateral: `max_oracle_age_ms` 180_000, `max_conf_bps` 100, `band_hi_bps` 15_000.
+  - R9-3 holds: 300_000 > 180_000 + (3 − 2) · 10_000 = 190_000, and 600_000 > 180_000.
+  - Deviation from spec §5: the spec's 60 s window is below the 180 s max age, so D4 could never fire. The window is 300 s instead. It also keeps every live sample in the window across the e2e's 15 s blocks.
   - Grace is Plan 10.
 - **R9-14 Harness Tier 2 config.**
-  - `RiskArgs::recommended()`, with `CollateralArgs::defaults_for_tests()` changed to `max_oracle_age_ms: 600_000` (needed by R9-3) and `band_hi_bps: 15_000`, so the anchor and the floor can bind inside the band.
+  - `RiskArgs::recommended()` with, in the harness only, `tier2_collateral_args() = CollateralArgs { max_oracle_age_ms: 600_000, band_hi_bps: 15_000, ..CollateralArgs::defaults_for_tests() }`. The frozen `args.rs` is not edited.
+  - `max_oracle_age_ms: 600_000` is needed by R9-3 (recommended: 1_800_000 > 600_000 + 300_000, and 3_600_000 > 600_000). `band_hi_bps: 15_000` lets the anchor and the floor bind inside the band.
   - The harness constant is `TIER2_MAX_AGE_MS = 600_000`.
 - **R9-15 Events** are deferred (spec §7: best-effort). SDK state views are deferred too. The e2e example decodes `CollateralState` with `engine_core`.
 
@@ -150,13 +159,15 @@ Each ruling is marked *(Plan 9 ruling)* where it is used.
 def test_clean_tree_passes(self):        # exit 0, stdout and stderr empty
 def test_frozen_file_change_fails(self): # edit programs/a.rs -> exit 1, "programs/a.rs" in stderr
 def test_v04_change_passes(self):        # edit v04/b.rs -> exit 0
-def test_root_manifest_change_fails(self):  # add Cargo.toml after the tree -> exit 1
+def test_root_manifest_change_fails(self):  # write Cargo.toml after the tree, `git add Cargo.toml` -> exit 1
 ```
 
+  `git diff <tree>` does not see untracked files, so `test_root_manifest_change_fails` must stage the new `Cargo.toml` before running the script.
+
 - [ ] **Step 2: Run it.** `python3 -m unittest scripts/tests/test_check_frozen_v024.py -v` fails: the script is missing.
-- [ ] **Step 3: Write the script** (`set -euo pipefail`, executable bit set: `git update-index --chmod=+x`). Add the guests.yml step `name: frozen v0.2.4 paths unchanged since the Tier 2 base (ADR-069)`, `run: scripts/check-frozen-v024.sh`.
-- [ ] **Step 4: Run it again.** The test passes, `scripts/check-frozen-v024.sh` exits 0 on the real tree, and `scripts/check-guests.sh --sha-only` exits 0.
-- [ ] **Step 5: Commit.** `git add scripts/check-frozen-v024.sh scripts/tests/test_check_frozen_v024.py .github/workflows/guests.yml`, then `git commit -S -m "ci: frozen v0.2.4 path check (ADR-069)"`.
+- [ ] **Step 3: Write the script** (`set -euo pipefail`; the executable bit is set when it is staged in Step 5). Add the guests.yml step `name: frozen v0.2.4 paths unchanged since the Tier 2 base (ADR-069)`, `run: scripts/check-frozen-v024.sh`. `fetch-depth: 0` goes in the checkout's existing `with:` block, next to `persist-credentials: false`.
+- [ ] **Step 4: Run it again.** The test passes, `scripts/check-frozen-v024.sh` exits 0 on the real tree, and `scripts/check-guests.sh --sha-only` exits 0. The gate runs without `-p risk_core` (Global Constraints).
+- [ ] **Step 5: Commit.** `git add --chmod=+x scripts/check-frozen-v024.sh`, then `git add scripts/tests/test_check_frozen_v024.py .github/workflows/guests.yml`, then `git commit -S -m "ci: frozen v0.2.4 path check (ADR-069)"`.
 
 ### Task 2: `risk_core` scaffold, `RiskError` and the `Refusal` wrapper
 
@@ -236,7 +247,7 @@ fn fail_panics_with_a_risk_error() { fail(RiskError::BidsPaused) }
     - It checks in `validate_feed`'s order: age, scale, zero, confidence, range.
     - The sanity bounds are `lo = mul_div_floor(R, sanity_lo_bps, 10_000)` (0 on error) and `hi = mul_div_floor(R, sanity_hi_bps, 10_000)`, saturating to `u128::MAX` on error, exactly as v0.2.4's `R.saturating_mul(2)` does.
     - The pin fields are carried but not checked in Plan 9.
-  - `engine_core::state::CollateralState::feed_policy(&self) -> Result<FeedPolicy, EngineError>` is `FeedPolicy::legacy(&self.feed_params()?)`. It goes in `engine_core/src/feed.rs` as a free fn `feed_policy(coll)`, because `state.rs` is at its size limit.
+  - `pub fn engine_core::feed::feed_policy(coll: &CollateralState) -> Result<FeedPolicy, EngineError>` is `FeedPolicy::legacy(&coll.feed_params()?)`. It is a free fn in `engine_core/src/feed.rs`, not a method, because `state.rs` is at its size limit.
   - `feed::observe` now calls `validate_feed_ext(..).map_err(FeedFault::pause_reason)`. `Observed` is unchanged in this task.
 
 - [ ] **Step 1: Write the failing tests.**
@@ -292,6 +303,7 @@ fn validate_feed_ext_saturates_the_high_bound_like_v024() {
     - Every subtraction saturates, and `end` is never raised above its current value.
     - It returns `(T, newest.ts_ms)`.
     - `T` is `Σ mul_div_floor(p_i, w_i, Σw)`, and it returns `None` if a term errors (unreachable, since `w_i <= Σw`).
+    - Bounds: `min(p_i).saturating_sub(7) <= T <= max(p_i)` over the used samples. Each of the at most 8 terms floors away less than 1 unit, so `T` can sit up to 7 below the smallest price (prices 1 and 1 with weights 1 and 2 give `T = 0`). It never exceeds the largest.
 
 - [ ] **Step 1: Write the failing tests.** Prices are plain `u128` units; RAY is not needed for the arithmetic. Each call below is `twap(&ring, now, window, min_obs, max_age)`.
 
@@ -333,13 +345,17 @@ fn ring(s: &[(u64, u128)]) -> TwapRing { /* samples from (ts, price), last_conf_
 }
 proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly increasing ts,
     prices 1..=u128::MAX >> 4, now, window 1..=86_400_000, max_age 1..=86_400_000 */) {
-    // if let Some((t, _)) = twap(..): min(prices) <= t <= max(prices)
+    // if let Some((t, _)) = twap(..): min(prices).saturating_sub(7) <= t <= max(prices)
+    // (floor rounding: up to 8 terms, each loses < 1 unit)
 } }
+#[test] fn twap_floor_rounding_can_fall_below_the_smallest_price() {
+    // prices 1 and 1, weights 1 and 2 (ts 0 and 1, now 3, window 3): T = floor(1/3) + floor(2/3) = 0.
+    assert_eq!(twap(&ring(&[(0, 1), (1, 1)]), 3, 3, 2, 600_000), Some((0, 1))); }
 ```
 
-  Kani: `twap_bounded_by_samples` (`#[kani::unwind(9)]`). It builds a ring of `kani::any()` length `<= 3` with prices below `1 << 64`, and asserts `min <= T <= max` when `Some`.
+  Kani: `twap_bounded_by_samples` (`#[kani::unwind(9)]`). It builds a ring of `kani::any()` length `<= 3` with prices below `1 << 64`, and asserts `min.saturating_sub(7) <= T <= max` when `Some`.
 
-- [ ] **Step 2: Run them.** `cargo test -p risk_core twap record ring` fails to compile.
+- [ ] **Step 2: Run them.** `cargo test -p risk_core -- twap record ring` fails to compile.
 - [ ] **Step 3: Implement** `record` and `twap`.
 - [ ] **Step 4: Run them again.** Run `cargo test -p risk_core` (and `cargo kani -p risk_core --harness twap_bounded_by_samples` if available), then the full gate.
 - [ ] **Step 5: Commit.** `git add v04/risk_core`, then `git commit -S -m "feat(v04): 8-slot TWAP ring with gap break and outage anchor (ADR-070)"`.
@@ -423,11 +439,11 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
 - Modify: `v04/harness/src/lib.rs` (`pub mod tier2;`)
 - Modify: `v04/harness/src/world.rs`:
   - `set_collateral_msg` `:346-353` passes `RiskArgs::legacy()`;
-  - `new_with` `:251-262` becomes `pub(crate)`.
+  - `new_with` `:250-261` becomes `pub(crate) fn new_with(r: u128, edit: impl FnOnce(&mut Params), args: CollateralArgs, risk: RiskArgs) -> Self`, and its `SetCollateral` uses `set_collateral_msg_with(args, risk)`. `new_with_host` and `new_at` pass `Self::collateral_args(), RiskArgs::legacy()`. `new_tier2` calls it too, so no constructor body is copied.
 - Modify: `v04/sdk/Cargo.toml`: `risk_core = { workspace = true, features = ["borsh", "presets"] }`.
 - Modify: `v04/sdk/src/lib.rs`
 - Modify: `v04/sdk/src/builder.rs:298-320`
-- Modify: every existing full literal of `ConfigState`, `CollateralState`, `AuctionState`, `EngineMsg::SetCollateral` and `EngineMsg::BidCtx`. Find them with `grep -rn --include=*.rs -E "EngineMsg::(SetCollateral|BidCtx) \{|(Config|Collateral|Auction)State \{" v04 | grep -v target`, and update only the ones that are not `..base` updates.
+- Modify: every existing full literal of `ConfigState`, `CollateralState`, `AuctionState`, `EngineMsg::SetCollateral`, `EngineMsg::Configure` and `EngineMsg::BidCtx`. Find them with `grep -rn --include=*.rs -E "EngineMsg::(SetCollateral|Configure|BidCtx) \{|(Config|Collateral|Auction)State \{" v04 | grep -v target`, and update only the ones that are not `..base` updates. The `Configure` literals are `engine_core/src/msg_tests.rs:140`, `harness/tests/security.rs:186` and the guest's `admin.rs:457`.
 
 **Interfaces:**
 - Consumes: `TwapRing` (Task 4).
@@ -454,7 +470,7 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
     - `pub const TIER2_MAX_AGE_MS: u64 = 600_000;`
     - `pub fn tier2_collateral_args() -> CollateralArgs` *(Plan 9 ruling R9-14)*.
     - `impl World { pub fn new_tier2(risk: RiskArgs) -> World; pub fn set_collateral_msg_with(&self, args: CollateralArgs, risk: RiskArgs) -> EngineMsg; pub fn collateral_state(&self) -> CollateralState }`.
-    - `new_tier2` is `World::new_at(RAY / 2)`'s setup with `tier2_collateral_args()` and `risk`.
+    - `new_tier2` is `World::new_with(RAY / 2, |_| {}, tier2_collateral_args(), risk)`.
   - Guest behaviour:
     - `on_set_collateral` runs `validate_risk(&risk, args.max_oracle_age_ms)` after `args.validate` and relays `risk` in `Configure`.
     - `on_configure` writes `ext.risk = *risk`, keeping `ext.pause_level` and `ext.ring` from `base` *(Plan 9 ruling R9-6)*.
@@ -463,22 +479,30 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
 - [ ] **Step 1: Write the failing tests.**
 
 ```rust
-// risk_core/src/args.rs
+// risk_core/src/args.rs: the tests that call the presets are #[cfg(feature = "presets")]
+#[cfg(feature = "presets")]
 #[test] fn legacy_and_recommended_presets_validate() {
     assert_eq!(RiskArgs::legacy().validate(3_600_000), Ok(()));
     assert_eq!(RiskArgs::recommended().validate(600_000), Ok(())); }
 #[test] fn risk_args_bounds_are_inclusive() {
-    // window 59_999 / 86_400_001 rejected, 60_000 / 86_400_000 accepted (spacing 1_000, min_obs 1,
-    // max age 86_400_000); spacing 999 rejected; min_obs 0 and 9 rejected; dev 99 / 5_001 rejected,
+    // Literals, no presets. window 59_999 / 86_400_001 rejected, 60_000 / 86_400_000 accepted (spacing 1_000,
+    // min_obs 1, stale 0 so the R9-3 window bound is off, max age 86_400_000); spacing 999 rejected; min_obs 0 and 9 rejected; dev 99 / 5_001 rejected,
     // 100 / 5_000 accepted; stale 86_400_001 rejected.
 }
+#[cfg(feature = "presets")]
 #[test] fn risk_args_reject_unreachable_twap_and_dead_d4() {   // Review Focus 3
     let r = RiskArgs::recommended();
     assert_eq!(r.validate(299_999).map_err(|e| e.field), Err("twap_min_spacing_ms"));   // spacing > max age
     assert_eq!(RiskArgs { twap_min_obs: 7, ..r }.validate(600_000).map_err(|e| e.field), Err("twap_min_obs"));
     assert_eq!(RiskArgs { stale_bid_max_age_ms: 600_000, ..r }.validate(600_000).map_err(|e| e.field),
         Err("stale_bid_max_age_ms"));
-    assert_eq!(RiskArgs { max_spot_twap_dev_bps: 2_000, ..RiskArgs::legacy() }.validate(600_000).is_err(), true); }
+    // R9-3 window bound: 900_000 is not > 600_000 + (3 - 2) * 300_000; 900_001 is; D4 off lifts it.
+    assert_eq!(RiskArgs { twap_window_ms: 900_000, ..r }.validate(600_000).map_err(|e| e.field),
+        Err("twap_window_ms"));
+    assert_eq!(RiskArgs { twap_window_ms: 900_001, ..r }.validate(600_000), Ok(()));
+    assert_eq!(RiskArgs { twap_window_ms: 900_000, stale_bid_max_age_ms: 0, ..r }.validate(600_000), Ok(()));
+    assert_eq!(RiskArgs { max_spot_twap_dev_bps: 2_000, ..RiskArgs::legacy() }.validate(600_000)
+        .map_err(|e| e.field), Err("max_spot_twap_dev_bps")); }
 // engine_core/src/ext.rs
 #[test] fn for_quote_strips_the_ring() { /* coll() with 3 samples -> for_quote().ext.ring == default, rest equal */ }
 #[test] fn effective_level_is_3_under_admin_pause() { /* pause_level 1 + admin_paused -> 3; 2 alone -> 2 */ }
@@ -492,7 +516,7 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
 #[test] fn set_collateral_writes_the_risk_args() { /* World::new_tier2(recommended) -> collateral_state().ext.risk == recommended, pause_level 0, ring empty */ }
 ```
 
-- [ ] **Step 2: Run them.** Run `cargo test -p risk_core args`, `cargo test -p engine_core ext msg` and `cargo test -p harness --test risk_args`. They fail to compile.
+- [ ] **Step 2: Run them.** Run `cargo test -p risk_core --features presets args`, `cargo test -p engine_core -- ext msg` and `cargo test -p harness --test risk_args`. They fail to compile.
 - [ ] **Step 3: Implement.** Add the fields, the messages and the guest changes, and update the full literals.
 - [ ] **Step 4: Run them again,** then the full gate. Every existing test must pass with its assertions unchanged.
 - [ ] **Step 5: Commit.** `git add v04/risk_core v04/engine_core v04/programs/methods/guest/src v04/harness v04/sdk v04/Cargo.lock`, then `git commit -S -m "feat(v04): RiskArgs with legacy/recommended presets, state ext and appended message fields (ADR-082)"`. In the commit body: "Migration: local 0.4 state must be recreated; tags unchanged."
@@ -530,6 +554,7 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
     - It builds `observed = record(&coll.with_pause_clock(obs.clock), ..)` with `pending: None`.
     - `Liquidate` uses `gate::liquidation_price(&observed, ..)` and sends `LiqCtx { collateral: Box::new(observed.for_quote()), price_ray, .. }`.
     - `Bid` uses `gate::bid_pricing` and passes `price_ray` to `bid_ctx`.
+    - `proceed` is already 54 lines. Move the `Liquidate` and `Bid` continuations into private helpers in `observe.rs` (`liquidate_then(..)`, `bid_then(..)`), so each function stays under 50 lines.
   - `harness::tier2`:
     - `impl World { pub fn set_price_with_confidence(&mut self, price_ray: u128, confidence: u128); pub fn warm_twap(&mut self, price_ray: u128, samples: u8, spacing_ms: u64) }`.
     - `warm_twap` advances `now` by `spacing_ms`, publishes, and sends `observe_feed`, `samples` times.
@@ -537,7 +562,7 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
 
 - [ ] **Step 1: Write the failing tests.**
   - Unit tests in `gate.rs`: `liq_gate_order_admin_feed_twap_deviation`, which uses a `coll()` fixture with recommended risk and checks each refusal in the order above, and `legacy_liquidation_price_is_band_edge_m`.
-  - Harness `v04/harness/tests/twap.rs`. All tests use `World::new_tier2(RiskArgs::recommended())` and `open_unsafe_position(500_000, 600_000)`, and each ends with `invariants::check(&w)`.
+  - Harness `v04/harness/tests/twap.rs`. All tests use `open_unsafe_position(500_000, 600_000)`, and each ends with `invariants::check(&w)`. They use `World::new_tier2(RiskArgs::recommended())`, except `bid_during_twap_warm_up_is_not_refused`, which uses `World::new_tier2(RiskArgs::legacy())`.
 
 ```rust
 #[test] fn liquidate_refused_until_twap_has_min_obs() {
@@ -545,16 +570,19 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
     // one more sample -> liquidate succeeds.
 }
 #[test] fn keeper_reward_uses_the_smaller_of_spot_and_twap() {
-    // warm 3 at p; publish 1.1p (within 20 %); liquidate. Assert the auction's keeper_reward equals
-    // auction_core's reward at P = risk_core::price::liq_price(1.1p, Some(T), 0, R, &feed),
-    // with T = twap(&ring_before, now, ..), and that this P is below band(1.1p).
+    // warm 3 at p; publish 1.1p (within 20 %) 1_000 ms after the newest sample, closer than
+    // twap_min_spacing_ms, so the engine does not record it; liquidate 1_000 ms later.
+    // Assert the auction's keeper_reward equals auction_core's reward at
+    // P = risk_core::price::liq_price(1.1p, Some(T), 0, R, &feed), with T = twap(&ring, now, ..)
+    // on collateral_state().ext.ring (unchanged by the liquidation), and that this P is below band(1.1p).
 }
 #[test] fn a_spot_spike_is_refused_by_the_deviation_breaker() {
     // warm 3 at p; publish 1.3p; liquidate -> fail_text(RiskError::SpotTwapDeviation); nothing changed.
 }
 #[test] fn bid_price_takes_the_confidence_edge() {
-    // warm 3 at p with confidence p / 200 (50 bps <= max_conf 100); liquidate; bid 100_000 coin.
-    // Collateral out equals the quote at edge(band-clamped M, 50); strictly less than at confidence 0.
+    // warm 3 at p (warm_twap publishes confidence 0); liquidate; set_price_with_confidence(p, p / 200)
+    // (50 bps <= max_conf 100); bid 100_000 coin. The bid's edge uses the current reading, so
+    // collateral out equals the quote at edge(band-clamped M, 50); strictly less than at confidence 0.
 }
 #[test] fn bid_payout_capped_by_the_twap_anchor() {
     // warm 3 at p; liquidate; publish 1.4p (band_hi 15_000 keeps it unclamped) and bid.
@@ -567,7 +595,8 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
     // 9 publishes spaced 300_000 with observe_feed each -> ring len 8, strictly increasing ts.
 }
 #[test] fn bid_during_twap_warm_up_is_not_refused() {          // Review Focus 2
-    // Liquidate under legacy; SetCollateral(tier2_collateral_args(), recommended) (ring empty);
+    // World::new_tier2(RiskArgs::legacy()); liquidate; SetCollateral(tier2_collateral_args(), recommended)
+    // (its Observe records the valid reading, so the ring holds 1 sample, below min_obs 3);
     // bid succeeds at band(edge(M)).
 }
 #[test] fn set_collateral_keeps_the_ring_and_the_level() {     // Review Focus 5
@@ -598,13 +627,15 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
 - Modify: `v04/programs/methods/guest/src/bin/engine/system.rs:69-77` (`root`: the gate before the relay)
 - Modify: `v04/programs/methods/guest/src/bin/engine/surplus.rs:126-140` and `debt.rs:194-208` (`root_at_config`)
 - Modify: `v04/harness/src/invariants.rs`, `v04/harness/src/lib.rs`
+- Modify: `v04/harness/src/world.rs` (`proxy_actors` `:359-444`): a `SetPauseLevel { salt, collateral_def, .. }` arm with the same actors as `SetCollateral` (proxy, config, collateral, host params, oracle, clock: the level is followed by an `Observe`). Without it `proxy_actors` panics "not a proxied engine message". `world.rs` goes from 713 to about 725 lines.
+- Modify: `v04/harness/tests/twap.rs` (extend `set_collateral_keeps_the_ring_and_the_level`)
 - Modify: `v04/sdk/src/builder.rs`, `v04/sdk/src/lib.rs`
 
 **Interfaces:**
 - Produces:
-  - `risk_core::pause`:
+  - `risk_core::pause`. `Op`, `Level`, `FeedCase` and `Gate` all derive `Debug, Clone, Copy, PartialEq, Eq`:
     - `pub enum Op { Liquidate, Bid, StartSurplus, StartDebt, TakeSurplus, TakeDebt, SettleEmpty, ClaimLeftover, SettleDebt, CheckSolvency, CloseSurplus, CloseDebt, ObserveFeed, SetCollateral, SetEngineParams, SetSlack, SetPauseLevel }` with `pub const ALL: [Op; 17]` *(Plan 9 ruling R9-8)*.
-    - `pub enum Level { Normal, NoLiquidations, NoSystemStarts, Halted }` with `pub fn from_u8(u8) -> Option<Level>` and `ALL: [Level; 4]`.
+    - `pub enum Level { Normal, NoLiquidations, NoSystemStarts, Halted }` with `pub fn from_u8(u8) -> Option<Level>`, `pub const fn as_u8(self) -> u8` (an exhaustive match; `as` is denied) and `ALL: [Level; 4]`.
     - `pub enum FeedCase { Live, Stale }` with `ALL`.
     - `pub enum Gate { Run, FeedRefusal, Fallback }`.
     - `pub fn allowed(op: Op, level: Level, feed: FeedCase) -> Result<Gate, RiskError>` *(Plan 9 ruling R9-7)*. It is one `match` with no wildcard (the lint `wildcard_enum_match_arm` makes it exhaustive at compile time):
@@ -613,6 +644,7 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
       - StartSurplus / StartDebt: `Err(SystemAuctionsPaused)` at level >= 2.
       - TakeSurplus / TakeDebt: `Err(BidsPaused)` at level 3.
       - Everything else: `Run`.
+      - The arms are grouped by behaviour (`Op::StartSurplus | Op::StartDebt => ..`, one or-pattern for every always-`Run` op), so the function stays under 50 lines and still names every variant.
   - `engine_core::gate`:
     - `pub fn collateral_gate(coll: &CollateralState, op: Op, feed_valid: bool) -> Result<Gate, Refusal>`. If `admin_paused` and `allowed(op, Halted, feed)` is an `Err` → `EngineError::Paused`. Otherwise `allowed(op, from_u8(ext.pause_level).ok_or(InvalidConfig)?, feed)`.
     - `liquidation_price` and `bid_pricing` start with `collateral_gate`. `FeedRefusal` → the feed's own code. In Task 8, `Fallback` → the feed's own code as well.
@@ -659,7 +691,9 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
     // level 1: liquidate -> RiskError::LiquidationsPaused; level 0: liquidate succeeds.
 }
 #[test] fn set_pause_level_only_through_the_admin_proxy() {
-    // a stranger's proxy -> NotAdmin; root at the config itself -> reverts; wrong collateral_def -> WrongAccount("collateral_def").
+    // a stranger signing at the admin's proxy -> NotAdmin; a stranger's own proxy -> WrongAccount("config")
+    // (as engine_admin.rs and slack.rs assert); root at the config itself -> NotAdmin;
+    // wrong collateral_def -> WrongAccount("collateral_def").
 }
 #[test] fn level_change_records_the_pause_clock() {
     // level 3 at t -> collateral paused_since_ms == Some(t); level 0 at t + 60_000 -> paused_since None,
@@ -672,9 +706,9 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
 
   - Extend `set_collateral_keeps_the_ring_and_the_level` (Task 7) with level 2, which must survive the `SetCollateral`.
   - In `sdk/tests/tier2_plans.rs`: `set_pause_level_plan_declares_every_touched_actor`, which follows `plans_declare_every_touched_actor` in `sdk/tests/builder.rs`.
-- [ ] **Step 2: Run them.** `cargo test -p risk_core pause`, `cargo test -p engine_core gate msg`, `cargo test -p harness --test pause_levels --test twap` and `cargo test -p sdk --test tier2_plans` fail.
+- [ ] **Step 2: Run them.** `cargo test -p risk_core pause`, `cargo test -p engine_core -- gate msg`, `cargo test -p harness --test pause_levels --test twap` and `cargo test -p sdk --test tier2_plans` fail.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run them again.** Then run `cargo test -p harness` (the existing `admin_pause_toggle_runs_observe` and `liquidate_rejects_stale_feed_and_admin_pause` keep their codes), then the full gate.
+- [ ] **Step 4: Run them again.** Then run `cargo test -p harness` and `cargo test -p engine_core feed`. The existing `admin_pause_toggle_runs_observe` and `stale_feed_pauses_and_reverts_liquidate` (`harness/tests/liquidate.rs`) and `feed.rs::admin_pause_starts_the_clock_at_now_and_refuses_liquidation` keep their codes. Then the full gate.
 - [ ] **Step 5: Commit.** `git add v04/risk_core v04/engine_core v04/programs/methods/guest/src v04/harness v04/sdk`, then `git commit -S -m "feat(v04): pause levels 1-3 with one rule table and SetPauseLevel (ADR-073)"`.
 
 ### Task 9: D4 bids on a stale feed, held at the floor (ADR-074)
@@ -690,6 +724,7 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
   - `quote` `:53-83`.
 - Modify: `v04/programs/methods/guest/src/bin/engine.rs` (the `BidCtx` arm passes both fields)
 - Modify: `v04/programs/methods/guest/src/bin/engine/bid.rs:62-91` (`bid_ctx` takes a `BidPricing`)
+- Modify: `v04/programs/methods/guest/src/bin/engine/observe.rs` (`proceed`'s Bid helper, `bid_ctx`'s only caller, passes the `BidPricing`)
 - Modify: `v04/harness/src/tier2.rs`
 
 **Interfaces:**
@@ -703,14 +738,14 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
       - `Err(TwapUnavailable)` without `min_obs` samples;
       - `Err(LastGoodTwapTooOld)` when `now - newest.ts > stale_bid_max_age_ms`;
       - else `Ok(Some(T_lg))`.
-  - `quote_seized` stores `stale_cap_ray = stale_cap(ctx.price_ray, &params.schedule)?`, using the auction's snapshotted schedule (E4 caps it in Plan 11).
+  - `quote_seized` stores `stale_cap_ray = stale_cap(ctx.price_ray, &params.schedule)?`, using the auction's snapshotted schedule (E4 caps it in Plan 11), only when D4 is on: `ctx.collateral.ext.risk.stale_bid_max_age_ms > 0 && ctx.collateral.ext.risk.twap_window_ms > 0` (`for_quote` strips only the ring, so `risk` is there). Otherwise it stores 0, the legacy value, so the full `AuctionState` literals in `harness/tests/liquidate.rs` (`:123`, `:241`) keep passing.
   - `gate::bid_pricing`, `Gate::Fallback` arm:
     - `fallback_twap(..)?`: `None` → the feed's own code; `Some(t)` → `BidPricing { price_ray: fallback_bid_price(t, ring.last_conf_bps, r, feed), fallback: true, paused_since_ms: coll.paused_since_ms }`.
     - `coll` is the observed state, whose pause clock is open.
   - `bid::quote`:
     - `PauseClock.paused_since_ms = q.paused_since_ms`, so live bids (`None`) are unchanged.
     - If `q.fallback`, the price passed to `quote_bid` is `floored_price(q.price_ray, a.stale_cap_ray, schedule.discount_ray(t_eff))`.
-  - `harness::tier2`: `impl World { pub fn go_stale(&mut self) }` advances `now` past `newest publish + TIER2_MAX_AGE_MS - SLACK_MS` without publishing.
+  - `harness::tier2`: `impl World { pub fn go_stale(&mut self) }` advances `now` past `newest publish + max_oracle_age_ms - SLACK_MS` without publishing. It reads `max_oracle_age_ms` from `collateral_state()`, not a constant, so it makes any world's feed stale.
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -724,6 +759,7 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
     let d = bps_to_ray(1_000);
     assert_eq!(floored_price(RAY, RAY, d), RAY / 10 * 9);
     assert_eq!(floored_price(RAY / 2, RAY, d), RAY / 2); }
+#[cfg(feature = "presets")]
 #[test] fn fallback_twap_follows_the_d4_conditions() {
     // legacy -> Ok(None); recommended + empty ring -> Err(TwapUnavailable);
     // newest 3_600_001 ms before now -> Err(LastGoodTwapTooOld); 3_600_000 -> Ok(Some(_)).
@@ -733,14 +769,14 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
 ```
 
   - `engine_core/src/bid.rs`: `fallback_quote_freezes_the_discount_and_applies_the_floor`, using the existing `liquidated()` fixture with `stale_cap_ray` set.
-  - `harness/tests/stale_bids.rs`. All tests use `World::new_tier2(RiskArgs::recommended())`, warm 3, liquidate, then `go_stale()`. Every refusal asserts `snapshot_all()` is unchanged, and each test ends with `invariants::check`.
+  - `harness/tests/stale_bids.rs`. All tests use `World::new_tier2(RiskArgs::recommended())`, warm 3, liquidate, then `go_stale()`, except `stale_feed_bid_refused_without_min_obs` (below). Every refusal asserts `snapshot_all()` is unchanged, and each test ends with `invariants::check`.
 
 ```rust
 #[test] fn stale_feed_bid_uses_the_last_good_twap() { /* bid fills at floored_price(fallback_bid_price(T_lg, ..)); BidCtx fallback */ }
 #[test] fn stale_feed_bid_refused_past_max_age() { /* now past newest + 3_600_000 -> RiskError::LastGoodTwapTooOld */ }
 #[test] fn stale_feed_bid_refused_without_min_obs() {
-    // liquidate under legacy, SetCollateral(tier2_collateral_args(), recommended) (empty ring), go stale
-    // -> RiskError::TwapUnavailable
+    // World::new_tier2(RiskArgs::legacy()); liquidate; SetCollateral(tier2_collateral_args(), recommended)
+    // (the ring holds the 1 sample its Observe records, below min_obs 3); go stale -> RiskError::TwapUnavailable
 }
 #[test] fn stale_feed_bid_held_at_the_floor() {
     // after the liquidation, publish 1.4p three times (the TWAP rises), then go stale:
@@ -750,9 +786,9 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
 #[test] fn fallback_final_bid_settles_and_releases() { /* final fallback bid: Settled, type and global reservations released */ }
 ```
 
-- [ ] **Step 2: Run them.** `cargo test -p risk_core stale`, `cargo test -p engine_core bid` and `cargo test -p harness --test stale_bids` fail.
+- [ ] **Step 2: Run them.** `cargo test -p risk_core --features presets stale`, `cargo test -p engine_core bid` and `cargo test -p harness --test stale_bids` fail.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run them again.** `a_stale_feed_stops_the_bid` (`harness/tests/bid.rs:331`) still passes under legacy. Run Kani if available, then the full gate.
+- [ ] **Step 4: Run them again.** `a_stale_feed_stops_the_bid` (`harness/tests/bid.rs:331`) still passes under legacy, and `cargo test -p harness --test liquidate` passes unchanged (legacy `stale_cap_ray` is 0). Run Kani if available, then the full gate.
 - [ ] **Step 5: Commit.** `git add v04/risk_core v04/engine_core v04/programs/methods/guest/src v04/harness`, then `git commit -S -m "feat(v04): D4 bids on a stale feed at the last-good TWAP, held at the floor (ADR-074)"`.
 
 ### Task 10: The operation × level and stale-feed matrix tests
@@ -765,7 +801,7 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
 - Consumes: `risk_core::pause::{Op, Level, FeedCase, Gate, allowed}`, `World::{set_pause_level, snapshot_all}`, `Chain::cycles` (`harness/src/lib.rs:215`, simulation without commit).
 - Produces:
   - `harness::levels::Fixture { pub world: World, pub root: Actor, pub actors: Vec<Actor>, pub signers: Vec<PrivateKey>, pub msg: EngineMsg }`
-  - `pub fn fixture(op: Op, risk: RiskArgs) -> Fixture`: a fresh world where `op`'s own preconditions hold. For example:
+  - `pub fn fixture(op: Op, risk: RiskArgs) -> Fixture`: a fresh `World::new_tier2(risk)` where `op`'s own preconditions hold. Every fixture, legacy included, is built this way, so `go_stale` and the collateral args match across the matrix. `fixture` dispatches on groups of ops that share a setup (position ops, auction ops, system ops, admin ops) to one helper each, so no function exceeds 50 lines. For example:
     - Liquidate: an unsafe position, with the ring warm under a TWAP preset;
     - Bid: a live auction;
     - ClaimLeftover: a settled auction with leftover;
@@ -782,7 +818,9 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
 fn every_operation_at_every_pause_level() {
     for op in Op::ALL { for level in Level::ALL {
         let mut f = fixture(op, RiskArgs::legacy());
-        if op != Op::SetPauseLevel { f.world.set_pause_level(level as u8).expect("level set"); }
+        f.world.set_pause_level(level.as_u8()).expect("level set");
+        // SetPauseLevel's own row moves L to the next level, so raising and lowering are both covered.
+        if op == Op::SetPauseLevel { f.msg = f.world.set_pause_level_msg(next(level).as_u8()); }
         match expected(op, level, FeedCase::Live) {
             None => assert!(f.world.chain.cycles(f.root, &f.actors, &signers(&f), &f.msg).1.is_ok(), "{op:?} at {level:?} runs"),
             Some(text) => { let before = f.world.snapshot_all();
@@ -791,6 +829,9 @@ fn every_operation_at_every_pause_level() {
         }
     } }
 }
+/// (L + 1) % 4 as an exhaustive match (no unchecked arithmetic): Normal -> NoLiquidations ->
+/// NoSystemStarts -> Halted -> Normal.
+fn next(level: Level) -> Level { /* match */ }
 #[test]
 fn every_operation_with_a_stale_feed() {
     // The same loop at level 0 with go_stale(): "Stale-ok" uses fixture(op, RiskArgs::recommended())
@@ -809,22 +850,25 @@ fn every_operation_with_a_stale_feed() {
 ### Task 11: Cycles: budget assertions, the `SetPauseLevel` row and `CYCLES.md`
 
 **Files:**
+- Create: `v04/harness/src/cycles.rs`: `Row`, `measured`, `proxied`, `table`, `write_table`, `GAS_CAP` and `BASE_FEE`, moved verbatim from `harness/tests/cycles.rs` (`:22-25`, `:44-93`, `:202-209`) and made `pub`. A pure refactor.
 - Create: `v04/harness/tests/cycles_tier2.rs`. `cycles.rs` is 486 lines; keep the new rows separate.
+- Modify: `v04/harness/src/lib.rs` (`pub mod cycles;`)
+- Modify: `v04/harness/tests/cycles.rs`: `use harness::cycles::{..}` in place of the moved items. Every assertion stays.
 - Modify: `v04/CYCLES.md`
 
 **Interfaces:**
-- Consumes: `World::new_tier2`, `warm_twap`, `set_pause_level_msg`, `Chain::cycles`; `measured`/`table`/`write_table` patterns from `harness/tests/cycles.rs:51-95, 202-230`.
+- Consumes: `World::new_tier2`, `warm_twap`, `set_pause_level_msg`, `Chain::cycles`, `harness::cycles::{Row, measured, proxied, table, write_table}`.
 - Produces:
-  - Consts: `SET_PAUSE_LEVEL_EXECUTIONS: u32 = 12`, `PARTIAL_BID_BUDGET = 520_000`, `FINAL_BID_BUDGET = 720_000`, `LIQUIDATE_BUDGET = 1_000_000`, `SET_PAUSE_LEVEL_BUDGET = 400_000` *(Plan 9 ruling R9-10)*, `RING_FILL_SPREAD = 40_000`.
-  - The tier2 scenario uses the `cycles.rs` amounts (collateral 500_000, debt 600_000, R and oracle 0.5) and the e2e preset of R9-13. The ring holds 8 samples before every measured row.
+  - Consts: `SET_PAUSE_LEVEL_EXECUTIONS: u32 = 12` (hand-counted from the message sequence and documented as in `cycles.rs:210-230`; `measured` takes it as a constant, so it is not asserted), `PARTIAL_BID_BUDGET = 520_000`, `FINAL_BID_BUDGET = 720_000`, `LIQUIDATE_BUDGET = 1_000_000`, `SET_PAUSE_LEVEL_BUDGET = 400_000` *(Plan 9 ruling R9-10)*, `RING_FILL_SPREAD = 40_000`.
+  - The tier2 scenario uses the `cycles.rs` amounts (collateral 500_000, debt 600_000, R and oracle 0.5) and `World::new_tier2(RiskArgs::recommended())` *(Plan 9 ruling R9-10)*. The R9-13 e2e values are refused at `TIER2_MAX_AGE_MS`. The ring holds 8 samples before every measured row.
 
 - [ ] **Step 1: Write the failing tests.**
 
 ```rust
 #[test] fn tier2_rows_fit_the_budget() {
-    // Liquidate, Bid (partial), Bid (final) under the TWAP preset with a full ring, and SetPauseLevel:
-    // each succeeds; executions equal the legacy pins (29, 15, 21) and SET_PAUSE_LEVEL_EXECUTIONS;
-    // cycles <= the budgets above; writes the table via write_table("tier2", ..).
+    // Liquidate, Bid (partial), Bid (final) under RiskArgs::recommended() with a full ring, and SetPauseLevel:
+    // each succeeds; cycles <= the budgets above; writes the table via write_table("tier2", ..).
+    // The executions column uses the hand-counted constants (legacy 29, 15, 21; SET_PAUSE_LEVEL_EXECUTIONS).
 }
 #[test] fn bid_cost_is_independent_of_ring_fill() {
     // Two worlds with twap_min_obs 1: ring of 1 sample vs 8 samples; partial-bid cycles differ by <= RING_FILL_SPREAD.
@@ -832,12 +876,12 @@ fn every_operation_with_a_stale_feed() {
 ```
 
 - [ ] **Step 2: Run them.** `cargo test -p harness --test cycles_tier2 -- --nocapture` fails to compile.
-- [ ] **Step 3: Implement.** Then run `cargo test -p harness --test cycles -- --nocapture` too. The legacy rows' execution pins must still hold.
+- [ ] **Step 3: Implement.** Move the helpers into `harness/src/cycles.rs` first, then write `cycles_tier2.rs`. Then run `cargo test -p harness --test cycles -- --nocapture` too. Every legacy row still simulates and fits the cap. If a message sequence changed, re-count its executions by hand and update the documented constant.
 - [ ] **Step 4: Update `v04/CYCLES.md`.**
   - Replace the legacy figures with the new measurements, and note the delta against the 2026-11-03 figures.
   - Add a section "Tier 2 (Plan 9): TWAP preset, ring full", with the rows `Liquidate`, `Bid (partial)`, `Bid (final)`, `ObserveFeed`, `SetCollateral`, `SetPauseLevel`, and each row's budget.
   - Check each measured row against the §4 estimates. Any row above its assertion is a failure, not a doc note. Re-run the full gate.
-- [ ] **Step 5: Commit.** `git add v04/harness/tests/cycles_tier2.rs v04/CYCLES.md`, then `git commit -S -m "test(v04): Tier 2 cycle budgets and SetPauseLevel row; CYCLES.md re-measured"`.
+- [ ] **Step 5: Commit.** `git add v04/harness/src/cycles.rs v04/harness/src/lib.rs v04/harness/tests/cycles.rs v04/harness/tests/cycles_tier2.rs v04/CYCLES.md`, then `git commit -S -m "test(v04): Tier 2 cycle budgets and SetPauseLevel row; CYCLES.md re-measured"`.
 
 ### Task 12: The `tier2` e2e stage
 
@@ -847,10 +891,13 @@ fn every_operation_with_a_stale_feed() {
 - Modify: `v04/sdk/src/session.rs:440-460`: add `publish_with_confidence(&self, live, label, price_ray, confidence)`. `publish` calls it with 0.
 - Modify: `v04/scripts/e2e.sh`:
   - `build_v04` `:76-78`: add `--example tier2`;
-  - `run_example` `:145-155`: expect `tier2 complete`;
   - the `case` block `:169-185`: a `tier2` stage; `all` runs it after `system`;
   - the usage text and the header comment.
-- Modify: `.github/workflows/v04-e2e.yml`: a step `v04/scripts/e2e.sh tier2` after the `system` step.
+  - `run_example` (`:145-155`) needs no change: it already checks `^$1 complete$`.
+- Modify: `.github/workflows/v04-e2e.yml`:
+  - a step `v04/scripts/e2e.sh tier2` after the `system` step;
+  - the summary's log loop `for f in sequencer slice system` gains `tier2`;
+  - the artifact `path:` list gains `${{ env.E2E_HOME }}/tier2.log`.
 
 **Interfaces:**
 - Consumes: `sdk::{plan_set_collateral_with, plan_set_pause_level, plan_liquidate, plan_bid, plan_settle_empty, plan_claim_leftover, plan_observe_feed}`, `sdk::session`.
@@ -859,9 +906,9 @@ fn every_operation_with_a_stale_feed() {
   2. Open a large unsafe position P1 and a tiny one P2 (the lot-3 case).
   3. `Liquidate` P1 must revert with 6070 (warm-up). Simulate it, then assert the `fail_text`.
   4. Publish three prices ≥ 10 s apart with `confidence = price / 200`, each followed by `ObserveFeed`.
-  5. `Liquidate` P1 and P2.
+  5. `Liquidate` P1 and P2 right after the third `ObserveFeed`. The 300 s window (R9-13) keeps all three samples in it across the 15 s blocks.
   6. `SetPauseLevel 1`, then a partial bid on P1 fills.
-  7. Stop publishing until the feed is stale (`now + slack > ts + 180_000`). A final bid on P1 fills as a fallback bid: assert the auction is `Settled`.
+  7. Stop publishing until the feed is stale (`now + slack > ts + 180_000`). A final bid on P1 fills as a fallback bid: assert the auction is `Settled`. D4 can fire because the window (300_000) exceeds `max_oracle_age_ms + (min_obs − 2) · spacing` = 190_000 (R9-3), and the bid lands within `stale_bid_max_age_ms` (600_000) of the newest sample.
   8. `SetPauseLevel 3`: `ClaimLeftover` on P1 and `SettleEmpty` on P2 both succeed.
 
 - [ ] **Step 1: Build it.** Write the example, then run `cargo build -p sdk --features session --example tier2` (WSL). It fails until the example compiles.
@@ -881,7 +928,7 @@ fn every_operation_with_a_stale_feed() {
   - `RISK_ERROR_RS_PATH = "v04/risk_core/src/error.rs"`.
   - `ENUMS = (("EngineError", ERROR_RS_PATH, ""), ("RiskError", RISK_ERROR_RS_PATH, " (0.4 only)"))`.
   - `parse_codes` is reused per file.
-  - `proof_pattern(variant, code, enum="EngineError")` and the raise regex use `{enum}::{variant}`.
+  - `proof_pattern(variant, code, enum_name="EngineError")` and the raise regex use `{enum_name}::{variant}` (not `enum`, which would shadow the stdlib module).
   - `build_index` excludes both error files from the raise sources.
   - In `render`, the RiskError rows follow the EngineError rows in code order. Their Variant cell reads `` `TwapUnavailable` (0.4 only) ``. The intro sentence adds: "Codes 6070 and up are the 0.4 engine's `RiskError` (`v04/risk_core`), wrapped with `EngineError` in `engine_core::check::Refusal`."
   - New `MEANINGS` lines:

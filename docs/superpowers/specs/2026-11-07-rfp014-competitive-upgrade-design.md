@@ -153,10 +153,10 @@ Fixed by this design:
     (`price.rs:32`);
   - `DEBT_RELIST_DELAY_MS` (600_000 ms) debt-auction relist delay (`args.rs:20`);
   - the feed sanity window, market price within [R / 2, 2 · R] (inline, `price.rs:79-80`);
-  - the reference-oracle scale, hardcoded to `OracleScale::Ray` (`programs/auction_engine/src/system.rs:44-50`), default Ray.
+  - the reference-oracle scale, hardcoded to `OracleScale::Ray` (`programs/auction_engine/src/system.rs:44-50`, `v04/engine_core/src/system.rs:41-47`), default Ray.
 
 Left to that design: data layouts, exact parameters and defaults, error codes, ADR numbers
-(continue from ADR-067), cycle budgets.
+(continue from ADR-068), cycle budgets.
 
 ## 6. Tier 3 — evidence. Outline; own design doc.
 
@@ -169,7 +169,7 @@ Left to that design: data layouts, exact parameters and defaults, error codes, A
   cycle tables diffed against measurement, refusal-code catalogue in sync.
 - V4 Incident-replay tests: Black Thursday zero bids, feed stuck at floor (LUNA), single bad
   print, self-liquidation, debt-auction restart loop, dust farm; plus an invariants document in
-  Certora-rule style linked to the Kani/proptest harnesses, and a sequence fuzz.
+  Certora-rule style linked to the Kani/proptest harnesses, and a sequence fuzz including a re-entry case (R1).
 - V5 R4 on chain: two collateral types in one instance in the e2e, one paused, the other
   liquidating and bidding.
 - V6 Concurrent-auction benchmark and a shared-account contention audit (every bid writes the
@@ -190,16 +190,16 @@ Left to that design: data layouts, exact parameters and defaults, error codes, A
 
 | Milestone | Payout | Adds from this design |
 |---|---|---|
-| M0 alignment | $2,000 | T1.2–T1.5 already delivered (marked early); F8 audit result |
+| M0 alignment | $2,000 | T1.2–T1.5 already delivered (marked early); F8 audit result; the remaining V3 gates (doc link/path-existence check, cycle-table diff against measurement) |
 | M1 collateral auctions | $6,000 | E2, E4, E5, E6, V4, V5 |
 | M2 price feeds | $4,000 | E1, E3, E9 |
 | M3 debt & surplus | $3,000 | E7, E8 |
 | M4 private path + bot SDK | $6,000 | K1, K2, K3 |
 | M5 Basecamp mini-app | $4,000 | K2/K3 surfaces in the GUI |
-| M6 testnet 0.4 | $5,000 | V1 on public 0.4, V2, V6 |
+| M6 testnet 0.4 | $5,000 | V1 on public 0.4, V2, V6; Kani in CI (SOFT2), full PRIVACY.md (PEND4), tests for milestone-only rows (S4) |
 | M7 audit | $10,000 | unchanged |
 
-V1 (on legacy testnet + local 0.4) and V3 are done before posting where possible, marked early.
+V1 (on legacy testnet + local 0.4) is done before posting where possible, marked early. Of V3, the test-count and refusal-catalogue gates are done before posting (marked early); the remaining V3 gates (doc link/path-existence check, cycle-table diff) are M0 deliverables.
 
 **Durations (author's decision C, 2026-11-07): rebalance weeks inside 12 and name pre-built work.**
 Weeks move from milestones whose work is largely already built to the ones this design loads up.

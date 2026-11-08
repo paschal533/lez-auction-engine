@@ -122,7 +122,7 @@ after the host's admin binds it (ADR-027).
 | `min_take` | ≤ `surplus_lot` and ≤ `debt_lot` |
 | `system_ttl_ms` | `MIN_SYSTEM_TTL_MS..=MAX_SYSTEM_TTL_MS` |
 
-Lock note: while a system auction is live (surplus or debt), `set_engine_params` refuses any change to the protocol token, the reference oracle, or any system-auction parameter (`surplus_*`, `debt_*`, both schedules, `max_mint_per_auction`, `min_take`, `system_ttl_ms`): the check is `system_rec != cfg.system` (`programs/auction_engine/src/admin.rs:201-206`, `ProtocolTokenLocked`; v04: `v04/sdk/src/system.rs:115-118`). `global_cap`, `freeze_on_bad_debt`, `bad_debt_freeze_threshold` and `ref_oracle_max_age_ms` stay changeable.
+Lock note: while a system auction is live (surplus or debt), `set_engine_params` refuses any change to the protocol token, the reference oracle, or any system-auction parameter (`surplus_*`, `debt_*`, both schedules, `max_mint_per_auction`, `min_take`, `system_ttl_ms`): the check is `system_rec != cfg.system` (`programs/auction_engine/src/admin.rs:201-206`, `ProtocolTokenLocked`; v04: `v04/engine_core/src/assertions.rs:68-76`, `system_idle` → `ProtocolTokenLocked`; the SDK adds the accounting actor when locked fields change, `v04/sdk/src/system.rs:115-118`). `global_cap`, `freeze_on_bad_debt`, `bad_debt_freeze_threshold` and `ref_oracle_max_age_ms` stay changeable.
 
 v04 only: `slack_ms`, set by the admin at `Init`, changeable by the admin through `SetSlack`,
 bounded by `MIN_SLACK_MS..=MAX_SLACK_MS`.

@@ -129,7 +129,7 @@
 **Interfaces:** Consumes Task 2 format, Task 1/4/5 paths and test names.
 
 - [ ] **Step 1:** Convert every row to the 6-column format. Fill **v04 evidence** with v04 tests/CI jobs (`ci:v04.yml/…`, `ci:v04-e2e.yml/…`, test names under `v04/`), **v0.2.4 evidence** with today's evidence. Status reflects the stronger engine; notes say which engine is primary (S3).
-- [ ] **Step 2:** Add `F8` (authorities and parameters set at instance init, no hardcoded production values): evidence `doc:docs/architecture/f8-parameters.md` plus the init tests that exist (search `init_` tests in `v04/` and `programs/integration_tests`); status `PoC` if the audit found no Tier-2 row, else `PoC (partial)` naming M1/E9.
+- [ ] **Step 2:** Add `F8` (authorities and parameters set at instance init, no hardcoded production values): evidence `doc:docs/architecture/f8-parameters.md` plus the init tests that exist (search `init_` tests in `v04/` and `programs/integration_tests`); status `PoC` if the audit found no Tier-2 row, else `PoC (partial)` naming M2/E9.
 - [ ] **Step 3:** Reword F3 to PR #229's text ("a bid may purchase any portion of the remaining lot"); add Task 5's two tests; note: "`BelowMinBid`/`DustRemainder` apply only to bids that leave a live remainder; any bid that ends the auction or takes the whole lot is accepted (Maker `chost` precedent: a remainder below dust costs more to settle than it raises)."
 - [ ] **Step 4:** Every `PoC (partial)` row's note ends with `Closed in M<n>.` naming the §8 milestone (S1). R2 → M2, R5 → M1, R1 → M1, S1 → M6, U6 → M4, F5 → M3 (verify each against the rows' current notes).
 - [ ] **Step 5:** Add a short "Dependencies" link line under the intro pointing to README §Dependencies (Task 7).

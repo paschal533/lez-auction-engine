@@ -314,7 +314,7 @@ Open bids are #159 Web3spell $48k and #187 Antumbra $55k. bleu won RFP-015 (L) a
 Lower than open bids improves competitiveness but leaves less margin for a solo developer over 12 weeks. The audit is separate so its cost does not distort the build price.
 
 **Status**
-Accepted (spec v5)
+Superseded by ADR-068
 
 ---
 
@@ -1722,7 +1722,7 @@ A Dutch collateral auction can fix its price when it opens or read the market at
 - Stale feed: (A) refuse bids (today); (B) freeze the price seen at auction open; (C) keep bidding at the last good TWAP, only while it is younger than a configurable maximum age and never below the auction's floor.
 
 **Decision**
-- **Pricing: (B), as built.** Every bid validates the feed and computes `P = clamp(M, R·lo, R·hi)`, then pays `floor(coin x P / (1 - d))` with `d` from the auction's schedule (capped at 30%). No restart and no expiry (ADR-012): with a live market term a reset would only move the discount back to its start. Inside the band the auction follows the market both ways; outside it the band edge holds (ADR-005), which is the one case where it can stop being worth bidding or sell below market. That happens when `M` leaves `[R·lo, R·hi]`: above it, bidding stops once `M > R·hi / (1 - d_max)` (with the defaults `hi = 11000` and the 10% maximum of `rai_default`, that is `M > 1.1R / 0.9`, inside the `[R/2, 2R]` validity range); below it, the sale is under market by the gap to `R·lo`.
+- **Pricing: (B), as built.** Every bid validates the feed and computes `P = clamp(M, R·lo, R·hi)`, then pays `floor(coin x P / (1 - d))` with `d` from the auction's schedule (capped at 30%). No restart and no expiry (ADR-012): with a live market term a reset would only move the discount back to its start. Inside the band the auction follows the market both ways; outside it the band edge holds (ADR-005), which is the one case where it can stop being worth bidding or sell below market. That happens when `M` leaves `[R·lo, R·hi]`: above it, bidding stops once `M > R·hi / (1 - d_max)` (with `hi = 11000` and the 10 % maximum of the `rai_default` test schedule, that is `M > 1.1R / 0.9`, inside the `[R/2, 2R]` validity range); below it, the sale is under market by the gap to `R·lo`.
 - **Stale feed: (C), decided (spec D4), not built.** Bids on live auctions continue at the last good TWAP within the maximum age and above the floor. Risk-reducing operations (settle, claim leftover, settle debt, owner actions) run under every pause level. The TWAP is M2 (E1); the stepped pause levels that apply D4 are M1 (E2). Until then the as-built rule stands: bids are refused on an invalid feed and the discount clock stops while the type is paused.
 - (A) is rejected because no debt is recovered while the feed is down, the lot carries the market risk and its cap reservation stays held. (B) is rejected because it is the fixed-price drift with no `redo` to escape it.
 - **OEV**: the rising discount competes the bidder-side value back to the protocol; the keeper reward (zero below `debt_floor`, otherwise `min(tip + chip x debt, reward_cap, penalty)`) and the schedule's starting discount (2% in `rai_default`) are the only fixed prizes. Both are per-type parameters, and the reward is capped. Oracle-level recapture (SVR, Oval, API3) is outside the engine.
@@ -1741,5 +1741,30 @@ A Dutch collateral auction can fix its price when it opens or read the market at
 
 **Status**
 Pricing accepted (as built since spec v5). Stale-feed rule decided (spec D4), to build in M1/M2.
+
+---
+
+## ADR-068: Pricing $40,000 All-in Including Audit (Supersedes ADR-014)
+
+**Context**
+ADR-014 priced the build at ~$38–42k (planned ~$40k) with a separate audit line of ~$10–12k. The bid refresh (spec 2026-11-07, D3) adds engine, evidence and tooling scope and keeps the price at $40,000, but makes it all-in: the external audit is paid from inside the budget, and the new scope is absorbed into the existing milestones rather than priced on top.
+
+**Options**
+- (A) $40,000 all-in, audit included, 12 weeks; M7 ($10,000) pays the auditor. **Chosen.**
+- (B) Keep ADR-014: a ~$40k build price plus a separate audit line.
+
+**Decision**
+(A): $40,000 all-in over 12 weeks. Payouts are unchanged: M0 $2,000, M1 $6,000, M2 $4,000, M3 $3,000, M4 $6,000, M5 $4,000, M6 $5,000, M7 $10,000. M7's payout pays the auditor's fee. Durations as in spec §8: M0 0.5, M1 2.5, M2 1.5, M3 1, M4 2.5, M5 0.5, M6 1.5, M7 2 weeks.
+
+**Trade-offs**
+- One price with no separate procurement for the audit, at the cost of a smaller build share of the budget.
+- The auditor's fee must fit M7's payout; the firm is named in the bid only after it has quoted.
+- The new scope is paid from the existing milestones; weeks move from milestones whose work is already built (M5, M6) to the ones the refresh loads up (M1, M4).
+
+**Evidence**
+- Spec: `docs/superpowers/specs/2026-11-07-rfp014-competitive-upgrade-design.md`, D3 and §8 (milestone mapping and durations).
+
+**Status**
+Accepted (spec 2026-11-07, D3). Supersedes ADR-014.
 
 ---

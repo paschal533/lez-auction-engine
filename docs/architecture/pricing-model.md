@@ -54,8 +54,8 @@ the next bid, so the sale stays within the scheduled discount of the current fee
   less collateral than the market rate. If the market moves far enough past the edge that even the
   maximum discount does not cover the gap, bidding stops being worth it until the market comes
   back or the feed leaves `[R/2, 2R]` and the type pauses. The condition is
-  `M > R x hi / (1 - d_max)`. With the ADR-005 default `hi = 11000` and a 10% maximum discount
-  (the `rai_default` schedule, `crates/auction_core/src/schedule.rs` lines 81-93) that is
+  `M > R x hi / (1 - d_max)`. With `hi = 11000` and the 10 % maximum of the `rai_default` test
+  schedule (`crates/auction_core/src/schedule.rs` lines 81-93) that is
   `M > 1.1R / 0.9`; even at the 30% cap it is `M > 1.1R / 0.7`. Both are inside the `[R/2, 2R]`
   validity range, so the type does not pause there. `R` moves at the host's redemption rate, not
   with the collateral market (`programs/auction_engine/src/feed.rs` lines 25-44), so a fall in

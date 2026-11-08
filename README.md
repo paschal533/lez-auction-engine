@@ -11,7 +11,7 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 
 - Engine: the liquidation slice, `set_engine_params`, `observe_feed`, `settle_debt`, the surplus and debt auctions (start, take, close) and `check_solvency` with the host freeze, as actor conversations (ADR-056 to ADR-063; status table in [docs/v04-port-design.md](docs/v04-port-design.md) §8). It runs against our own token and oracle actors and a mock CDP host that implements the F7 host interface, because lez-programs has no 0.4 branch yet.
 - SDK: plans, simulate-then-send with a fitted gas limit (ADR-061), block-level confirmation and the scanner (ADR-066).
-- CI: `v04.yml` runs fmt, clippy and `cargo test --workspace` on changes to `v04/` and the shared crates.
+- CI: `v04.yml` runs fmt, clippy and `cargo test --workspace` on changes to `v04/` and the shared crates; green on `main`, run 42033888330.
 - End to end: `v04-e2e.yml` on a standalone sequencer with `RISC0_DEV_MODE=0`: run 42015414886 at 56876f5, green in 59m30s (cold cache); run 42033888263 at 5913f0a, green in 41m51s (warm) ([ci.md](docs/architecture/ci.md)).
 - Cycles and fees: [v04/CYCLES.md](v04/CYCLES.md). The most expensive instruction, `Liquidate`, uses under 9 % of the gas cap.
 - Waiting on upstream: the IDL and SPEL entrypoint (no SPEL for 0.4), the real host hooks (no lez-programs 0.4), the CLI and Basecamp module on `lez_core` 0.6.0, and a public 0.4 testnet. See [Dependencies](#dependencies).
@@ -45,6 +45,8 @@ Counted from the source by `scripts/count-tests.py`, one row per area. CI fails 
 | Python tooling | 105 |
 | **Total** | 1875 |
 <!-- test-counts:end -->
+
+Counts include `#[ignore]`d tests (run by named jobs) and the two Kani harnesses, which no CI job runs yet (SOFT2).
 
 ## Dependencies
 

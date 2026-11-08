@@ -1711,3 +1711,35 @@ A keeper has to find the auctions, positions, surplus auctions and debt auctions
 Accepted (Plan 7, Task 4; live wiring and e2e check Task 5)
 
 ---
+
+## ADR-067: Live Oracle Pricing on Every Bid; Bounded Last-Good TWAP Under a Stale Feed (Decided, to Build in M1/M2)
+
+**Context**
+A Dutch collateral auction can fix its price when it opens or read the market at every bid. Public designs that fix it, such as Maker's Clipper with `top = feed x buf` at `kick`, need restart machinery (`redo`, allowed past `tail` or below `cusp`, with a reward) because the price drifts from the market after `kick`. Separately, RFP R5 asks that operations continue under a pause. Today a stale, low-confidence or out-of-range feed pauses the type and every bid is refused (ADR-005), so no debt is recovered during an outage.
+
+**Options**
+- Pricing: (A) fix the price at open and add `redo`/`cusp`/`tail`; (B) re-read the oracle at every bid, with a time-rising discount only.
+- Stale feed: (A) refuse bids (today); (B) freeze the price seen at auction open; (C) keep bidding at the last good TWAP, only while it is younger than a configurable maximum age and never below the auction's floor.
+
+**Decision**
+- **Pricing: (B), as built.** Every bid validates the feed and computes `P = clamp(M, R·lo, R·hi)`, then pays `floor(coin x P / (1 - d))` with `d` from the auction's schedule (capped at 30%). No restart and no expiry (ADR-012): with a live market term a reset would only move the discount back to its start. Inside the band the auction follows the market both ways; outside it the band edge holds (ADR-005), which is the one case where it can stop being worth bidding or sell below market, bounded by the band parameters.
+- **Stale feed: (C), decided (spec D4), not built.** Bids on live auctions continue at the last good TWAP within the maximum age and above the floor. Risk-reducing operations (settle, claim leftover, settle debt, owner actions) run under every pause level. The TWAP is M2 (E1); the stepped pause levels that apply D4 are M1 (E2). Until then the as-built rule stands: bids are refused on an invalid feed and the discount clock stops while the type is paused.
+- (A) is rejected because no debt is recovered while the feed is down, the lot carries the market risk and its cap reservation stays held. (B) is rejected because it is the fixed-price drift with no `redo` to escape it.
+- **OEV**: the rising discount competes the bidder-side value back to the protocol; the keeper reward (`min(tip + chip x debt, reward_cap, penalty)`) is the only fixed prize, and it is capped. Oracle-level recapture (SVR, Oval, API3) is outside the engine.
+
+**Trade-offs**
+- Every bid pays for a feed read: on 0.4 the Observe block is 7 of the 15 executions of a partial bid.
+- The band clamp trades price fidelity for protection against a bad feed.
+- (C) prices bids on data up to the maximum age old; the age bound and the floor limit that, and a TWAP resists one bad print better than spot. The floor's definition and the age default belong to the Tier 2 engine design.
+- A bidder who sees the market move before the oracle can trade the lag, within the maximum age and the band.
+
+**Evidence**
+- Code: `quote_bid` (`crates/auction_core/src/auction.rs` lines 91-150), `validate_feed` and `bid_price` (`crates/auction_core/src/price.rs`), `live_price` (`v04/engine_core/src/feed.rs`), the keeper reward (`crates/auction_core/src/liquidation.rs` lines 86-93).
+- Tests (as built): `bid_rejects_invalid_feed`, `discount_frozen_while_paused`, `unsold_auction_holds_max_discount_and_keeps_its_reservation` (`programs/integration_tests/tests/bid.rs`); `a_stale_feed_stops_the_bid` (`v04/harness/tests/bid.rs`). D4 has no tests yet; they land with E2 in M1.
+- Cost: `Liquidate`, `Bid (partial)` and `Bid (final)` rows in `v04/CYCLES.md`; breakdown in `docs/architecture/pricing-model.md` §4.
+- Research: `docs/research/2026-11-07-evm-engines.md` §A1 (Clipper `redo`/`cusp`/`tail`), §A15 (OEV).
+
+**Status**
+Pricing accepted (as built since spec v5). Stale-feed rule decided (spec D4), to build in M1/M2.
+
+---

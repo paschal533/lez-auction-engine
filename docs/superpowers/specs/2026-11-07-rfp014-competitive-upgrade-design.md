@@ -145,14 +145,15 @@ Fixed by this design:
   with a test; documented as the recommended setting for privacy-heavy deployments.
 - E7 Deficit ledger with a minimum write-off amount; rolling-window mint cap on debt auctions.
 - E8 Parameter changes that loosen safety wait a delay and emit an event; tightening is instant.
-- E9 Any F8 findings from T1.3. The audit (`docs/architecture/f8-parameters.md`) found four
+- E9 Any F8 findings from T1.3. The audit (`docs/architecture/f8-parameters.md`) found five
   values fixed in code that the admin cannot set (`production default — Tier 2`); each becomes
   an init parameter with today's value as its default:
   - `MAX_CONF_BPS` (1_000 bps) as the reference oracle's confidence limit (`price.rs:31`);
   - `REF_ORACLE_CLAMP_BPS` (±2_000 bps) reference-oracle clamp around the admin price
     (`price.rs:32`);
   - `DEBT_RELIST_DELAY_MS` (600_000 ms) debt-auction relist delay (`args.rs:20`);
-  - the feed sanity window, market price within [R / 2, 2 · R] (inline, `price.rs:79-80`).
+  - the feed sanity window, market price within [R / 2, 2 · R] (inline, `price.rs:79-80`);
+  - the reference-oracle scale, hardcoded to `OracleScale::Ray` (`programs/auction_engine/src/system.rs:44-50`), default Ray.
 
 Left to that design: data layouts, exact parameters and defaults, error codes, ADR numbers
 (continue from ADR-067), cycle budgets.

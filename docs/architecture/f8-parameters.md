@@ -45,10 +45,11 @@ Kinds:
 | `MAX_SLACK_MS` (v04 only) | 300_000 | `v04/engine_core/src/check.rs:16` | init parameter bound | Upper end of the admin-set clock slack `slack_ms`. |
 | feed band ranges *(inline)* | `band_lo_bps` in 5_000..=10_000, `band_hi_bps` in 10_000..=20_000 | `crates/auction_core/src/price.rs:36-37` | init parameter bound | Range of the admin-set bid-price band around the redemption price (`FeedParams::validate`). |
 | feed sanity window *(inline)* | market price within [R / 2, 2 · R] | `crates/auction_core/src/price.rs:79-80` | production default — Tier 2 | `validate_feed` pauses a collateral type whose market price is outside half to twice the redemption price R, and drops a reference-oracle reading outside half to twice the admin price. The factor 2 is fixed; the admin cannot set it. |
+| reference-oracle scale *(inline)* | `OracleScale::Ray` | `programs/auction_engine/src/system.rs:44-50`, `v04/engine_core/src/system.rs:41-47` | production default — Tier 2 | The reference oracle's `FeedParams.scale` is fixed to Ray; there is no admin parameter, unlike the collateral feed's `oracle_scale`. |
 | reference price step *(inline)* | new price within [old / 2, 2 · old] | `programs/auction_engine/core/src/args.rs:226` | init parameter bound | Bounds each admin change of `protocol_token_ref_price` (`check_ref_price_step`, ADR-031); not applied at init, where there is no old value. |
 
 Counts per Kind: math constant 3 · init parameter bound 12 · protocol limit 1 · production
-default — Tier 2 4 (20 rows; `MAX_CONF_BPS` has one row per role).
+default — Tier 2 5 (21 rows; `MAX_CONF_BPS` has one row per role).
 
 ### Not listed
 
@@ -104,7 +105,7 @@ after the host's admin binds it (ADR-027).
 | `global_cap` | > 0; not below the collateral type cap |
 | `freeze_on_bad_debt` | — |
 | `bad_debt_freeze_threshold` | ≥ `debt_lot` |
-| `protocol_token_enabled` | locked while a system auction is live |
+| `protocol_token_enabled` | locked while a system auction is live (see the lock note below) |
 | `protocol_token_ref_price` | > 0; each change within [old / 2, 2 · old] |
 | `ref_oracle_enabled` (and the reference-oracle actor / account) | locked while a system auction is live |
 | `ref_oracle_max_age_ms` | ≤ `MAX_ORACLE_AGE_MS`; > 0 when the reference oracle is enabled |
@@ -120,6 +121,8 @@ after the host's admin binds it (ADR-027).
 | `max_mint_per_auction` | > 0; ≤ `MAX_MINT_HARD_CAP` |
 | `min_take` | ≤ `surplus_lot` and ≤ `debt_lot` |
 | `system_ttl_ms` | `MIN_SYSTEM_TTL_MS..=MAX_SYSTEM_TTL_MS` |
+
+Lock note: while a system auction is live (surplus or debt), `set_engine_params` refuses any change to the protocol token, the reference oracle, or any system-auction parameter (`surplus_*`, `debt_*`, both schedules, `max_mint_per_auction`, `min_take`, `system_ttl_ms`): the check is `system_rec != cfg.system` (`programs/auction_engine/src/admin.rs:201-206`, `ProtocolTokenLocked`; v04: `v04/sdk/src/system.rs:115-118`). `global_cap`, `freeze_on_bad_debt`, `bad_debt_freeze_threshold` and `ref_oracle_max_age_ms` stay changeable.
 
 v04 only: `slack_ms`, set by the admin at `Init`, changeable by the admin through `SetSlack`,
 bounded by `MIN_SLACK_MS..=MAX_SLACK_MS`.
@@ -137,18 +140,19 @@ bounded by `MIN_SLACK_MS..=MAX_SLACK_MS`.
 | `tip` | — |
 | `chip_bps` | ≤ `penalty_bps` |
 | `reward_cap` | — |
-| `debt_floor` | — |
-| `min_bid` | — |
+| `debt_floor` | `chost` = ceil(`debt_floor` · (10_000 + `penalty_bps`) / 10_000) must be ≥ `min_bid` (`ChostBelowMinBid`, `CollateralParams::validate`, `liquidation.rs:31-33`) |
+| `min_bid` | ≤ `chost` (`ChostBelowMinBid`, `liquidation.rs:31-33`) |
 | `type_cap` | > 0; ≤ `global_cap` |
 | `schedule` | ≤ `MAX_POINTS` points, first at 0 ms, time increasing, discount non-decreasing, each ≤ `MAX_DISCOUNT_BPS` |
 | `admin_paused` | — |
 
 ## F8 gaps (production default — Tier 2)
 
-Four values are fixed in code and cannot be set by the admin. Each is carried into spec §5 E9:
+Five values are fixed in code and cannot be set by the admin. Each is carried into spec §5 E9:
 
 1. Reference-oracle confidence limit: `MAX_CONF_BPS` (1_000 bps), used as the value rather than
    as a cap.
 2. Reference-oracle clamp: `REF_ORACLE_CLAMP_BPS` (±2_000 bps around the admin price).
 3. Debt-auction relist delay: `DEBT_RELIST_DELAY_MS` (600_000 ms).
 4. Feed sanity window: market price within [R / 2, 2 · R] (inline in `validate_feed`).
+5. Reference-oracle scale: hardcoded to `OracleScale::Ray` (`programs/auction_engine/src/system.rs:44-50`, `v04/engine_core/src/system.rs:41-47`), so a Q64x64 reference oracle cannot be configured, unlike a collateral feed's `oracle_scale`. It becomes an init parameter with Ray as the default.

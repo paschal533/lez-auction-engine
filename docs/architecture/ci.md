@@ -169,7 +169,7 @@ The host is Windows; cargo runs in WSL through the wrappers. From Git Bash wrap 
 | `programs`, checker tests | `python3 -m unittest discover -s scripts/tests -v` |
 | `real-proof-push` | `scripts/measure-proof.sh prove_settle_debt 19 3600` (times it and records peak RSS) |
 | `real-proof-nightly` | `scripts/prove-suite.sh 19 21600` (hours; the disk guard runs before each test) |
-| `requirements` | `python3 scripts/check-requirements.py REQUIREMENTS.md && python3 scripts/count-tests.py --check README.md && python3 scripts/gen-refusal-codes.py --check && for t in check_requirements count_tests gen_refusal_codes; do python3 -m unittest discover -s scripts/tests -p "test_$t.py" -v; done` |
+| `requirements` | `python3 scripts/check-requirements.py REQUIREMENTS.md && python3 scripts/count-tests.py --check README.md && python3 scripts/gen-refusal-codes.py --check && python3 -m unittest discover -s scripts/tests -p 'test_check_requirements.py' -v && python3 -m unittest discover -s scripts/tests -p 'test_count_tests.py' -v && python3 -m unittest discover -s scripts/tests -p 'test_gen_refusal_codes.py' -v` |
 | `idl-drift` | `scripts/wsl-env.sh scripts/ci/idl-drift.sh` |
 | `hook-patches` | `scripts/wsl-env.sh env LEZ_PROGRAMS=$HOME/lez-spikes/s1/lez-programs scripts/check-hook-patches.sh` |
 | `fuzz-nightly` | `scripts/wsl-env.sh scripts/fuzz-smoke.sh 60`, then `rm -rf "$HOME/lez-target/plan2/fuzz"` |

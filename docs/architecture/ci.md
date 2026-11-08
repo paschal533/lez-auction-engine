@@ -10,7 +10,7 @@ Schedules are weekly, on Sunday (UTC), not nightly. The repository is now public
 |--------------|-------|----------------|
 | `core` | `core.yml` | Format of our crates, clippy and tests of `auction_core`, the property tests with `PROPTEST_CASES=2000`, the Rust/Python differential check, the preflight script tests of `scripts/demo.sh` and `scripts/testnet-legacy.sh` (stubbed, no network). No risc0 toolchain. |
 | `programs` | `core.yml` | The guests built with the pinned risc0 toolchain; workspace clippy; the engine, real-guest integration, SDK, CLI and `auction_ffi` suites; the vendored stablecoin and token suites; the FFI header drift check (R9); the cycle regression check (ADR-048). |
-| `requirements` | `core.yml` | `scripts/check-requirements.py REQUIREMENTS.md`: every RFP-014 requirement has one row, and every test, golden file, script, CI job and document it names exists (an `#[ignore]`d test must be marked `[ignored]`); then the checker's own tests. It checks that evidence exists, not that a hosted job has run. |
+| `requirements` | `core.yml` | `scripts/check-requirements.py REQUIREMENTS.md`: every RFP-014 requirement has one row, and every test, golden file, script, CI job and document it names exists (an `#[ignore]`d test must be marked `[ignored]`); then the checker's own tests. It checks that evidence exists, not that a hosted job has run. Two drift checks follow: `scripts/count-tests.py --check README.md` (the README's test-count block equals the counts from the source) and `scripts/gen-refusal-codes.py --check` (`docs/architecture/refusal-codes.md` equals the generated catalogue), each with its own unit tests. |
 | `idl-drift` | `core.yml` | `tools/idl-gen` against both guest sources, diffed against the committed IDLs. |
 | `hook-patches` | `core.yml` | The exported hook patch series applied to pristine lez-programs, compared with `programs/stablecoin`. |
 | `coverage` | `core.yml` | `cargo llvm-cov` over our Rust crates (five in Plan 3, plus `auction_ffi` from Plan 4), then `scripts/check-coverage.py`: at least 80 % of lines per crate (ADR-049). |
@@ -117,7 +117,7 @@ If a later `localnet-e2e` run fails, what to check (the first hosted run passed 
 
 Record new timings in this file and in [real-proofs.md](real-proofs.md).
 
-`requirements` (`ubuntu-22.04`): `python3 scripts/check-requirements.py REQUIREMENTS.md`, then the checker tests. No toolchain is installed; the job takes seconds.
+`requirements` (`ubuntu-22.04`): `python3 scripts/check-requirements.py REQUIREMENTS.md`, `python3 scripts/count-tests.py --check README.md`, `python3 scripts/gen-refusal-codes.py --check`, then the unit tests of the three scripts. No toolchain is installed; the job takes seconds.
 
 `module-and-qml-tests` (`basecamp-module.yml`, `ubuntu-22.04`, 120 minute limit, Plan 4). It runs `scripts/ci/free-disk.sh`, installs Nix (`cachix/install-nix-action@v31`, flakes on) with the Logos binary caches `cache.nix.logos.co/public` and `logos-co.cachix.org` as extra substituters, then:
 
@@ -129,10 +129,10 @@ scripts/basecamp/qml-tests.sh
 - The first command builds and runs the core module's C++ tests against LOGOS_CMOCK, with `auction_ffi` and `lez_core` mocked. The pinned builder names this output `unit-tests`; there is no `#tests` output.
 - The second runs every `apps/auctions/tests/qml/tst_*.qml` with `qmltestrunner`, offscreen, on the builder's Qt 6.9.2 and design system `88330d04` (ADR-054).
 - Without a cache hit, the builder's Qt and logos-cpp-sdk graph builds from source, so the first run's time depends on the caches.
-- Hosted run: green on `feat/plan-4` at be82e74 (run 41172947166): 51 module tests and 182 QML tests. Before e9f104a the job failed on hosted runners because `host.sh check` read `/mnt/c`, which exists only in WSL; the C: check is now skipped there.
+- Hosted run: green on `feat/plan-4` at be82e74 (run 41172947166): 51 module tests and 162 QML test functions (`scripts/count-tests.py`, README §Tests). Before e9f104a the job failed on hosted runners because `host.sh check` read `/mnt/c`, which exists only in WSL; the C: check is now skipped there.
 - The live story (`apps/auctions/tests/story.mjs`) is not a CI job (spec, designer's call 6). It runs locally through `scripts/basecamp/run-app.sh` or `scripts/basecamp/install-lgx.sh` ([basecamp-app.md](basecamp-app.md)).
 
-Plan 4 CI status: the Plan 4 changes to `core.yml` (`auction_ffi` in `core`, `programs` and `coverage`, the header drift step) and `basecamp-module.yml` ran green on hosted runners on `feat/plan-4` at be82e74: `core` 41172947093 (core, programs, coverage, idl-drift, hook-patches, requirements) and `basecamp-module` 41172947166 (51 module tests, 182 QML tests). After the merge they ran green on `main` at 1405ea3 (the Plan 4 merge, PR #3): `core` 41187263086 (core, programs, coverage, idl-drift, hook-patches, requirements), `basecamp-module` 41187263071 (51 module tests, 182 QML tests), `guests` 41187263101, `e2e` 41187263076 and `real-proofs` 41187263065.
+Plan 4 CI status: the Plan 4 changes to `core.yml` (`auction_ffi` in `core`, `programs` and `coverage`, the header drift step) and `basecamp-module.yml` ran green on hosted runners on `feat/plan-4` at be82e74: `core` 41172947093 (core, programs, coverage, idl-drift, hook-patches, requirements) and `basecamp-module` 41172947166 (51 module tests, 162 QML test functions). After the merge they ran green on `main` at 1405ea3 (the Plan 4 merge, PR #3): `core` 41187263086 (core, programs, coverage, idl-drift, hook-patches, requirements), `basecamp-module` 41187263071 (51 module tests, 162 QML test functions), `guests` 41187263101, `e2e` 41187263076 and `real-proofs` 41187263065.
 
 ## Pinned versions
 
@@ -169,7 +169,7 @@ The host is Windows; cargo runs in WSL through the wrappers. From Git Bash wrap 
 | `programs`, checker tests | `python3 -m unittest discover -s scripts/tests -v` |
 | `real-proof-push` | `scripts/measure-proof.sh prove_settle_debt 19 3600` (times it and records peak RSS) |
 | `real-proof-nightly` | `scripts/prove-suite.sh 19 21600` (hours; the disk guard runs before each test) |
-| `requirements` | `python3 scripts/check-requirements.py REQUIREMENTS.md && python3 -m unittest discover -s scripts/tests -p 'test_check_requirements.py' -v` |
+| `requirements` | `python3 scripts/check-requirements.py REQUIREMENTS.md && python3 scripts/count-tests.py --check README.md && python3 scripts/gen-refusal-codes.py --check && for t in check_requirements count_tests gen_refusal_codes; do python3 -m unittest discover -s scripts/tests -p "test_$t.py" -v; done` |
 | `idl-drift` | `scripts/wsl-env.sh scripts/ci/idl-drift.sh` |
 | `hook-patches` | `scripts/wsl-env.sh env LEZ_PROGRAMS=$HOME/lez-spikes/s1/lez-programs scripts/check-hook-patches.sh` |
 | `fuzz-nightly` | `scripts/wsl-env.sh scripts/fuzz-smoke.sh 60`, then `rm -rf "$HOME/lez-target/plan2/fuzz"` |

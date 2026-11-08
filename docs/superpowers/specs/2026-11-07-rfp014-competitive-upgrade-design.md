@@ -192,7 +192,7 @@ Left to that design: data layouts, exact parameters and defaults, error codes, A
 |---|---|---|
 | M0 alignment | $2,000 | T1.2–T1.5 already delivered (marked early); F8 audit result |
 | M1 collateral auctions | $6,000 | E2, E4, E5, E6, V4, V5 |
-| M2 price feeds | $4,000 | E1, E3 |
+| M2 price feeds | $4,000 | E1, E3, E9 |
 | M3 debt & surplus | $3,000 | E7, E8 |
 | M4 private path + bot SDK | $6,000 | K1, K2, K3 |
 | M5 Basecamp mini-app | $4,000 | K2/K3 surfaces in the GUI |
@@ -210,7 +210,7 @@ the total stays 12):
 |---|---|---|---|---|---|---|---|---|
 | 0.5 | 2.5 | 1.5 | 1 | 2.5 | 0.5 | 1.5 | 2 | 12 |
 
-Rationale: M5's Basecamp app (182 QML tests, 172-step story) and M6's actor-model port are already
+Rationale: M5's Basecamp app (162 QML tests, 172-step story) and M6's actor-model port are already
 built, so they shrink. M1 and M4 carry most of the new scope, so they grow. Every milestone in the
 bid has a "**Built before the grant**" line listing the items already delivered, each with its
 evidence link, so the remaining weeks visibly cover only what's left.

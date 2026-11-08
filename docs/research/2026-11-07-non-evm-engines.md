@@ -296,7 +296,7 @@ privacy model (ephemeral accounts, public state, no later pull from a reused acc
 | 21 | In-protocol MEV lane for triggers | Skip POB, Jito | Returns trigger MEV to the protocol | Needs sequencer support | Out (platform) | L |
 | 22 | Account-lock griefing analysis (oracle and auction accounts) | Solend USDH | Attacker stalls oracle or bids by locking accounts | Doc plus tests; staleness pause is the safe failure | In (threat model) | S |
 | 23 | Price rate-limit ("stable price") as second trigger condition | Mango | Spike-driven liquidations | Medium: per-type state updated by a keeper; overlaps TWAP | In | M |
-| 24 | Public auction explorer and health metrics (time-to-clear, clearing discount, keeper concentration, shortfall) | Kujira ORCA UI, Drift/Kamino dashboards | Reviewer evidence; ops monitoring | Good: scanner plus GUI | Ext | M |
+| 24 | Public auction explorer and health metrics (time-to-clear, clearing discount, keeper concentration, shortfall) | Kujira ORCA UI, Drift/Kamino dashboards | Visible, testable evidence; ops monitoring | Good: scanner plus GUI | Ext | M |
 | 25 | Per-collateral risk tiers (elevation groups / isolated pools) | Kamino, Solend, Drift isolated IF | Contagion between collaterals | Have: per-collateral config and caps | In | - |
 
 ---
@@ -384,7 +384,7 @@ Should not get:
 
 ## (d) Top 15 recommended improvements
 
-Ranked by combined value to an RFP-014 reviewer (requirement coverage, evidence, distinctiveness) and
+Ranked by requirement coverage, visible and testable evidence, distinctiveness and
 real-world safety. Effort: S <= 2 days, M <= 1 week, L > 1 week.
 
 1. **Proving-latency-aware stairstep schedule (S).**
@@ -419,7 +419,7 @@ real-world safety. Effort: S <= 2 days, M <= 1 week, L > 1 week.
 7. **Account-lock and griefing section in the threat model, with tests (S).**
    - Oracle-account and auction-account write-lock stalls; whether a staleness pause is the only effect.
    - Whether a griefer can keep a type paused indefinitely, and what that costs them.
-   - Solend USDH precedent; reviewers look for platform-specific threats.
+   - Solend USDH precedent; integrators and auditors check for platform-specific threats.
 8. **Hot-account audit and concurrent-auction benchmark (M; L if refactored).**
    - Show N simultaneous auctions with interleaved bids: cycles and transaction size per bid, and which
      accounts every bid writes (today `BUFFER` and the collateral config).
@@ -450,7 +450,7 @@ real-world safety. Effort: S <= 2 days, M <= 1 week, L > 1 week.
     - Time-to-clear, discount at clearing, shortfall per auction.
     - Keeper concentration (share of the top-3 bidders, which shows whether Reflexer-style keeper
       centralisation is recurring).
-    - Paused time per type. Gives reviewers live evidence; fed by the existing scanner.
+    - Paused time per type. Gives integrators and auditors live evidence; fed by the existing scanner.
 15. **Rolling-window liquidation throttle (S-M).**
     - Complement the static caps with a per-type "max collateral entering auction per window" that shrinks
       lots rather than reverting.

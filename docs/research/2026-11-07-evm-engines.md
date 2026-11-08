@@ -1,7 +1,7 @@
 > Research note, 2026-11-07. Sources are cited inline. Claims tagged *secondary* or *not found*
 > come from search summaries or memory and must be re-checked before they are quoted in a proposal.
 
-# Research: production liquidation and auction engines on EVM, and what makes ours best in class
+# Research: production liquidation and auction engines on EVM, and what to adopt
 
 Scope: extends `docs/research/research-3-auction-mechanics.md` (R3). R3 already covers GEB IDCAH maths, Maker Dog/Clipper
 basics (tip/chip/chost/Hole/hole), Black Thursday, u128 fixed point and the schedule choice. This note goes wider (more
@@ -336,7 +336,7 @@ Source: https://github.com/reserve-protocol/protocol/blob/master/docs/system-des
 | 24 | Kicker bonds | Ajna | Discretionary triggers without an oracle | OUT (not needed with an oracle) | n/a |
 | 25 | Formal specs (Certora/K) + stateful fuzz (Echidna/Foundry invariants) | Maker k-dss; Aave and Morpho Certora; Liquity Echidna | Proof the conservation and liveness properties hold | IN (we have Kani + proptest; extend) | M |
 | 26 | Reference keeper bot and auction UI | Maker auction-keeper (archived 2023); Morpho liquidation bot; Comet example liquidator | Keeper centralisation | IN (soft requirement; we have SDK + CLI) | M |
-| 27 | Agent-based stress simulation of parameters | Gauntlet / Chaos Labs reports for Aave and Compound; Maker risk models | Parameters picked by intuition | IN (off-chain; reviewer value) | M |
+| 27 | Agent-based stress simulation of parameters | Gauntlet / Chaos Labs reports for Aave and Compound; Maker risk models | Parameters picked by intuition | IN (off-chain; visible, testable evidence) | M |
 
 ---
 
@@ -364,7 +364,7 @@ Source: https://github.com/reserve-protocol/protocol/blob/master/docs/system-des
 
 ## (d) Top 15 recommended improvements, ranked
 
-Ranking weighs (i) what an RFP-014 reviewer can see and score, (ii) real safety value, (iii) effort. All are IN scope
+Ranking weighs (i) visible, testable evidence, (ii) real safety value, (iii) effort. All are IN scope
 unless marked.
 
 1. **Chunked partial liquidation (`liquidation_quantity` + Maker `room` fitting)** — M.
@@ -383,7 +383,7 @@ unless marked.
    - Replace the binary pause with Maker-style levels: 1 = no new liquidations; 2 = no new system auctions; 3 = no bids,
      reserved for a proven exploit.
    - Each level is reversible. **No level can move collateral** (no `yank`), keeping R3's "no privileged drain" rule.
-   - Document the transitions as a state machine for reviewers.
+   - Document the transitions as a state machine for integrators and auditors.
 4. **Chain-gap and oracle-resume grace period** — S.
    - LEZ has a single sequencer. If consecutive `CLOCK_01` readings, or the feed's resume after a pause, show a gap
      above `max_gap_ms`, block new *liquidation triggers* for `grace_ms` (Aave PriceOracleSentinel).
@@ -400,7 +400,7 @@ unless marked.
      auction start and `close_*`.
    - `reward = min(base + rate·overdue_ms, max)`, paid only from buffer above `surplus_buffer_target`, with a per-epoch
      treasury cap.
-   - This removes the "someone must run cron" liveness assumption that reviewers will probe.
+   - This removes the "someone must run cron" liveness assumption that integrators and auditors check.
 7. **Deficit ledger and bad-debt transparency** — S.
    - Per-type and global `deficit_booked`, `deficit_covered_by_buffer`, `deficit_covered_by_mint`, plus events (Aave
      v3.3).
@@ -422,7 +422,7 @@ unless marked.
    - Golden scenarios as integration tests: Black Thursday (a 50% drop plus a 2 h feed gap), LUNA (a feed stuck at its
      floor), a Compound-DAI print (a single +30% spike), Euler v1 (owner self-liquidation after self-insolvency), a RAI
      debt-auction restart loop, and a dust-farm attempt.
-   - Each asserts the safeguard fires. Reviewers value this highly; it also turns section (c) into evidence.
+   - Each asserts the safeguard fires; it also turns section (c) into evidence.
 10. **Debt-auction mint hardening** — S.
     - Add a rolling-window mint cap (`max_mint_per_epoch`) on top of `max_mint_per_auction`.
     - A Kani proof that repeated restarts and lot growth never exceed it.
@@ -448,7 +448,7 @@ unless marked.
     - `surplus_burn_bps`: burn through the auction, with the remainder to a configurable `surplus_receiver` (staking or
       treasury), as Sky's Splitter and GEB's MixedStrat/Recycling do.
     - Keep the auction's oracle-bounded premium (`want × pip` analogue, ADR-017) and the relist delay (`hop`).
-    - It shows reviewers the engine is reusable across tokenomics.
+    - It shows integrators the engine is reusable across tokenomics.
 15. **Trigger-reward OEV analysis + self-liquidation cool-off** — S.
     - A short ADR showing that the time-increasing discount recaptures bidder-side OEV, that the fixed trigger reward is
       the only OEV-exposed prize (capped, at most gas plus margin), and that oracle-level OEV auctions (SVR, Oval, API3)
@@ -501,7 +501,7 @@ Verification caveats:
   - the SVR totals;
   - Aave v3.3 threshold values (the BGD post uses them as examples, not as final values);
   - the Ajna start multiple.
-- Recheck them on-chain before quoting them in the proposal. I could not fetch the Ajna post-mortem or the RAI write-up
-  (HTTP 403), so their details are taken from search summaries.
+- Recheck them on-chain before quoting them in the proposal. The Ajna post-mortem and the RAI write-up returned HTTP 403,
+  so their details are taken from search summaries.
 - The Compound DAI, Venus/LUNA, Aave CRV, Euler v1 and Inverse "pessimistic price" details are from memory and the
   secondary sources above.

@@ -217,7 +217,7 @@ discount.
 
 Liquidation gate (in this order, at the collateral actor's `proceed`, `observe.rs:202-218`):
 level (§3.2) → feed valid → grace (§3.3) → `T` available (else `TwapUnavailable`) →
-`|M - T| * 10_000 / T <= dev` (else `SpotTwapDeviation`) → `P_liq`. With the TWAP off
+`|M - T| * 10_000 <= dev * T` (exact, inclusive; else `SpotTwapDeviation`) → `P_liq`. With the TWAP off
 (`twap_window_ms = 0`) the two TWAP steps are skipped and `P_liq = band(edge(M))`. The deviation refusal is the
 ClipperMom-style breaker (`docs/research/2026-11-07-evm-engines.md` row 1); it is built in Plan 9
 with E1 because the bid anchor needs the same parameter (dependency, §5).
@@ -744,7 +744,7 @@ the e2e's 15 s blocks. The other values stand (Plan 9 ruling R9-13).
 | ADR-069 | Tier 2 edits no file under `programs/`, `crates/auction_core/`, `crates/auction_engine_params/` or the root manifest (supersedes spec S2); new pure logic lives in `v04/risk_core`; checked by `git diff` + `check-guests.sh` + `guests.yml`. |
 | ADR-070 | On-chain TWAP: an 8-slot ring of validated mids at the collateral actor, time-weighted over a window anchored at `min(now, newest + max_age)`, broken by any gap longer than the feed's max age, valid only with `min_obs` samples. `T` lies in `[min p_i − 7, max p_i]` (lower end saturating at 0): the floor rounding of up to 8 terms can put it up to 7 units below the smallest sample, never above the largest. |
 | ADR-071 | One confidence rule: every engine price is a payout, so it values the collateral at the high edge (`edge(min(M, T))` for liquidation, `edge(M)` for bids); the unsafe test stays the host's. |
-| ADR-072 | Bids are anchored to the TWAP from above only (`P <= T(1 + dev)`); a liquidation is refused while spot deviates from the TWAP by more than `dev`. |
+| ADR-072 | Bids are anchored to the TWAP from above only (`P <= T(1 + dev)`); a liquidation is refused while spot deviates from the TWAP by more than `dev`, i.e. unless `|M - T| * 10_000 <= dev * T` (exact). |
 | ADR-073 | Pause levels 0-3 per type with a config-level system level; `admin_paused` = level 3 for collateral operations with code 6020; risk-reducing operations are never gated; one rule table in `risk_core::pause` drives code and tests. |
 | ADR-074 | D4 as built: on an invalid feed, bids at levels <= 2 use the last-good TWAP while it is younger than `stale_bid_max_age_ms`, with the discount clock frozen and the price clamped to the floor `P_liq / (1 - d_max_eff)`. |
 | ADR-075 | A reading at the feed's configured bound is invalid; a feed or chain gap of at least `grace_min_gap_ms` starts a grace period that refuses `Liquidate` only. |

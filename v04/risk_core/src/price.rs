@@ -76,14 +76,19 @@ pub fn fallback_bid_price(t_lg: u128, last_conf_bps: u16, r: u128, feed: &FeedPa
     bid_price(edge(t_lg, last_conf_bps), r, feed)
 }
 
-/// The spot/TWAP deviation test `floor(|M - T| · 10_000 / T) <= dev`, inclusive; `false` when
-/// `T == 0` or the quotient does not fit.
+/// The spot/TWAP deviation test `|M - T| · 10_000 <= dev · T` (exact, inclusive; ADR-072);
+/// `false` when `T == 0`. For an integer `|M - T|` this is `|M - T| <= floor(dev · T / 10_000)`,
+/// the same exact rule as the bid anchor.
 #[must_use]
 pub fn within_deviation(m: u128, t: u128, dev_bps: u16) -> bool {
     if t == 0 {
         return false;
     }
-    mul_div_floor(m.abs_diff(t), BPS, t).is_ok_and(|d| d <= u128::from(dev_bps))
+    match mul_div_floor(t, u128::from(dev_bps), BPS) {
+        Ok(lim) => m.abs_diff(t) <= lim,
+        // `T · dev / 10_000` exceeds u128::MAX, so it exceeds any `|M - T|`.
+        Err(_) => true,
+    }
 }
 
 #[cfg(test)]
@@ -191,9 +196,10 @@ mod tests {
             live_bid_price(20_000, Some(10_001), 0, 1, u128::MAX, &f),
             10_002
         );
-        // the deviation floors, so 2_000.9 bps is still within 2_000 (inclusive floor rule).
-        assert!(within_deviation(1_200_090, 1_000_000, 2_000));
-        assert!(!within_deviation(1_200_100, 1_000_000, 2_000));
+        // the deviation is exact: 2_000.9 bps is outside 2_000.
+        assert!(within_deviation(1_200_000, 1_000_000, 2_000));
+        assert!(!within_deviation(1_200_001, 1_000_000, 2_000));
+        assert!(!within_deviation(1_200_090, 1_000_000, 2_000));
         // liq at the edge of the smaller of spot and TWAP, floored: 0.9 RAY · 0.99.
         assert_eq!(
             liq_price(RAY, Some(RAY / 10 * 9), 100, RAY, &wide()),
@@ -233,6 +239,7 @@ mod tests {
             Just(1u128),
             Just(2u128),
             Just(RAY),
+            Just(u128::MAX / 10_000 - 1),
             Just(u128::MAX / 10_000),
             Just(u128::MAX / 10_000 + 1),
             Just(u128::MAX - 1),
@@ -337,6 +344,11 @@ mod tests {
             let base = t.map_or(m, |t| m.min(t));
             prop_assert_eq!(p, liq_price(base, None, conf, r, &f));
             prop_assert_eq!(p, fallback_bid_price(base, conf, r, &f));
+            // Independently: with an identity band and no confidence, the smaller of M and T.
+            if let Some(t) = t {
+                let want = if m <= t { m } else { t };
+                prop_assert_eq!(liq_price(m, Some(t), 0, u128::MAX, &open()), want);
+            }
         }
 
         /// With an identity band and no confidence, the live bid is `M` exactly when
@@ -374,8 +386,8 @@ mod tests {
             );
         }
 
-        /// `within_deviation` is `|M - T| · 10_000 < (dev + 1) · T` (the inclusive floor rule),
-        /// biased onto `M` exactly at `T ± T · dev / 10_000` and one past it.
+        /// `within_deviation` is `|M - T| · 10_000 <= dev · T` (the exact inclusive rule),
+        /// biased onto `M` exactly at `T ± floor(T · dev / 10_000)` and one past it.
         #[test]
         fn deviation_matches_the_exact_rule(
             t in edge_u128(), dev in edge_bps(), above in any::<bool>(), delta in -1i8..=1,
@@ -393,8 +405,7 @@ mod tests {
             if t == 0 {
                 prop_assert!(!got);
             } else {
-                let lim = u128::from(dev).saturating_add(1);
-                prop_assert_eq!(got, w(m.abs_diff(t), BPS) < w(lim, t));
+                prop_assert_eq!(got, w(m.abs_diff(t), BPS) <= w(u128::from(dev), t));
             }
         }
     }

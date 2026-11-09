@@ -374,7 +374,7 @@ proptest! { #[test] fn twap_within_sample_range(/* 1..=8 samples, strictly incre
   - `pub fn liq_price(m: u128, t: Option<u128>, conf_bps: u16, r: u128, feed: &FeedParams) -> u128`: `band(edge(min(M, T)))`, or `band(edge(M))` when `t` is `None`.
   - `pub fn live_bid_price(m: u128, t: Option<u128>, conf_bps: u16, dev_bps: u16, r: u128, feed: &FeedParams) -> u128`: `band(min(edge(M), floor(T * (10_000 + dev) / 10_000)))`. The anchor saturates to `u128::MAX` on overflow. It is `band(edge(M))` when `t` is `None` or `dev_bps == 0` *(Plan 9 ruling R9-5)*.
   - `pub fn fallback_bid_price(t_lg: u128, last_conf_bps: u16, r: u128, feed: &FeedParams) -> u128`: `band(edge(T_lg))`.
-  - `pub fn within_deviation(m: u128, t: u128, dev_bps: u16) -> bool`: `floor(|M − T| * 10_000 / T) <= dev`. It is `false` when `t == 0` or the math errors.
+  - `pub fn within_deviation(m: u128, t: u128, dev_bps: u16) -> bool`: `|M − T| * 10_000 <= dev * T` (exact, inclusive; ADR-072), computed as `|M − T| <= floor(T * dev / 10_000)`. It is `false` when `t == 0` *(fix round 1 ruling: replaces the earlier floor rule, so the breaker agrees with the bid cap)*.
 
 - [ ] **Step 1: Write the failing tests.** The wide band is `FeedParams { band_lo_bps: 5_000, band_hi_bps: 20_000, .. }`, and `r = RAY`.
 

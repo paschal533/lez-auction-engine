@@ -53,4 +53,43 @@ mod proofs {
             r.saturating_mul(2)
         );
     }
+
+    /// For any ring of up to 3 samples (strictly increasing times, prices below `2^64`) and any
+    /// query, a returned TWAP lies in `[min - 7, max]` of the ring's prices (spec §3.1.3).
+    #[kani::proof]
+    #[kani::unwind(9)]
+    fn twap_bounded_by_samples() {
+        use crate::twap::{Sample, TwapRing, twap};
+        use alloc::vec::Vec;
+        let len: usize = kani::any();
+        kani::assume(len >= 1 && len <= 3);
+        let mut samples: Vec<Sample> = Vec::new();
+        let mut ts: u64 = kani::any();
+        let (mut lo_p, mut hi_p) = (u128::MAX, 0u128);
+        for i in 0..len {
+            if i != 0 {
+                let gap: u64 = kani::any();
+                kani::assume(gap >= 1);
+                let Some(next) = ts.checked_add(gap) else {
+                    return;
+                };
+                ts = next;
+            }
+            let price_ray: u128 = kani::any();
+            kani::assume(price_ray < 1 << 64);
+            lo_p = lo_p.min(price_ray);
+            hi_p = hi_p.max(price_ray);
+            samples.push(Sample {
+                ts_ms: ts,
+                price_ray,
+            });
+        }
+        let ring = TwapRing {
+            samples,
+            last_conf_bps: 0,
+        };
+        if let Some((t, _)) = twap(&ring, kani::any(), kani::any(), kani::any(), kani::any()) {
+            assert!(lo_p.saturating_sub(7) <= t && t <= hi_p);
+        }
+    }
 }

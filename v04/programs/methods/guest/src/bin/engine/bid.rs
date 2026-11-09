@@ -86,6 +86,8 @@ pub fn bid_ctx(
         paused_total_ms: observed.paused_total_ms,
         min_bid: params.min_bid,
         chost,
+        paused_since_ms: None,
+        fallback: false,
     };
     (probe, auction, ctx)
 }

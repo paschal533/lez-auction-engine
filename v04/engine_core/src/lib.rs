@@ -8,6 +8,7 @@ pub mod actors;
 pub mod assertions;
 pub mod bid;
 pub mod check;
+pub mod ext;
 pub mod feed;
 pub mod liquidation;
 pub mod msg;

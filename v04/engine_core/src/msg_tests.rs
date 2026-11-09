@@ -29,6 +29,7 @@ fn root_variant_indices_are_fixed() {
             collateral_def: id(1),
             args: CollateralArgs::defaults_for_tests(),
             now_ms: 2,
+            risk: Box::new(RiskArgs::legacy()),
         },
         EngineMsg::Liquidate {
             config: id(1),
@@ -135,6 +136,8 @@ fn internal_variant_indices_are_fixed() {
             paused_total_ms: 8,
             min_bid: 9,
             chost: 10,
+            paused_since_ms: None,
+            fallback: false,
         },
         EngineMsg::Proceed,
         EngineMsg::Configure {
@@ -146,6 +149,7 @@ fn internal_variant_indices_are_fixed() {
                 clock: actor(8, 9),
                 slack_ms: 10,
             },
+            risk: Box::new(RiskArgs::legacy()),
         },
         EngineMsg::Probe {
             kind: ProbeKind::Config,
@@ -423,4 +427,34 @@ fn slack_update_round_trips_at_index_46() {
         borsh::from_slice::<EngineMsg>(&bytes).expect("decodes"),
         msg
     );
+}
+
+#[test]
+fn set_collateral_and_bid_ctx_carry_the_appended_fields() {
+    let set = EngineMsg::SetCollateral {
+        salt: 1,
+        collateral_def: id(1),
+        args: CollateralArgs::defaults_for_tests(),
+        now_ms: 2,
+        risk: Box::new(RiskArgs::recommended()),
+    };
+    let ctx = EngineMsg::BidCtx {
+        bidder: id(3),
+        position: id(4),
+        nonce: 5,
+        max_debt_in: 6,
+        min_collateral_out: 7,
+        price_ray: 8,
+        now_ms: 9,
+        paused_total_ms: 10,
+        min_bid: 11,
+        chost: 12,
+        paused_since_ms: Some(13),
+        fallback: true,
+    };
+    for (msg, index) in [(set, 1), (ctx, 13)] {
+        let bytes = borsh::to_vec(&msg).expect("encodes");
+        assert_eq!(bytes.first(), Some(&index), "{msg:?}");
+        assert_eq!(EngineMsg::try_from_slice(&bytes).expect("decodes"), msg);
+    }
 }

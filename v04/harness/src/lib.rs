@@ -25,6 +25,7 @@ pub mod impostor;
 pub mod init;
 pub mod invariants;
 pub mod system;
+pub mod tier2;
 pub mod world;
 pub use world::World;
 

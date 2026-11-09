@@ -83,12 +83,14 @@ fn handle_message(input: &ReceiveInput) -> Response {
             collateral_def,
             ref args,
             now_ms,
-        } => admin::on_set_collateral(input, salt, collateral_def, args, now_ms),
+            ref risk,
+        } => admin::on_set_collateral(input, salt, collateral_def, args, now_ms, risk),
         EngineMsg::Configure {
             collateral_def,
             ref args,
             ctx,
-        } => admin::on_configure(input, collateral_def, args, ctx),
+            ref risk,
+        } => admin::on_configure(input, collateral_def, args, ctx, risk),
         EngineMsg::InitReads => admin::on_init_reads(input),
         EngineMsg::Observe { now_ms } => observe::on_observe(input, now_ms),
         EngineMsg::Probe { kind } => proxy::probe(input, kind),
@@ -219,6 +221,8 @@ fn handle_message(input: &ReceiveInput) -> Response {
             paused_total_ms,
             min_bid,
             chost,
+            paused_since_ms: _,
+            fallback: _,
         } => bid::on_bid_ctx(
             input,
             &bid::BidCtxArgs {

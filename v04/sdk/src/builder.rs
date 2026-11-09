@@ -25,6 +25,7 @@ use engine_core::{
     state::ConfigState,
 };
 use lee::{AccountId, Actor, PublicAccountEvidence};
+use risk_core::RiskArgs;
 use token_core::holding_actor;
 
 use crate::{SdkError, simulate::StateSource};
@@ -293,12 +294,29 @@ pub fn plan_init(engine: AccountId, admin: AccountId, args: InitArgs) -> Result<
 /// `SetCollateral` at the admin's proxy, signed by the admin: proxy, config, collateral actor,
 /// and what the collateral actor observes (host params, oracle, clock).
 ///
+/// Sends the legacy (Tier 2 off) risk parameters; see [`plan_set_collateral_with`].
+///
 /// # Errors
 /// [`SdkError::Encode`] if the message does not encode.
 pub fn plan_set_collateral(
     d: &Deployment,
     collateral_def: AccountId,
     args: CollateralArgs,
+    now_ms: u64,
+) -> Result<Plan, SdkError> {
+    plan_set_collateral_with(d, collateral_def, args, RiskArgs::legacy(), now_ms)
+}
+
+/// [`plan_set_collateral`] with the type's Tier 2 risk parameters `risk` (ADR-082); the same
+/// actors and signer.
+///
+/// # Errors
+/// [`SdkError::Encode`] if the message does not encode.
+pub fn plan_set_collateral_with(
+    d: &Deployment,
+    collateral_def: AccountId,
+    args: CollateralArgs,
+    risk: RiskArgs,
     now_ms: u64,
 ) -> Result<Plan, SdkError> {
     let proxy = d.proxy(d.admin);
@@ -315,6 +333,7 @@ pub fn plan_set_collateral(
         collateral_def,
         args,
         now_ms,
+        risk: Box::new(risk),
     };
     Plan::new(proxy, actors, vec![d.admin], Vec::new(), &msg)
 }

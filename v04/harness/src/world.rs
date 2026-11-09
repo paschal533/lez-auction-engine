@@ -17,6 +17,7 @@ use lee::{AccountId, Actor, PrivateKey, error::LeeError};
 use lee_core::program::TransactionEvent;
 use mock_host_core::{HostMsg, Params, TAG_PARAMS, is_unsafe, position_id, vault_id};
 use oracle_core::OracleMsg;
+use risk_core::RiskArgs;
 use token_core::{Holding, TokenMsg, holding_actor};
 
 use crate::Chain;
@@ -237,23 +238,35 @@ impl World {
 
     /// [`World::new`] with the host's redemption price `redemption_price_ray`.
     pub fn new_at(redemption_price_ray: u128) -> Self {
-        Self::new_with(redemption_price_ray, |_| {})
+        Self::new_with(
+            redemption_price_ray,
+            |_| {},
+            Self::collateral_args(),
+            RiskArgs::legacy(),
+        )
     }
 
     /// [`World::new`] with the host's `Params` edited by `edit` before the host is initialised.
     /// Only an edit the engine's `Init` accepts leaves a world to return (ADR-065); for one it
     /// refuses use [`World::bare_with_host`].
     pub fn new_with_host(edit: impl FnOnce(&mut Params)) -> Self {
-        Self::new_with(RAY, edit)
+        Self::new_with(RAY, edit, Self::collateral_args(), RiskArgs::legacy())
     }
 
-    fn new_with(redemption_price_ray: u128, edit: impl FnOnce(&mut Params)) -> Self {
+    /// The common constructor: [`World::bare_with`], then `Init`, `SetCollateral` with `args`
+    /// and `risk`, and the host bound to the config actor.
+    pub(crate) fn new_with(
+        redemption_price_ray: u128,
+        edit: impl FnOnce(&mut Params),
+        args: CollateralArgs,
+        risk: RiskArgs,
+    ) -> Self {
         let mut w = Self::bare_with(redemption_price_ray, edit);
         let key = w.admin_key.clone();
         let init = w.init_msg();
         w.send_engine(w.admin, &[&key], &init)
             .expect("the engine is initialised");
-        let set = w.set_collateral_msg(Self::collateral_args());
+        let set = w.set_collateral_msg_with(args, risk);
         w.send_engine(w.admin, &[&key], &set)
             .expect("the collateral is configured");
         w.bind_host().expect("the host binds the config actor");
@@ -342,14 +355,9 @@ impl World {
     }
 
     /// `SetCollateral` of the world's collateral definition for salt [`SALT`], claiming the
-    /// world's current time.
+    /// world's current time, with the legacy (Tier 2 off) risk parameters.
     pub fn set_collateral_msg(&self, args: CollateralArgs) -> EngineMsg {
-        EngineMsg::SetCollateral {
-            salt: SALT,
-            collateral_def: self.collateral_def,
-            args,
-            now_ms: self.now_ms,
-        }
+        self.set_collateral_msg_with(args, RiskArgs::legacy())
     }
 
     /// The actors a root engine message at the proxy `(proxy, E)` touches.

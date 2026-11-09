@@ -27,6 +27,7 @@ use engine_core::{
     },
     assertions,
     check::{expect_from, fail, slack_in_range},
+    ext::{CollateralExt, ConfigExt, validate_risk},
     msg::{EngineMsg, ProbeKind, ProtocolGenesis},
     state::{
         AccountingState, CollateralState, ConfigState, ObserveCtx, SystemParamsRec, TAG_COLL,
@@ -39,6 +40,7 @@ use lee_core::{
 };
 use mock_host_core::HostMsg;
 use oracle_core::OracleMsg;
+use risk_core::RiskArgs;
 use token_core::TokenMsg;
 
 /// The engine program `E`: the receiver's program.
@@ -210,6 +212,7 @@ fn init_config(input: &ReceiveInput, c: &InitConfig<'_>) -> Response {
         pending_genesis: c.protocol_genesis,
         collateral_def: None,
         pending_host_read: true,
+        ext: ConfigExt::default(),
     };
     Response::set_state(state.encode())
 }
@@ -435,6 +438,7 @@ pub fn on_set_collateral(
     collateral_def: AccountId,
     args: &CollateralArgs,
     now_ms: u64,
+    risk: &RiskArgs,
 ) -> Response {
     let admin = expect_admin_proxy(input, salt);
     let config = ConfigState::decode(input.pre_state.as_ref())
@@ -453,6 +457,7 @@ pub fn on_set_collateral(
     }
     args.validate(config.global_cap)
         .unwrap_or_else(|err| fail(err));
+    validate_risk(risk, args.max_oracle_age_ms).unwrap_or_else(|err| fail(err));
     let k = input.receiver.account_id;
     let configure = EngineMsg::Configure {
         collateral_def,
@@ -463,6 +468,7 @@ pub fn on_set_collateral(
             clock: config.clock,
             slack_ms: config.slack_ms,
         },
+        risk: Box::new(*risk),
     };
     let collateral = collateral_actor(engine(input), k, collateral_def);
     let relay = SyncMessage::new(collateral, &configure)
@@ -490,6 +496,7 @@ pub fn on_configure(
     collateral_def: AccountId,
     args: &CollateralArgs,
     ctx: ObserveCtx,
+    risk: &RiskArgs,
 ) -> Response {
     let config = engine_sender(input, EngineError::NotAdmin);
     if input.receiver != collateral_actor(engine(input), config, collateral_def)
@@ -524,6 +531,11 @@ pub fn on_configure(
         schedule: recs_from_schedule(&params.schedule),
         admin_paused: args.admin_paused,
         ctx,
+        // Plan 9 ruling R9-6: a new `SetCollateral` keeps the pause level and the ring.
+        ext: CollateralExt {
+            risk: *risk,
+            ..base.ext.clone()
+        },
         ..base
     };
     if next.pending.is_some() {
@@ -561,5 +573,13 @@ fn fresh_collateral(
         last_seen_oracle_ts: None,
         ctx,
         pending: None,
+        // No presets in the guest (ADR-082): the all-zero (TWAP off) parameters, written out.
+        ext: CollateralExt::new(RiskArgs {
+            twap_window_ms: 0,
+            twap_min_spacing_ms: 0,
+            twap_min_obs: 0,
+            max_spot_twap_dev_bps: 0,
+            stale_bid_max_age_ms: 0,
+        }),
     }
 }

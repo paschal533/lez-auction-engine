@@ -463,6 +463,8 @@ fn forged_bid_ctx_settled_and_release_are_refused() {
         paused_total_ms: 0,
         min_bid: 0,
         chost: 0,
+        paused_since_ms: None,
+        fallback: false,
     };
     let settled = EngineMsg::Settled {
         config: w.config.account_id,

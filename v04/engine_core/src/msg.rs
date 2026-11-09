@@ -6,6 +6,7 @@
 use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::{AccountId, Actor};
+use risk_core::RiskArgs;
 
 use crate::{
     state::{CollateralState, ObserveCtx},
@@ -36,12 +37,14 @@ pub enum EngineMsg {
         protocol_genesis: Option<ProtocolGenesis>,
     },
     /// 1. Sets (or replaces) a collateral type's parameters, then observes the feed with the new
-    ///    admin flag at the clock claim `now_ms` (row 2).
+    ///    admin flag at the clock claim `now_ms` (row 2). `risk` is the type's Tier 2 parameters
+    ///    (spec §3.1.6, §3.2.4), appended last.
     SetCollateral {
         salt: u64,
         collateral_def: AccountId,
         args: CollateralArgs,
         now_ms: u64,
+        risk: Box<RiskArgs>,
     },
     /// 2. Liquidates `position`; `nonce` is the expected auction number, `now_ms` the clock claim.
     Liquidate {
@@ -151,6 +154,10 @@ pub enum EngineMsg {
         paused_total_ms: u64,
         min_bid: u128,
         chost: u128,
+        /// The open pause clock of a D4 fallback bid (spec §3.2.3); `None` for a live bid.
+        paused_since_ms: Option<u64>,
+        /// Whether the price is the D4 fallback price (spec §3.2.3).
+        fallback: bool,
     },
     /// 14. Sentinel of the Read block: the replies are in, consume them.
     Proceed,
@@ -160,6 +167,8 @@ pub enum EngineMsg {
         collateral_def: AccountId,
         args: CollateralArgs,
         ctx: ObserveCtx,
+        /// The validated `SetCollateral` risk parameters (Plan 9 ruling R9-4).
+        risk: Box<RiskArgs>,
     },
     /// 16. A seeded probe (ruling R-8b): its handler only asserts the receiver holds a `kind`
     ///     state and sends nothing, so the PDA seed it carries is inherited by no other message.

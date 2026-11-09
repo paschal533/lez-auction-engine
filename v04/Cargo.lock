@@ -2582,6 +2582,7 @@ dependencies = [
  "mock_host_core",
  "oracle_core",
  "programs",
+ "risk_core",
  "sha2 0.10.9",
  "token_core",
 ]
@@ -7176,6 +7177,7 @@ dependencies = [
  "lee_core",
  "mock_host_core",
  "oracle_core",
+ "risk_core",
  "sequencer_service_rpc",
  "sha2 0.10.9",
  "token_core",

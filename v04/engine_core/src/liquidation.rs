@@ -60,6 +60,7 @@ pub fn awaiting_seize(id: &AuctionIdentity, ctx: QuoteCtx) -> AuctionState {
         schedule: ctx.collateral.schedule.clone(),
         type_paused_total_at_start: ctx.collateral.paused_total_ms,
         scratch: Some(AuctionScratch::Quote(Box::new(ctx))),
+        stale_cap_ray: 0,
     }
 }
 

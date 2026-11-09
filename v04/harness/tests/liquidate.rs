@@ -22,6 +22,7 @@ use harness::{
 };
 use lee::{AccountId, Actor};
 use mock_host_core::{Params, Position, TAG_PARAMS};
+use risk_core::RiskArgs;
 use token_core::TokenMsg;
 
 const COLLATERAL: u128 = 500_000;
@@ -106,6 +107,7 @@ fn expected_auction(w: &World, position: AccountId, start_ms: u64) -> AuctionSta
         schedule: collateral_state(w).schedule,
         type_paused_total_at_start: 0,
         scratch: None,
+        stale_cap_ray: 0,
     }
 }
 
@@ -380,6 +382,7 @@ fn collateral_type_the_host_does_not_hold_is_refused() {
         collateral_def: second,
         args: World::collateral_args(),
         now_ms: T,
+        risk: Box::new(RiskArgs::legacy()),
     };
     expect_revert(
         w.send_engine(w.admin, &[&key], &set),

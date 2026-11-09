@@ -15,6 +15,8 @@ engine_core.workspace = true
 # `holding_actor` (ADR-062): plans declare per-definition token holdings.
 token_core.workspace = true
 auction_engine_params.workspace = true
+# `RiskArgs` and its presets (ADR-082); the presets are host-only.
+risk_core = { workspace = true, features = ["borsh", "presets"] }
 # The reference oracle's state, which the system plans price at (`engine_core::system::ref_price`).
 oracle_core.workspace = true
 # The live-sequencer half (`live`): RPC client, transaction wire type, wallet keys and program loader.

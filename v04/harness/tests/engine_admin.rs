@@ -6,6 +6,7 @@ use auction_engine_params::{
     EngineError,
     args::{CollateralArgs, EngineParamsArgs},
 };
+use engine_core::ext::{CollateralExt, ConfigExt};
 use engine_core::{
     actors::config_actor,
     check::fail_text,
@@ -22,6 +23,7 @@ use harness::{
 use lee::{AccountId, Actor};
 use mock_host_core::{Params, Position, is_unsafe};
 use oracle_core::OracleState;
+use risk_core::RiskArgs;
 
 fn config_state(w: &World, at: Actor) -> Option<ConfigState> {
     w.chain
@@ -68,6 +70,7 @@ fn expected_config(w: &World) -> ConfigState {
         pending_genesis: None,
         collateral_def: None,
         pending_host_read: false,
+        ext: ConfigExt::default(),
     }
 }
 
@@ -114,6 +117,7 @@ fn expected_collateral(w: &World) -> CollateralState {
             slack_ms: SLACK_MS,
         },
         pending: None,
+        ext: CollateralExt::new(RiskArgs::legacy()),
     }
 }
 

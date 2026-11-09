@@ -44,7 +44,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: v04, shared-key: v04 }
       # Our crates only: `--all` would also format the shared crates (crates/*) under rules their own CI owns.
-      - run: cargo fmt -p engine_core -p methods -p mock_host_core -p oracle_core -p token_core -p harness -p sdk -- --check
+      - run: cargo fmt -p risk_core -p engine_core -p methods -p mock_host_core -p oracle_core -p token_core -p harness -p sdk -- --check
       # Ruling R-2b: guests are built by `cargo test`, not by clippy (the methods build script fails under clippy).
       - run: RISC0_SKIP_BUILD=1 cargo clippy --locked --workspace --all-targets -- -D warnings
       # `sdk::session` is behind the `session` feature (ruling R-1a), so the default clippy above skips it.

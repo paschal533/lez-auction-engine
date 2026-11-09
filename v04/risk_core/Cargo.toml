@@ -1,0 +1,21 @@
+[package]
+name = "risk_core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# Pure Tier 2 risk logic (ADR-069, ADR-076): v04-only, builds for the host and the riscv guest.
+[features]
+borsh = ["dep:borsh"]
+# The `legacy`/`recommended` parameter presets (ADR-082); never enabled on chain.
+presets = []
+
+[dependencies]
+auction_core = { path = "../../crates/auction_core" }
+borsh = { version = "1.5.7", features = ["derive"], optional = true }
+
+[dev-dependencies]
+proptest = "1"

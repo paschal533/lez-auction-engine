@@ -17,4 +17,5 @@ pub mod state;
 pub mod system;
 pub mod system_state;
 
+pub use risk_core;
 pub use system_state::{RefReading, SystemCtx, SystemOp, SystemPending};

@@ -2,8 +2,11 @@
 """REQUIREMENTS.md checker (spec §1.4, §9; RFP S4).
 
 usage: check-requirements.py REQUIREMENTS.md [--root DIR]
-Every required RFP-014 id must have one row. A PoC or PoC (partial) row needs evidence; every evidence
-token must resolve:
+Table columns: | ID | Requirement | Status | v04 evidence | v0.2.4 evidence | Notes |
+An evidence cell that is exactly the em dash (U+2014) means "none for this engine".
+Every required RFP-014 id must have one row. A PoC or PoC (partial) row needs evidence in at least one of
+the two evidence cells; every evidence token in either cell must resolve (tests are searched in
+crates, programs, cli, fuzz and v04):
   `name`            a Rust fn preceded by #[test] or #[kani::proof] attributes (not #[ignore]d)
   `name`[ignored]   the same, #[ignore]d on purpose (a named CI job runs it)
   golden:NAME       cli/tests/golden/NAME.txt exists and a CLI test calls check("NAME", ..)
@@ -17,14 +20,16 @@ import re
 import sys
 
 REQUIRED = (
-    [f"F{i}" for i in range(1, 8)] + [f"U{i}" for i in range(1, 7)] + [f"R{i}" for i in range(1, 7)]
+    [f"F{i}" for i in range(1, 9)] + [f"U{i}" for i in range(1, 7)] + [f"R{i}" for i in range(1, 7)]
     + [f"P{i}" for i in range(1, 4)] + [f"S{i}" for i in range(1, 6)] + [f"PRIV{i}" for i in range(1, 4)]
     + [f"PA{i}" for i in range(1, 5)] + [f"SOFT{i}" for i in range(1, 4)]
 )
 STATUSES = {"PoC", "PoC (partial)", "Plan 4", "Descoped"} | {f"M{i}" for i in range(1, 8)}
+COLUMNS = 6
+NONE_MARKER = "—"  # em dash alone in an evidence cell: no evidence for that engine
 NEEDS_EVIDENCE = {"PoC", "PoC (partial)"}
 TOKEN = re.compile(r"`([A-Za-z0-9_]+)`(\[ignored\])?|(golden|script|ci|doc):([^\s,|]+)")
-SOURCE_DIRS = ("crates", "programs", "cli", "fuzz")
+SOURCE_DIRS = ("crates", "programs", "cli", "fuzz", "v04")
 
 
 def rust_sources(root):
@@ -99,17 +104,23 @@ def check(text, root, required=REQUIRED):
     sources = rust_sources(root)
     for line in text.splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 5 or not re.fullmatch(r"[A-Z]+[0-9]+", cells[0]):
+        if not re.fullmatch(r"[A-Z]+[0-9]+", cells[0]):
             continue
-        rid, _, status, evidence, notes = cells[:5]
+        rid = cells[0]
         if rid in seen:
             errors.append(f"{rid}: listed twice")
             continue
         seen.add(rid)
+        if len(cells) != COLUMNS:
+            errors.append(f"{rid}: expected {COLUMNS} columns (ID, Requirement, Status, v04 evidence, "
+                          f"v0.2.4 evidence, Notes), got {len(cells)}")
+            continue
+        _, _, status, v04_evidence, v024_evidence, notes = cells
         if status not in STATUSES:
             errors.append(f"{rid}: unknown status {status!r}")
             continue
-        tokens = TOKEN.findall(evidence)
+        tokens = [t for cell in (v04_evidence, v024_evidence) if cell != NONE_MARKER
+                  for t in TOKEN.findall(cell)]
         if status in NEEDS_EVIDENCE and not tokens:
             errors.append(f"{rid}: status {status} needs evidence")
         if status not in NEEDS_EVIDENCE and not notes:

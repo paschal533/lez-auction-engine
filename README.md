@@ -1,40 +1,77 @@
 # LEZ Auction Engine
 
-A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a proof of concept for RFP-014. It runs the auctions behind an over-collateralised stablecoin: collateral auctions for liquidated positions (descending discount, partial fills, keeper reward, no expiry), a surplus auction that sells protocol-buffer coin for a protocol token, and a debt auction that mints protocol tokens against unbacked debt. All decision logic lives in `auction_core`, a pure, `no_std`, dependency-free Rust crate that does not know about LEZ; the on-chain programs, SDK, CLI and GUI are layers over it (Plans 2 to 4). The work targets LEZ v0.2.4 and SPEL `1ef0500f` ("Track B", ADR-001).
+A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a proof of concept for RFP-014. It runs the auctions behind an over-collateralised stablecoin: collateral auctions for liquidated positions (descending discount, partial fills, keeper reward, no expiry), a surplus auction that sells protocol-buffer coin for a protocol token, and a debt auction that mints protocol tokens against unbacked debt. All decision logic lives in `auction_core`, a pure, `no_std`, dependency-free Rust crate that does not know about LEZ. Two engines are built on it:
+
+- **The 0.4 engine (`v04/`, primary):** LEZ v0.4.0-rc1 actors in a separate cargo workspace ([v04/README.md](v04/README.md); design note [docs/v04-port-design.md](docs/v04-port-design.md)).
+- **The v0.2.4 engine (root workspace):** LEZ v0.2.4 and SPEL `1ef0500f` ("Track B", ADR-001), with the stablecoin hooks, SDK, CLI and the Basecamp app.
 
 ## Status
 
-**Plan 3b complete: CI, real proofs, reproducible builds, evidence.** See `docs/superpowers/plans/2026-10-13-plan-3b-ci-proofs-evidence.md`.
+**0.4 engine (LEZ v0.4.0-rc1).** Plans 5 to 7 are merged to `main` (PRs #4, #5 and #6).
 
-- CI: program tests, IDL drift, hook patches, cycle gate, coverage gate, requirements check, fuzz and guest-repro workflows ([ci.md](docs/architecture/ci.md)).
-- Real proofs (ADR-045): the local full suite passed at po2 19 (42 proofs, all verified). On `main`, the hosted `real-proof-push` job proved `settle_debt` (543 s, receipt verified) and the `RISC0_DEV_MODE=0` e2e demo passed; the self-hosted tier is off; `prove_ppe_observe_feed` never completed a run.
-- Reproducible guests (ADR-047): Docker builds, committed binaries and a manifest of ImageIDs, rebuilt and compared in CI.
+- Engine: the liquidation slice, `set_engine_params`, `observe_feed`, `settle_debt`, the surplus and debt auctions (start, take, close) and `check_solvency` with the host freeze, as actor conversations (ADR-056 to ADR-063; status table in [docs/v04-port-design.md](docs/v04-port-design.md) §8). It runs against our own token and oracle actors and a mock CDP host that implements the F7 host interface, because lez-programs has no 0.4 branch yet.
+- SDK: plans, simulate-then-send with a fitted gas limit (ADR-061), block-level confirmation and the scanner (ADR-066).
+- CI: `v04.yml` runs fmt, clippy and `cargo test --workspace` on changes to `v04/` and the shared crates; green on `main`, run 42033888330.
+- End to end: `v04-e2e.yml` on a standalone sequencer with `RISC0_DEV_MODE=0`: run 42015414886 at 56876f5, green in 59m30s (cold cache); run 42033888263 at 5913f0a, green in 41m51s (warm) ([ci.md](docs/architecture/ci.md)).
+- Cycles and fees: [v04/CYCLES.md](v04/CYCLES.md). The most expensive instruction, `Liquidate`, uses under 9 % of the gas cap.
+- Waiting on upstream: the IDL and SPEL entrypoint (no SPEL for 0.4), the real host hooks (no lez-programs 0.4), the CLI and Basecamp module on `lez_core` 0.6.0, and a public 0.4 testnet. See [Dependencies](#dependencies).
+
+**v0.2.4 engine (LEZ v0.2.4, SPEL `1ef0500f`).** Plans 1 to 4 are merged to `main` (Plan 4 by PR #3).
+
+- Programs: the `auction_engine` program, 17 instructions over `auction_core`, and three hooks appended to the vendored stablecoin (lez-programs `64c01210`), exported as a patch series for upstream ([programs.md](docs/architecture/programs.md), [hooks.md](docs/architecture/hooks.md)).
+- `auction_sdk` and `auction-cli` ([sdk.md](docs/architecture/sdk.md), [cli/README.md](cli/README.md)).
+- CI on hosted runners: program tests, IDL drift, hook patches, cycle gate, coverage gate, requirements check, reproducible guests, the `RISC0_DEV_MODE=0` e2e demo and the `real-proof-push` proof of `settle_debt`, all green on `main` after the Plan 4 merge ([ci.md](docs/architecture/ci.md), [real-proofs.md](docs/architecture/real-proofs.md)).
+- Public v0.2.4 legacy testnet run (2026-10-17): `demo complete`, every check `ok` ([testnet-legacy.md](docs/architecture/testnet-legacy.md)).
 - [CYCLES.md](CYCLES.md): cycle baseline, transaction sizes and the 10 % regression gate (ADR-048).
-- [REQUIREMENTS.md](REQUIREMENTS.md): every hard requirement mapped to evidence, with a checker; rows whose evidence is a CI job that has not run on a hosted runner yet are marked PoC (partial).
-- [DEMO.md](DEMO.md): one-command demo, run locally in both sequencer modes (dev mode 1 and 0); the e2e workflow passed on a hosted runner (`RISC0_DEV_MODE=0`).
-- Red-team pass: [docs/security/redteam-2026-10.md](docs/security/redteam-2026-10.md), 0 Critical, 0 High, 0 Medium (6 Low and 6 Info, all off-chain).
-- [SUBMISSION.md](SUBMISSION.md): the submission index with linked hashes; the terminal demo recording, upstream filings and the Plan 4 hosted runs are pending.
-- Plan 4 (FFI, core module, Auctions app in Basecamp): built on `feat/plan-4`, not yet pushed or merged.
 
-**Plan 3a complete: engine hardening, SDK and CLI.** See `docs/superpowers/plans/2026-10-09-plan-3a-engine-hardening-sdk-cli.md`.
+**Basecamp app (on the v0.2.4 engine).** `apps/auctions/tests/story.mjs` drives the whole demo as 172 UI steps, from `.lgx` packages in a clean Basecamp profile. It passed in Basecamp `e09962f5` and again in Basecamp master `c154375` (2026-11-06), every figure check `ok` against `auction-cli` ([basecamp-app.md](docs/architecture/basecamp-app.md)).
 
-- Two engine fixes: config-time validation of the protocol-token slot (ADR-038) and a fixed relist delay between debt auctions (ADR-039).
-- `auction_sdk`: own enum-index encoders, quotes on the program's pricing path, plans, verification, confirmation, scanner, keystore ([sdk.md](docs/architecture/sdk.md)).
-- `auction-cli` and the CLI-driven localnet smoke ([cli/README.md](cli/README.md), [localnet.md](docs/architecture/localnet.md)).
+**Evidence.** [REQUIREMENTS.md](REQUIREMENTS.md) maps every hard requirement to evidence and is checked by `scripts/check-requirements.py`. Red-team pass: [docs/security/redteam-2026-10.md](docs/security/redteam-2026-10.md), 0 Critical, 0 High, 0 Medium; 6 Low (all off-chain) and 6 Info. Submission index with hashes: [SUBMISSION.md](SUBMISSION.md).
 
-**Plan 2 complete: on-chain programs.**
+## Tests
 
-- Stablecoin hooks: the vendored stablecoin (lez-programs `64c01210`) gains `set_liquidation_engine`, `liquidate_position` and `engine_freeze_new_debt`, exported as a patch series for upstream (ADR-025) and guarded by Variant C, caller program id plus the bound engine-authority PDA (ADR-026, [hooks](docs/architecture/hooks.md)).
-- Engine: the `auction_engine` program, 17 instructions over `auction_core` (liquidation, bids, settlement, F5 surplus and F4 debt auctions, `check_solvency`), with config-seeded PDAs, optional-account slots, sweep rules, the measured chained-call budget and a second host instance (ADR-027 to ADR-036, [programs](docs/architecture/programs.md)). Threat model and security review: [THREAT_MODEL.md](THREAT_MODEL.md), [per-instruction checklist](docs/architecture/security-checklist.md).
-- Tests: handler unit tests (`auction_engine_program`), and `engine_integration_tests`, which runs the real token, stablecoin and engine guests in-process (hooks, config, liquidation, bids, settlement, system auctions, solvency, security and laundering attacks, account invariants, chain budgets, two instances). Run them with the WSL command under "Build and test the programs" below (`scripts/wsl-cargo.sh test -p engine_integration_tests`).
-- Next: Plan 3 (SDK, CLI, CI and real proofs), then Plan 4 (FFI, core module, Auctions app in Basecamp; built on `feat/plan-4`, not yet pushed or merged).
+Counted from the source by `scripts/count-tests.py`, one row per area. CI fails if this block drifts from the source; regenerate it with `python3 scripts/count-tests.py --markdown`.
 
-**Plan 1 complete: core + spikes.**
+<!-- test-counts:begin -->
+| Area | Tests |
+|---|---:|
+| 0.4 engine (v04/) | 275 |
+| v0.2.4 programs | 851 |
+| Shared crates | 344 |
+| CLI | 85 |
+| Fuzz + Kani proofs | 2 |
+| Basecamp QML | 162 |
+| Core module C++ | 51 |
+| Python tooling | 106 |
+| **Total** | 1876 |
+<!-- test-counts:end -->
 
-- `crates/auction_core`: collateral, surplus and debt logic with property tests, a differential model in Python, and Kani proof harnesses.
-- Spikes S1 to S7 are recorded, with decisions in the design log: toolchain and multi-instance build (S1, ADR-018), host authentication of the engine (S2, ADR-019), arg-seeded PDAs created on first use (S3, ADR-020), protocol token minted from an engine PDA (S7, ADR-021), piecewise-linear discount kept (S4, ADR-022), `Accounting` updated at chain end (S6, ADR-023). The S5 pause-onset policy is ADR-007 (amended).
+Counts include `#[ignore]`d tests (run by named jobs) and the two Kani harnesses, which no CI job runs yet (SOFT2).
+
+## Dependencies
+
+What the engines build against today, and what happens if a dependency is late or changes. "Not pinned" means nothing in the repository pins a version.
+
+| Capability | Built against today (version/commit) | If late or changed | Where the interface is isolated |
+|---|---|---|---|
+| Price feed | 0.4: our oracle actor with a relay publisher (`v04/programs/oracle_core`). v0.2.4: the vendored `twap_oracle` core from lez-programs `64c01210` (`programs/UPSTREAM.md`) | The engine validates every reading (age, zero price, confidence, band around the reference price) and pauses the collateral type on a bad feed, with no fallback (ADR-005); another feed program needs only a new reader | `v04/engine_core/src/feed.rs` and the guest's `engine/observe.rs`; on v0.2.4 `programs/auction_engine/src/feed.rs` and `observe.rs` |
+| Host CDP | 0.4: a mock host that implements the F7 interface (`v04/programs/mock_host_core`), because lez-programs has no 0.4 branch. v0.2.4: the vendored stablecoin, lez-programs `64c01210`, with our three hooks | Keep the mock until upstream ports the stablecoin, then replace it with upstream's port or our own (design note §8, task 12) | The F7 host messages (`v04/programs/mock_host_core/src/lib.rs`); on v0.2.4 the hook patch series `patches/stablecoin/` ([hooks.md](docs/architecture/hooks.md)) |
+| Collateral and stable token programs | 0.4: our token actor port, one holding actor per owner and definition (`v04/programs/token_core`, ADR-062). v0.2.4: the vendored token program, lez-programs `64c01210` | Swap in upstream's 0.4 token program when it exists; on v0.2.4 the engine checks every definition it is given (`WrongDefinition`, `ProtocolTokenMismatch`); on 0.4 the definitions come from the config and a host that disagrees is refused (`HostMismatch`, `v04/engine_core/src/check.rs`) | `v04/programs/token_core/src/lib.rs`; on v0.2.4 `token_program_id` in the engine config |
+| Admin authority (RFP-001) | Not pinned: no RFP-001 implementation is used. The engine admin and the host admin are user keys held by the operator ([THREAT_MODEL.md](THREAT_MODEL.md)) | Adopt the RFP-001 authority when it lands. Today a PDA or multisig host admin cannot call `set_liquidation_engine` (top-level only, ADR-026) | 0.4: the signer proxy `(admin, E)` in front of the config (design note §3); v0.2.4: the `admin` signer of the engine's admin instructions |
+| Freeze authority (RFP-002) | Not pinned: no RFP-002 implementation is used. The host's existing freeze authority (a user key) unfreezes; the engine only freezes, through `engine_freeze_new_debt` | Route the freeze through the RFP-002 authority when it lands; the engine never unfreezes, so only that one call changes | The host freeze hook: `engine_freeze_new_debt` (v0.2.4), `EngineFreezeNewDebt` (0.4) |
+| Runtime (LEZ) | 0.4: LEZ `v0.4.0-rc1` (`v04/Cargo.toml`), Rust 1.98.1, risc0 3.0.5. v0.2.4: LEZ `v0.2.4` (tag in the root `Cargo.toml`; commit `47eba256` in `scripts/submission-hashes.sh`), Rust 1.94.0, risc0 3.0.5 | Re-pin the tag and re-run `v04.yml` and `v04-e2e.yml`. No public 0.4 testnet exists yet (design note §8, task 14) | The `v04/` workspace pins LEZ in `v04/Cargo.toml` (the `*_core` crates repeat the tag); `auction_core` and `auction_engine_params`, shared with v0.2.4, do not depend on LEZ |
+| Framework (SPEL) | v0.2.4: SPEL `1ef0500f` (the programs' `Cargo.toml` files). 0.4: none; SPEL has no 0.4 support, so the guest uses `actor_entrypoint!` directly | Move the 0.4 guest to the SPEL entrypoint, IDL and client when SPEL supports 0.4 (design note §8, task 15) | The engine guest's entrypoint; the decision code in `engine_core` and `auction_core` does not use SPEL |
+| Wallet / core module (`lez_core`) | `lez_core` 0.4.1, `logos-execution-zone-module` `acf0cd50` ([basecamp-app.md](docs/architecture/basecamp-app.md)), used by the v0.2.4 Basecamp module. The 0.4 SDK signs with LEZ's own `wallet` crate at `v0.4.0-rc1` | `lez_core` 0.6.0 (upstream PR #72) changes `send_generic_public_transaction`; the CLI, FFI and module move to it once it is released (design note §8, task 11) | `modules/auction_engine/src/auction_engine_impl.cpp` and `lez_args.h`, where the module calls `send_generic_public_transaction` |
 
 ## Reproduce in one command
+
+0.4 engine, end to end on a standalone LEZ v0.4.0-rc1 sequencer (stages `up`, `deploy`, `slice`, `system`, `down`; prerequisites and the build-and-test commands in [v04/README.md](v04/README.md)):
+
+```bash
+v04/scripts/e2e.sh
+```
+
+v0.2.4 engine:
 
 ```bash
 scripts/bootstrap-lez.sh && scripts/demo.sh
@@ -65,6 +102,8 @@ the GUI run in [DEMO.md](DEMO.md#gui-run-basecamp).
 
 ## Run the tests
 
+The 0.4 engine's tests run from `v04/` with `cargo test --workspace` (Rust 1.98.1 and the risc0 toolchain; see [v04/README.md](v04/README.md)). The commands below are for the v0.2.4 root workspace.
+
 Git Bash on Windows cannot resolve the LEZ and risc0 git dependencies of the workspace (`programs/UPSTREAM.md`), so the core checks run in Linux/WSL through the wrapper (ADR-025, `.github/workflows/core.yml`). Rust 1.94.0 (pinned by `rust-toolchain.toml`) and Python 3 are enough. Format is checked only on our crates with `-p` (vendored code keeps its upstream formatting). From the repository root in WSL:
 
 ```bash
@@ -92,13 +131,18 @@ MSYS_NO_PATHCONV=1 wsl -d Ubuntu-20.04 -e bash -lc   'cd /mnt/c/Users/user/Docum
 
 - Spec: [docs/superpowers/specs/2026-10-01-rfp014-auction-engine-poc-design.md](docs/superpowers/specs/2026-10-01-rfp014-auction-engine-poc-design.md)
 - Design log (ADRs): [docs/design-log.md](docs/design-log.md)
+- 0.4 engine: [docs/v04-port-design.md](docs/v04-port-design.md) (design note and status table), [v04/README.md](v04/README.md), [v04/CYCLES.md](v04/CYCLES.md)
+- Refusal codes (every `EngineError`, its wire code and the tests that prove it; generated): [docs/architecture/refusal-codes.md](docs/architecture/refusal-codes.md)
+- F8 parameter audit (every constant in the economic code: init parameter or safety bound): [docs/architecture/f8-parameters.md](docs/architecture/f8-parameters.md)
+- Pricing model (collateral auction pricing, bad feeds, extractable value, liquidation cost on 0.4): [docs/architecture/pricing-model.md](docs/architecture/pricing-model.md)
+- Research notes: [liquidation engines on EVM chains](docs/research/2026-11-07-evm-engines.md), [on non-EVM chains](docs/research/2026-11-07-non-evm-engines.md), [the stablecoin CDP, oracle and hook design](docs/research/research-2-stablecoin.md), [Basecamp packaging](docs/research/research-4-basecamp-packaging.md), [open questions](docs/research/research-6-open-questions.md)
 - Spikes: [docs/spikes/](docs/spikes/) ([S1](docs/spikes/S1.md), [S2](docs/spikes/S2.md), [S3](docs/spikes/S3.md), [S4](docs/spikes/S4.md), [S5](docs/spikes/S5.md), [S6](docs/spikes/S6.md), [S7](docs/spikes/S7.md)); spike code in [spikes/](spikes/)
 - Architecture: [docs/architecture/core.md](docs/architecture/core.md) (auction state machine), [docs/architecture/math.md](docs/architecture/math.md) (fixed-point arithmetic), [docs/architecture/hooks.md](docs/architecture/hooks.md) (stablecoin hooks), [docs/architecture/programs.md](docs/architecture/programs.md) (engine program, Plan 3 interfaces), [docs/architecture/sdk.md](docs/architecture/sdk.md) (SDK), [docs/architecture/security-checklist.md](docs/architecture/security-checklist.md) (per-instruction checklist)
 - Localnet smoke test: [docs/architecture/localnet.md](docs/architecture/localnet.md); legacy testnet run: [docs/architecture/testnet-legacy.md](docs/architecture/testnet-legacy.md); deployed program ids and reference-price log: [DEPLOYMENTS.md](DEPLOYMENTS.md)
 - Threat model: [THREAT_MODEL.md](THREAT_MODEL.md)
 - RFP-014 requirements mapped to evidence, milestones and descopes: [REQUIREMENTS.md](REQUIREMENTS.md) (checked by `scripts/check-requirements.py`)
 - Submission record and hashes: [SUBMISSION.md](SUBMISSION.md); one-command demo: [DEMO.md](DEMO.md); cycles and transaction sizes: [CYCLES.md](CYCLES.md)
-- Privacy stub: [docs/PRIVACY.md](docs/PRIVACY.md); LEZ v0.3 port plan: [docs/v03-port-plan.md](docs/v03-port-plan.md)
+- Privacy stub: [docs/PRIVACY.md](docs/PRIVACY.md); LEZ v0.3 port plan (written before the 0.4 port, not started): [docs/v03-port-plan.md](docs/v03-port-plan.md)
 - Upstream and outreach drafts (unposted, unfiled): [docs/outreach/](docs/outreach/)
 - Plans: [docs/superpowers/plans/](docs/superpowers/plans/)
 

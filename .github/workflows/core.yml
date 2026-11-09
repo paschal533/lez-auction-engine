@@ -103,4 +103,10 @@ jobs:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
       - run: python3 scripts/check-requirements.py REQUIREMENTS.md
+      - name: test-count drift (the README block equals scripts/count-tests.py --markdown)
+        run: python3 scripts/count-tests.py --check README.md
+      - name: refusal-code drift (docs/architecture/refusal-codes.md equals the generated catalogue)
+        run: python3 scripts/gen-refusal-codes.py --check
       - run: python3 -m unittest discover -s scripts/tests -p 'test_check_requirements.py' -v
+      - run: python3 -m unittest discover -s scripts/tests -p 'test_count_tests.py' -v
+      - run: python3 -m unittest discover -s scripts/tests -p 'test_gen_refusal_codes.py' -v

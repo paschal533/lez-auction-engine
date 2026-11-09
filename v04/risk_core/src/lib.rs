@@ -8,10 +8,12 @@ extern crate alloc;
 pub mod error;
 pub mod feed;
 mod kani_proofs;
+pub mod price;
 pub mod twap;
 
 pub use error::RiskError;
 pub use feed::{
     FeedFault, FeedPolicy, LEGACY_SANITY_HI_BPS, LEGACY_SANITY_LO_BPS, validate_feed_ext,
 };
+pub use price::{conf_bps, edge, fallback_bid_price, liq_price, live_bid_price, within_deviation};
 pub use twap::{Sample, TWAP_CAPACITY, TwapRing, record, twap};

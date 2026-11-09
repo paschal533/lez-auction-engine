@@ -11,9 +11,10 @@
 use auction_core::{
     error::PauseReason,
     pause::{Observation, OnsetPolicy, PauseClock},
-    price::{OracleReading, bid_price, validate_feed},
+    price::{OracleReading, bid_price},
 };
 use auction_engine_params::EngineError;
+use risk_core::feed::{FeedFault, FeedPolicy, validate_feed_ext};
 
 use crate::state::CollateralState;
 
@@ -24,9 +25,16 @@ pub struct Observed {
     pub feed: Result<u128, PauseReason>,
 }
 
+/// The type's feed policy. Plan 9 runs every type under v0.2.4's policy (sanity `[R/2, 2R]`,
+/// no pin bounds). A free fn rather than a `CollateralState` method: `state.rs` is at its size
+/// limit.
+pub fn feed_policy(coll: &CollateralState) -> Result<FeedPolicy, EngineError> {
+    Ok(FeedPolicy::legacy(&coll.feed_params()?))
+}
+
 /// One pause observation at `now_ms` (policy (b), ADR-007). `feed_valid` comes from
-/// `validate_feed` at `now_ms + slack_ms` with the same oracle timestamp and max age that
-/// `observed` receives (ADR-024 obligation, with the conservative age of design note §4.1).
+/// `validate_feed_ext` (equal to v0.2.4's `validate_feed` under the legacy policy) at
+/// `now_ms + slack_ms` with the same oracle timestamp and max age that `observed` receives (ADR-024 obligation, with the conservative age of design note §4.1).
 pub fn observe(
     coll: &CollateralState,
     reading: &OracleReading,
@@ -34,16 +42,16 @@ pub fn observe(
     now_ms: u64,
     slack_ms: u64,
 ) -> Result<Observed, EngineError> {
-    let params = coll.feed_params()?;
+    let policy = feed_policy(coll)?;
     let age_now = now_ms.checked_add(slack_ms).ok_or(EngineError::Math)?;
-    let feed = validate_feed(reading, &params, r_ray, age_now);
+    let feed = validate_feed_ext(reading, &policy, r_ray, age_now).map_err(FeedFault::pause_reason);
     let clock = coll.pause_clock().observed(
         Observation {
             now_ms,
             feed_valid: feed.is_ok(),
             admin_paused: coll.admin_paused,
             oracle_ts: reading.timestamp_ms,
-            max_age_ms: params.max_age_ms,
+            max_age_ms: policy.max_age_ms,
         },
         OnsetPolicy::DerivedFromOracle,
     );

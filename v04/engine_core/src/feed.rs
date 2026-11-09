@@ -11,18 +11,26 @@
 use auction_core::{
     error::PauseReason,
     pause::{Observation, OnsetPolicy, PauseClock},
-    price::{OracleReading, bid_price},
+    price::{OracleReading, bid_price, to_ray},
 };
 use auction_engine_params::EngineError;
-use risk_core::feed::{FeedFault, FeedPolicy, validate_feed_ext};
+use risk_core::{
+    feed::{FeedFault, FeedPolicy, validate_feed_ext},
+    price::conf_bps,
+};
 
-use crate::state::CollateralState;
+use crate::{ext::CollateralExt, state::CollateralState};
 
-/// One observation: the next pause clock and the feed verdict (the market price if valid).
+/// The confidence of an unconvertible reading, bps: the widest edge.
+const CONF_SATURATED_BPS: u16 = 10_000;
+
+/// One observation: the next pause clock, the feed verdict (the market price if valid) and the
+/// reading's confidence in bps of the price (0 when the feed is invalid).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Observed {
     pub clock: PauseClock,
     pub feed: Result<u128, PauseReason>,
+    pub conf_bps: u16,
 }
 
 /// The type's feed policy. Plan 9 runs every type under v0.2.4's policy (sanity `[R/2, 2R]`,
@@ -56,7 +64,46 @@ pub fn observe(
         },
         OnsetPolicy::DerivedFromOracle,
     );
-    Ok(Observed { clock, feed })
+    // A valid feed already converted the confidence; the saturated edge is the safe side anyway.
+    let conf_bps = feed.map_or(0, |m| {
+        to_ray(reading.confidence_raw, policy.scale)
+            .map_or(CONF_SATURATED_BPS, |conf| conf_bps(conf, m))
+    });
+    Ok(Observed {
+        clock,
+        feed,
+        conf_bps,
+    })
+}
+
+/// Offers this observation's reading to the TWAP ring (spec §3.1.2): `coll` with the ring after
+/// `risk_core::record` when the feed is valid and the TWAP is on, else `coll` unchanged.
+#[must_use]
+pub fn record(
+    coll: &CollateralState,
+    reading: &OracleReading,
+    obs: &Observed,
+    now_ms: u64,
+) -> CollateralState {
+    let risk = coll.ext.risk;
+    match obs.feed {
+        Ok(m) if risk.twap_window_ms > 0 => CollateralState {
+            ext: CollateralExt {
+                risk,
+                pause_level: coll.ext.pause_level,
+                ring: risk_core::record(
+                    &coll.ext.ring,
+                    reading.timestamp_ms,
+                    m,
+                    obs.conf_bps,
+                    now_ms,
+                    risk.twap_min_spacing_ms,
+                ),
+            },
+            ..coll.clone()
+        },
+        Ok(_) | Err(_) => coll.clone(),
+    }
 }
 
 /// The market price if the type is live, else the pause as an error (`Paused`, `PriceFeedStale`,
@@ -172,5 +219,42 @@ mod tests {
             observe(&bad, &reading(0), RAY, 0, 6_000),
             Err(EngineError::InvalidConfig)
         );
+    }
+
+    #[test]
+    fn observe_reports_conf_bps_and_record_takes_valid_readings_only() {
+        let off = fresh();
+        let on = CollateralState {
+            ext: CollateralExt::new(risk_core::RiskArgs::recommended()),
+            ..fresh()
+        };
+        let at = |price_raw, confidence_raw, ts| OracleReading {
+            price_raw,
+            confidence_raw,
+            timestamp_ms: ts,
+        };
+        // 50 bps confidence on a valid reading; 0 on an invalid one.
+        let good = at(RAY, RAY / 200, 1_000);
+        let obs = observe(&on, &good, RAY, 1_000, 6_000).expect("observes");
+        assert_eq!((obs.feed, obs.conf_bps), (Ok(RAY), 50));
+        let recorded = record(&on, &good, &obs, 1_000);
+        assert_eq!(recorded.ext.ring.samples.len(), 1);
+        assert_eq!(recorded.ext.ring.last_conf_bps, 50);
+        assert_eq!(
+            CollateralState {
+                ext: on.ext.clone(),
+                ..recorded
+            },
+            on,
+            "only the ring changes"
+        );
+        // TWAP off: nothing recorded.
+        let obs_off = observe(&off, &good, RAY, 1_000, 6_000).expect("observes");
+        assert_eq!(record(&off, &good, &obs_off, 1_000), off);
+        // Out of range: conf 0 and nothing recorded.
+        let low = at(RAY / 2 - 1, 0, 1_000);
+        let bad = observe(&on, &low, RAY, 1_000, 6_000).expect("observes");
+        assert_eq!(bad.conf_bps, 0);
+        assert_eq!(record(&on, &low, &bad, 1_000), on);
     }
 }

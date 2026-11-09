@@ -2,8 +2,8 @@
 //! `bid` and `bid_with_settlement`, since the engine names the accounting itself.
 //!
 //! 1. Root `Bid` at the collateral actor `C = collateral_actor(E, config, def)`: Observe with the
-//!    bid's clock claim (`observe::start`); at `Proceed`, `require_live` and the bid price, then a
-//!    seeded `Probe { Auction }` (ruling R-9b) and `BidCtx` unseeded to the auction
+//!    bid's clock claim (`observe::start`); at `Proceed`, the bid price (`gate::bid_pricing`),
+//!    then a seeded `Probe { Auction }` (ruling R-9b) and `BidCtx` unseeded to the auction
 //!    `auction_actor(E, config, position, nonce)` ([`bid_ctx`]).
 //! 2. `BidCtx` at the auction, from exactly its collateral actor: v0.2.4's `quote_bid` and
 //!    `apply_bid` (`engine_core::bid::quote`). Every refusal of the quote (`NotAuctioning`,

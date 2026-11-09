@@ -491,20 +491,7 @@ impl World {
 
     /// The publisher publishes `price_ray` at the world's current time.
     pub fn set_price(&mut self, price_ray: u128) {
-        let (oracle, publisher) = (self.oracle, self.publisher);
-        let publish = OracleMsg::Publish {
-            price_ray,
-            timestamp_ms: self.now_ms,
-            confidence: 0,
-        };
-        self.chain
-            .send(
-                publisher,
-                &[publisher, oracle],
-                &[],
-                &Forward::new(oracle, &publish),
-            )
-            .expect("the publisher publishes");
+        self.set_price_with_confidence(price_ray, 0);
     }
 
     /// A fresh owner gets `collateral` from the whale, opens a position with it through the

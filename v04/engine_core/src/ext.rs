@@ -48,13 +48,10 @@ impl CollateralState {
     /// The state as a quote carries it: the ring is dropped, everything else is kept.
     #[must_use]
     pub fn for_quote(&self) -> Self {
-        Self {
-            ext: CollateralExt {
-                ring: TwapRing::default(),
-                ..self.ext.clone()
-            },
-            ..self.clone()
-        }
+        // One deep clone, then the ring reset in place on the copy (the original is untouched).
+        let mut quoted = self.clone();
+        quoted.ext.ring = TwapRing::default();
+        quoted
     }
 }
 

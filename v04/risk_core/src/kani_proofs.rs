@@ -36,4 +36,21 @@ mod proofs {
             validate_feed(&reading, &p, r, now)
         );
     }
+
+    /// The legacy sanity bounds equal v0.2.4's `R / 2` and `R.saturating_mul(2)` for every `R`,
+    /// including the `hi` saturation the bounded harness above cannot reach.
+    #[kani::proof]
+    fn legacy_sanity_bounds_equal_v024() {
+        use crate::feed::{LEGACY_SANITY_HI_BPS, LEGACY_SANITY_LO_BPS};
+        use auction_core::{math::mul_div_floor, units::BPS};
+        let r: u128 = kani::any();
+        assert_eq!(
+            mul_div_floor(r, u128::from(LEGACY_SANITY_LO_BPS), BPS).unwrap_or(0),
+            r / 2
+        );
+        assert_eq!(
+            mul_div_floor(r, u128::from(LEGACY_SANITY_HI_BPS), BPS).unwrap_or(u128::MAX),
+            r.saturating_mul(2)
+        );
+    }
 }

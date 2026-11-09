@@ -34,7 +34,8 @@ pub fn feed_policy(coll: &CollateralState) -> Result<FeedPolicy, EngineError> {
 
 /// One pause observation at `now_ms` (policy (b), ADR-007). `feed_valid` comes from
 /// `validate_feed_ext` (equal to v0.2.4's `validate_feed` under the legacy policy) at
-/// `now_ms + slack_ms` with the same oracle timestamp and max age that `observed` receives (ADR-024 obligation, with the conservative age of design note §4.1).
+/// `now_ms + slack_ms` with the same oracle timestamp and max age that `observed` receives
+/// (ADR-024 obligation, with the conservative age of design note §4.1).
 pub fn observe(
     coll: &CollateralState,
     reading: &OracleReading,

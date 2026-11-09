@@ -15,11 +15,16 @@ use auction_engine_params::{
     args::{CollateralArgs, EngineParamsArgs},
 };
 use engine_core::{
+    actors::config_actor,
     check::{Refusal, fail_text},
     msg::EngineMsg,
     state::ConfigState,
 };
-use harness::{World, expect_revert, invariants, system::TAKER_GENESIS, world::RAY};
+use harness::{
+    World, expect_revert, invariants,
+    system::TAKER_GENESIS,
+    world::{RAY, SALT},
+};
 use lee::{AccountId, Actor, error::LeeError};
 use lee_core::program::TransactionEvent;
 use risk_core::RiskError;
@@ -224,7 +229,7 @@ fn set_pause_level_only_through_the_admin_proxy() {
     );
     // The admin, naming a type the config does not record (ruling R9-9).
     let wrong = EngineMsg::SetPauseLevel {
-        salt: harness::world::SALT,
+        salt: SALT,
         collateral_def: stranger,
         level: 1,
         now_ms: w.now_ms,
@@ -267,6 +272,39 @@ fn level_change_records_the_pause_clock() {
         let c = w.collateral_state();
         assert_eq!((c.paused_since_ms, c.paused_total_ms), (None, held));
     }
+}
+
+/// A forged `PauseLevelUpdate` (message 48) at the collateral actor: refused unless it comes
+/// from the type's own config, and nothing changes (as `SlackUpdate`, `tests/slack.rs`).
+#[test]
+fn pause_level_update_rejected_from_non_config_sender() {
+    let (mut w, _) = world();
+    // Another admin's config `K2`, so an actor can sit at its (existing) account.
+    let (stranger_key, stranger) = w.chain.key("stranger");
+    w.chain.fund(stranger, 1);
+    let init = w.init_msg();
+    w.send_engine(stranger, &[&stranger_key], &init)
+        .expect("the stranger's own config");
+    let k2 = config_actor(w.engine, stranger, SALT).account_id;
+    invariants::check(&w);
+    let msg = EngineMsg::PauseLevelUpdate { level: 3 };
+    let to = w.collateral;
+    // A root straight at the collateral actor.
+    refused(
+        &mut w,
+        |w| w.chain.send(to, &[to], &[], &msg),
+        EngineError::NotAdmin,
+    );
+    // An impostor at the admin, at another config and at the config's own account.
+    for at in [w.admin, k2, w.config.account_id] {
+        let impostor = w.impostor(at);
+        refused(
+            &mut w,
+            |w| w.speak(impostor, to, &msg),
+            EngineError::NotAdmin,
+        );
+    }
+    assert_eq!(w.collateral_state().ext.pause_level, 0);
 }
 
 #[test]

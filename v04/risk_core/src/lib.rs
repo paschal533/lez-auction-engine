@@ -13,6 +13,7 @@ pub mod pause;
 #[cfg(feature = "presets")]
 pub mod presets;
 pub mod price;
+pub mod stale;
 pub mod twap;
 
 pub use args::{
@@ -25,4 +26,5 @@ pub use feed::{
 };
 pub use pause::{FeedCase, Gate, Level, Op, allowed};
 pub use price::{conf_bps, edge, fallback_bid_price, liq_price, live_bid_price, within_deviation};
+pub use stale::{fallback_twap, floored_price, stale_cap};
 pub use twap::{Sample, TWAP_CAPACITY, TwapRing, record, twap};

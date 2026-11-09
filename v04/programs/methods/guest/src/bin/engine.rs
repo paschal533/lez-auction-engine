@@ -225,8 +225,8 @@ fn handle_message(input: &ReceiveInput) -> Response {
             paused_total_ms,
             min_bid,
             chost,
-            paused_since_ms: _,
-            fallback: _,
+            paused_since_ms,
+            fallback,
         } => bid::on_bid_ctx(
             input,
             &bid::BidCtxArgs {
@@ -241,6 +241,8 @@ fn handle_message(input: &ReceiveInput) -> Response {
                     paused_total_ms,
                     min_bid,
                     chost,
+                    paused_since_ms,
+                    fallback,
                 },
             },
         ),

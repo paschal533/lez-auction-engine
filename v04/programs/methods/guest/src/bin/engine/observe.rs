@@ -11,8 +11,8 @@
 //!    writes the pause clock, offers a valid reading to the TWAP ring (`feed::record`), clears
 //!    the scratch and runs the continuation: nothing more for `SetCollateral` and `ObserveFeed`;
 //!    for `Liquidate`, `gate::liquidation_price` (TWAP, deviation breaker), then `LiqCtx` to the
-//!    config (row 4); for `Bid`, `gate::bid_pricing` (TWAP anchor), then `BidCtx` to the auction
-//!    (rows 5-6).
+//!    config (row 4); for `Bid`, `gate::bid_pricing` (TWAP anchor, or the D4 fallback on an
+//!    invalid feed), then `BidCtx` to the auction (rows 5-6).
 //!
 //! While an observation is pending the actor accepts nothing but the awaited replies and its
 //! own `Proceed` (design note §4.3 c, guard 2).
@@ -215,7 +215,8 @@ struct Seen {
     now_ms: u64,
 }
 
-/// `Bid`'s continuation: the live bid price (`gate::bid_pricing`), then `BidCtx` to the auction.
+/// `Bid`'s continuation: the bid price (`gate::bid_pricing`: live, or the D4 fallback on an
+/// invalid feed), then `BidCtx` to the auction with the whole pricing.
 fn bid_then(
     input: &ReceiveInput,
     response: Response,
@@ -224,12 +225,8 @@ fn bid_then(
 ) -> Response {
     let pricing = gate::bid_pricing(&seen.observed, &seen.obs, seen.r_ray, seen.now_ms)
         .unwrap_or_else(|err| fail(err));
-    let (probe, auction, ctx) = crate::bid::bid_ctx(
-        input,
-        &seen.observed,
-        (pricing.price_ray, seen.now_ms),
-        request,
-    );
+    let (probe, auction, ctx) =
+        crate::bid::bid_ctx(input, &seen.observed, (&pricing, seen.now_ms), request);
     response.send(probe).send_sync(auction, &ctx)
 }
 

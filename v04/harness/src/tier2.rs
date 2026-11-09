@@ -4,7 +4,7 @@
 
 use auction_engine_params::args::CollateralArgs;
 use engine_core::{msg::EngineMsg, state::CollateralState};
-use oracle_core::OracleMsg;
+use oracle_core::{OracleMsg, OracleState};
 use risk_core::RiskArgs;
 
 use crate::world::{Forward, RAY, SALT, World};
@@ -79,6 +79,30 @@ impl World {
             self.set_price(price_ray);
             self.observe_feed(now).expect("the feed is observed");
         }
+    }
+
+    /// Makes the world's feed stale without publishing: advances the world's time to 1 ms past
+    /// `newest publish + max_oracle_age_ms - slack_ms`, the first claim whose age check (at
+    /// `now + slack`) fails. The max age and the slack are the collateral actor's, so this works
+    /// for any world's feed.
+    ///
+    /// # Panics
+    /// If the oracle or the collateral actor holds no state, or the time does not fit.
+    pub fn go_stale(&mut self) {
+        let coll = self.collateral_state();
+        let newest = self
+            .chain
+            .raw_state(self.oracle)
+            .and_then(|bytes| OracleState::decode(&bytes))
+            .expect("an oracle state")
+            .timestamp_ms;
+        let stale = newest
+            .checked_add(coll.max_oracle_age_ms)
+            .and_then(|t| t.checked_sub(coll.ctx.slack_ms))
+            .and_then(|t| t.checked_add(1))
+            .expect("time fits");
+        assert!(stale > self.now_ms, "the feed is already stale");
+        self.set_now_ms(stale);
     }
 
     /// The world's collateral actor state.

@@ -1,5 +1,6 @@
 //! The Tier 2 price gates (spec §3.1.4-§3.1.5, ADR-071, ADR-072): the liquidation price behind
-//! the TWAP and the spot-vs-TWAP breaker, and the bid price under the one-sided TWAP anchor.
+//! the TWAP and the spot-vs-TWAP breaker, the bid price under the one-sided TWAP anchor, and
+//! the D4 fallback bid price on a stale feed (spec §3.2.3, ADR-074).
 //!
 //! `coll` is always the observed state with this observation's sample already recorded
 //! (`feed::record`), so the TWAP includes the current reading when the ring took it. With the
@@ -9,7 +10,7 @@
 use auction_core::price::FeedParams;
 use auction_engine_params::EngineError;
 use risk_core::{
-    RiskError, liq_price, live_bid_price,
+    RiskError, fallback_bid_price, fallback_twap, liq_price, live_bid_price,
     pause::{FeedCase, Gate, Level, Op, allowed},
     twap, within_deviation,
 };
@@ -53,8 +54,9 @@ pub fn system_gate(cfg: &ConfigState, op: Op) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// The market price behind the collateral gate for `op`: the gate first, then the live feed.
-/// A `FeedRefusal` is the feed's own code; so is a `Fallback` until D4 prices it (Plan 9 Task 9).
+/// The liquidation's market price behind the collateral gate: the gate first, then the live
+/// feed. A `FeedRefusal` is the feed's own code; the table gives `Fallback` to bids only, and
+/// [`bid_pricing`] handles it, so here it is the feed's own code too.
 fn gated_market(coll: &CollateralState, obs: &Observed, op: Op) -> Result<u128, Refusal> {
     match collateral_gate(coll, op, obs.feed.is_ok())? {
         // The feed is valid: its market price.
@@ -64,8 +66,9 @@ fn gated_market(coll: &CollateralState, obs: &Observed, op: Op) -> Result<u128, 
     }
 }
 
-/// The bid's price and its stale-feed (D4) context. Plan 9 Task 7 prices live bids only, so
-/// `fallback` is `false` and `paused_since_ms` is `None`.
+/// The bid's price and its stale-feed (D4) context: a live bid has `fallback: false` and
+/// `paused_since_ms: None`; a fallback bid carries the observed open pause, so the auction's
+/// discount stays frozen (spec §3.2.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BidPricing {
     pub price_ray: u128,
@@ -114,21 +117,52 @@ pub fn liquidation_price(
     Ok(liq_price(m, Some(t), obs.conf_bps, r_ray, &feed))
 }
 
-/// The live bid price `band(min(edge(M), floor(T · (10_000 + dev) / 10_000)))`. The anchor
+/// The D4 fallback price `band(edge(T_lg))` at the ring's last confidence, with the observed
+/// open pause; `None` when D4 is off. `coll` is the observed state, whose pause clock the
+/// invalid feed has opened.
+fn fallback_pricing(
+    coll: &CollateralState,
+    r_ray: u128,
+    now_ms: u64,
+) -> Result<Option<BidPricing>, Refusal> {
+    let feed = coll.feed_params()?;
+    let ring = &coll.ext.ring;
+    let Some(t) = fallback_twap(ring, now_ms, &coll.ext.risk, feed.max_age_ms)? else {
+        return Ok(None);
+    };
+    Ok(Some(BidPricing {
+        price_ray: fallback_bid_price(t, ring.last_conf_bps, r_ray, &feed),
+        fallback: true,
+        paused_since_ms: coll.paused_since_ms,
+    }))
+}
+
+/// The bid price. The pause gate runs first (`Paused` under the admin flag, `BidsPaused` at
+/// level 3). On an invalid feed at level 2 or below the D4 fallback decides (spec §3.2.3):
+/// `TwapUnavailable` without `min_obs` samples, `LastGoodTwapTooOld` past
+/// `stale_bid_max_age_ms`, else the fallback price; with D4 off, the feed's own code.
+///
+/// A live bid is priced at `band(min(edge(M), floor(T · (10_000 + dev) / 10_000)))`. The anchor
 /// applies only with the TWAP and the breaker band both on, and only once the TWAP is
 /// available: a bid during warm-up is priced at `band(edge(M))`, never refused (ruling R9-5).
-/// The pause gate runs first (`Paused` under the admin flag, `BidsPaused` at level 3); an
-/// invalid feed is refused with its own code as before.
 ///
 /// # Errors
-/// `Paused`, `BidsPaused`, `InvalidConfig` or the feed's own `EngineError`.
+/// `Paused`, `BidsPaused`, `InvalidConfig`, `TwapUnavailable`, `LastGoodTwapTooOld` or the
+/// feed's own `EngineError`.
 pub fn bid_pricing(
     coll: &CollateralState,
     obs: &Observed,
     r_ray: u128,
     now_ms: u64,
 ) -> Result<BidPricing, Refusal> {
-    let m = gated_market(coll, obs, Op::Bid)?;
+    let gate = collateral_gate(coll, Op::Bid, obs.feed.is_ok())?;
+    if gate == Gate::Fallback
+        && let Some(pricing) = fallback_pricing(coll, r_ray, now_ms)?
+    {
+        return Ok(pricing);
+    }
+    // `Run`: the live market. `FeedRefusal`, or `Fallback` with D4 off: the feed's own code.
+    let m = require_live(coll, obs)?;
     let feed = coll.feed_params()?;
     let risk = coll.ext.risk;
     let dev = risk.max_spot_twap_dev_bps;
@@ -353,10 +387,84 @@ mod tests {
             Err(Refusal::Risk(RiskError::LiquidationsPaused))
         );
         assert!(bid_pricing(&one, &obs(&one, Ok(RAY), 0), RAY, NOW).is_ok());
-        // A stale bid at level 0 is the feed's own code until D4 (Task 9).
+        // A stale bid at level 0 takes the D4 fallback: with an empty ring, TwapUnavailable.
         assert_eq!(
             bid_pricing(&normal, &obs(&normal, Err(PauseReason::Stale), 0), RAY, NOW),
+            Err(Refusal::Risk(RiskError::TwapUnavailable))
+        );
+    }
+
+    #[test]
+    fn stale_bid_prices_at_the_last_good_twap() {
+        let r = RAY * 13 / 10;
+        let stale = Err(PauseReason::Stale);
+        // A feed max age that passes ruling R9-3 (the fixture's 1 h would leave only the newest
+        // sample inside the frozen window, so D4 could never fire).
+        let warm = CollateralState {
+            paused_since_ms: Some(NOW),
+            max_oracle_age_ms: 600_000,
+            ..coll_with(RiskArgs::recommended(), warm_ring())
+        };
+        let feed = warm.feed_params().expect("feed");
+        let t = twap_at(&warm, &feed, NOW).expect("a twap");
+        let expected = BidPricing {
+            price_ray: risk_core::fallback_bid_price(t, warm.ext.ring.last_conf_bps, r, &feed),
+            fallback: true,
+            paused_since_ms: Some(NOW),
+        };
+        assert_eq!(
+            bid_pricing(&warm, &obs(&warm, stale, 0), r, NOW),
+            Ok(expected)
+        );
+        // Every invalid feed takes the fallback, not only a stale one.
+        let wide = Err(PauseReason::LowConfidence);
+        assert_eq!(
+            bid_pricing(&warm, &obs(&warm, wide, 0), r, NOW),
+            Ok(expected)
+        );
+        // The newest sample more than stale_bid_max_age_ms before now.
+        const NEWEST: u64 = 2 * SPACING;
+        assert_eq!(
+            bid_pricing(&warm, &obs(&warm, stale, 0), r, NEWEST + 3_600_001),
+            Err(Refusal::Risk(RiskError::LastGoodTwapTooOld))
+        );
+        assert!(bid_pricing(&warm, &obs(&warm, stale, 0), r, NEWEST + 3_600_000).is_ok());
+        // D4 off (legacy, or no stale window): the feed's own code.
+        let legacy = coll_with(RiskArgs::legacy(), warm_ring());
+        assert_eq!(
+            bid_pricing(&legacy, &obs(&legacy, stale, 0), r, NOW),
             Err(Refusal::Engine(EngineError::PriceFeedStale))
+        );
+        let no_d4 = coll_with(
+            RiskArgs {
+                stale_bid_max_age_ms: 0,
+                ..RiskArgs::recommended()
+            },
+            warm_ring(),
+        );
+        assert_eq!(
+            bid_pricing(&no_d4, &obs(&no_d4, wide, 0), r, NOW),
+            Err(Refusal::Engine(EngineError::PriceFeedLowConfidence))
+        );
+        // Level 3 and the admin flag still refuse first.
+        let halted = CollateralState {
+            ext: CollateralExt {
+                pause_level: 3,
+                ..warm.ext.clone()
+            },
+            ..warm.clone()
+        };
+        assert_eq!(
+            bid_pricing(&halted, &obs(&halted, stale, 0), r, NOW),
+            Err(Refusal::Risk(RiskError::BidsPaused))
+        );
+        let paused = CollateralState {
+            admin_paused: true,
+            ..warm
+        };
+        assert_eq!(
+            bid_pricing(&paused, &obs(&paused, stale, 0), r, NOW),
+            Err(Refusal::Engine(EngineError::Paused))
         );
     }
 

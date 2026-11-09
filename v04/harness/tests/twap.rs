@@ -121,6 +121,8 @@ fn out_at(w: &World, a: &AuctionState, price_ray: u128) -> u128 {
         paused_total_ms: coll.paused_total_ms,
         min_bid: params.min_bid,
         chost: params.chost().expect("chost"),
+        paused_since_ms: None,
+        fallback: false,
     };
     quote(a, &q).expect("the bid quotes").fill.collateral_out
 }

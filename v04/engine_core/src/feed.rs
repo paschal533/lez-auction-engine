@@ -11,7 +11,7 @@
 use auction_core::{
     error::PauseReason,
     pause::{Observation, OnsetPolicy, PauseClock},
-    price::{OracleReading, bid_price, to_ray},
+    price::{OracleReading, to_ray},
 };
 use auction_engine_params::EngineError;
 use risk_core::{
@@ -118,13 +118,21 @@ pub fn require_live(coll: &CollateralState, obs: &Observed) -> Result<u128, Engi
 }
 
 /// v0.2.4 `liquidate`'s price: `require_live`, then the bid price `P = clamp(M, R·lo, R·hi)`.
+/// Test-only since Plan 9: production prices through `gate::liquidation_price` and
+/// `gate::bid_pricing`; the tests keep it as the v0.2.4 reference those prices must equal at a
+/// zero-confidence reading under the legacy preset.
+#[cfg(test)]
 pub fn live_price(
     coll: &CollateralState,
     obs: &Observed,
     r_ray: u128,
 ) -> Result<u128, EngineError> {
     let m = require_live(coll, obs)?;
-    Ok(bid_price(m, r_ray, &coll.feed_params()?))
+    Ok(auction_core::price::bid_price(
+        m,
+        r_ray,
+        &coll.feed_params()?,
+    ))
 }
 
 #[cfg(test)]

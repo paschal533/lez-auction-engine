@@ -149,4 +149,26 @@ mod proofs {
         assert!(used >= 1 && used >= usize::from(min_obs));
         assert!(lo_p.saturating_sub(7) <= t && t <= hi_p);
     }
+
+    /// D4 (spec §3.2.4): for any fallback price, stale cap and discount up to the schedule
+    /// maximum, the floored price pays out at most the cap per coin:
+    /// `floor(floored_price(p_fb, cap, d) · RAY / (RAY - d)) <= cap`.
+    /// Status: written, not run (Kani is not installed). Do not cite it as proven.
+    #[kani::proof]
+    fn fallback_price_never_breaches_the_floor() {
+        use crate::stale::floored_price;
+        use auction_core::{
+            math::mul_div_floor,
+            schedule::MAX_DISCOUNT_BPS,
+            units::{RAY, bps_to_ray},
+        };
+        let (p_fb, cap, d): (u128, u128, u128) = (kani::any(), kani::any(), kani::any());
+        kani::assume(p_fb < 1 << 100 && cap < 1 << 100 && d <= bps_to_ray(MAX_DISCOUNT_BPS));
+        let price = floored_price(p_fb, cap, d);
+        let Some(keep) = RAY.checked_sub(d) else {
+            return;
+        };
+        let back = mul_div_floor(price, RAY, keep);
+        assert!(matches!(back, Ok(b) if b <= cap));
+    }
 }

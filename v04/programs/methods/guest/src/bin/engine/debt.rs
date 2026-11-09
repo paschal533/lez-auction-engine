@@ -24,6 +24,7 @@ use engine_core::{
     actors::{accounting_actor, buffer_holding, buffer_seed, debt_actor, debt_seed, protocol_def},
     assertions::{debt_report_sender, mint_sender},
     check::{expect_from, expect_root, fail},
+    gate,
     msg::EngineMsg,
     state::{AccountingState, ConfigState},
     system::{
@@ -35,6 +36,7 @@ use lee_core::{
     account::{AccountId, Actor},
     program::{ReceiveInput, Response, SyncMessage},
 };
+use risk_core::pause::Op;
 use token_core::TokenMsg;
 
 use crate::{admin::engine, proxy::debt_probe, system};
@@ -199,6 +201,9 @@ fn root_at_config(
 ) -> (Response, Actor, Box<SystemCtx>) {
     expect_root(input);
     let (c, response) = system::config_root(input, config, Some(now_ms));
+    // The pause gate (ADR-073): level 3 stops the takes; a close always runs.
+    let op = if token_required { Op::TakeDebt } else { Op::CloseDebt };
+    gate::system_gate(&c, op).unwrap_or_else(|err| fail(err));
     if token_required && c.protocol_token.is_none() {
         fail(EngineError::TokenNotConfigured);
     }

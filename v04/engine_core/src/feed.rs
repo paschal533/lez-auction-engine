@@ -58,7 +58,8 @@ pub fn observe(
         Observation {
             now_ms,
             feed_valid: feed.is_ok(),
-            admin_paused: coll.admin_paused,
+            // Only an effective level 3 (or an invalid feed) stops the discount (spec §3.2.1).
+            admin_paused: coll.effective_level() == 3,
             oracle_ts: reading.timestamp_ms,
             max_age_ms: policy.max_age_ms,
         },

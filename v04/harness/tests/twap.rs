@@ -300,7 +300,10 @@ fn bid_during_twap_warm_up_is_not_refused() {
 fn set_collateral_keeps_the_ring_and_the_level() {
     let (mut w, _) = world(RiskArgs::recommended());
     w.warm_twap(P, 3, SPACING);
+    // Level 2 (Plan 9 Task 8) must survive the reconfiguration too (ruling R9-6).
+    w.set_pause_level(2).expect("level 2 applies");
     let before = w.collateral_state();
+    assert_eq!(before.ext.pause_level, 2);
     // A different breaker band, so the rewrite is visible.
     let risk = RiskArgs {
         max_spot_twap_dev_bps: 1_000,
@@ -315,6 +318,8 @@ fn set_collateral_keeps_the_ring_and_the_level() {
     assert_eq!(after.ring, before.ext.ring);
     assert_eq!(after.ring.samples.len(), 3);
     assert_eq!(after.pause_level, before.ext.pause_level);
+    assert_eq!(after.pause_level, 2);
+    assert_eq!(config_state(&w).ext.system_level, 2);
     assert_eq!(after.risk, risk);
     invariants::check(&w);
 }

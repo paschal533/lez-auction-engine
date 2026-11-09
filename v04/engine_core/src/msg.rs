@@ -375,6 +375,21 @@ pub enum EngineMsg {
     ///     `SetSlack` (ADR-064): the collateral actor accepts it only from its own config, writes
     ///     `ctx.slack_ms` and sends nothing. Not sent while the config has no collateral type.
     SlackUpdate { slack_ms: u64 },
+    /// 47. Root at the admin's proxy (ADR-073, spec §3.2.1): a seeded `Probe { Config }`, then
+    ///     this message unseeded to the config, which checks the admin, `level <= 3`
+    ///     (`InvalidConfig`) and that `collateral_def` is its recorded type
+    ///     (`WrongAccount("collateral_def")`), writes `ext.system_level`, and sends the collateral
+    ///     actor a [`EngineMsg::PauseLevelUpdate`] behind a seeded `Probe { Collateral }`, then
+    ///     `Observe { now_ms }` unseeded so the pause clock records the change.
+    SetPauseLevel {
+        salt: u64,
+        collateral_def: AccountId,
+        level: u8,
+        now_ms: u64,
+    },
+    /// 48. Config to its recorded collateral actor, from `SetPauseLevel`: the collateral actor
+    ///     accepts it only from its own config, writes `ext.pause_level` and sends nothing.
+    PauseLevelUpdate { level: u8 },
 }
 
 /// The protocol token's genesis at `Init`: `supply` credited to `to`'s holding.

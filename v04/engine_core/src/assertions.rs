@@ -55,6 +55,11 @@ pub fn slack_update(input: &ReceiveInput) -> Result<CollateralState, EngineError
     collateral_of_sender(input)
 }
 
+/// `PauseLevelUpdate` at a collateral actor, from exactly its config: the decoded state to update.
+pub fn pause_level_update(input: &ReceiveInput) -> Result<CollateralState, EngineError> {
+    collateral_of_sender(input)
+}
+
 /// `AssertCapAtMost { global_cap }` at a collateral actor, from exactly its config.
 pub fn cap_at_most(input: &ReceiveInput, global_cap: u128) -> Result<(), EngineError> {
     let coll = collateral_of_sender(input)?;

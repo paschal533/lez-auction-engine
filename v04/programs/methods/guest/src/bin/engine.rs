@@ -26,6 +26,8 @@
 //! - `debt`: roots `StartDebt` / `TakeDebt` / `CloseDebt` at the config, the debt auction's
 //!   `DebtOpen` / `DebtTake` / `DebtClose`, the accounting's `DebtTaken` / `DebtClosed` and the
 //!   config's `Mint` (variants 34-42, one [`debt::dispatch`] call).
+//! - `pause`: the config's `SetPauseLevel` and the collateral actor's `PauseLevelUpdate`
+//!   (ADR-073); the gates themselves are `engine_core::gate`.
 //!
 //! Errors are panics with the v0.2.4 text (`engine_core::check::fail`).
 
@@ -44,6 +46,8 @@ mod debt;
 mod liquidate;
 #[path = "engine/observe.rs"]
 mod observe;
+#[path = "engine/pause.rs"]
+mod pause;
 #[path = "engine/proxy.rs"]
 mod proxy;
 #[path = "engine/read.rs"]
@@ -275,6 +279,8 @@ fn handle_message(input: &ReceiveInput) -> Response {
         EngineMsg::SetEngineParams { .. } => admin::on_set_engine_params(input, &message),
         EngineMsg::SetSlack { .. } => admin::on_set_slack(input, &message),
         EngineMsg::SlackUpdate { slack_ms } => admin::on_slack_update(input, slack_ms),
+        EngineMsg::SetPauseLevel { .. } => pause::on_set_pause_level(input, &message),
+        EngineMsg::PauseLevelUpdate { level } => pause::on_pause_level_update(input, level),
         EngineMsg::ObserveFeed {
             config,
             collateral_def,

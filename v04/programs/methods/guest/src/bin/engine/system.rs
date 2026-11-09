@@ -29,6 +29,7 @@ use engine_core::{
     actors::{accounting_actor, buffer_holding, buffer_seed},
     assertions::{freeze_sender, system_sender},
     check::{expect_root, fail},
+    gate,
     msg::{ClockMsg, EngineMsg},
     solvency::SolvencyDecision,
     state::{AccountingState, ConfigState, OracleReadingRec},
@@ -41,6 +42,7 @@ use lee_core::{
 };
 use mock_host_core::HostMsg;
 use oracle_core::{OracleMsg, OracleState};
+use risk_core::pause::Op;
 use token_core::{Holding, TokenMsg, holding_actor};
 
 use crate::{admin::engine, debt, surplus};
@@ -65,10 +67,19 @@ pub fn on_freeze(input: &ReceiveInput) -> Response {
 }
 
 /// A system root at the config `config`: asserts the clock claim `now_ms` (except for
-/// `SettleDebt`) and hands `op` to the config's accounting.
+/// `SettleDebt`), runs the config's pause gate (`gate::system_gate`) and hands `op` to the
+/// config's accounting.
 pub fn root(input: &ReceiveInput, config: AccountId, op: SystemOp, now_ms: u64) -> Response {
     let claim = (!matches!(op, SystemOp::SettleDebt { .. })).then_some(now_ms);
     let (c, response) = config_root(input, config, claim);
+    // The pause gate before the relay (ADR-073): level 2 and up stops the system starts.
+    let gated = match op {
+        SystemOp::SettleDebt { .. } => Op::SettleDebt,
+        SystemOp::StartSurplus { .. } => Op::StartSurplus,
+        SystemOp::StartDebt { .. } => Op::StartDebt,
+        SystemOp::CheckSolvency => Op::CheckSolvency,
+    };
+    gate::system_gate(&c, gated).unwrap_or_else(|err| fail(err));
     let system = EngineMsg::System {
         op,
         now_ms,

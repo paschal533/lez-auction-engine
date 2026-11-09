@@ -68,7 +68,7 @@ fn nonzero_actor(actor: Actor) {
 
 /// At the config: the admin whose proxy `(admin, E)` sent the message, with the receiver being
 /// exactly that admin's config for `salt`.
-fn expect_admin_proxy(input: &ReceiveInput, salt: u64) -> AccountId {
+pub(crate) fn expect_admin_proxy(input: &ReceiveInput, salt: u64) -> AccountId {
     let admin = engine_sender(input, EngineError::NotAdmin);
     if input.receiver != config_actor(engine(input), admin, salt) {
         fail(EngineError::WrongAccount("config"));
@@ -398,7 +398,7 @@ fn cap_check(input: &ReceiveInput, response: Response, config: &ConfigState) -> 
 
 /// Appends `msg` for the config's collateral actor of type `def`: a seeded `Probe { Collateral }`,
 /// then `msg` unseeded (R-8b).
-fn to_collateral(
+pub(crate) fn to_collateral(
     input: &ReceiveInput,
     response: Response,
     def: AccountId,

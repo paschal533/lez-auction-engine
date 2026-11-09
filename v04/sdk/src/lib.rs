@@ -17,7 +17,8 @@ use std::fmt;
 
 pub use builder::{
     BidArgs, Deployment, InitArgs, LiquidateArgs, Plan, plan_bid, plan_claim_leftover, plan_init,
-    plan_liquidate, plan_set_collateral, plan_set_collateral_with, plan_settle_empty,
+    plan_liquidate, plan_set_collateral, plan_set_collateral_with, plan_set_pause_level,
+    plan_settle_empty,
 };
 pub use live::{Sent, Snapshot, confirm, max_fee, send, send_signed, simulate};
 pub use risk_core::args::RiskArgs;

@@ -11,6 +11,8 @@
 //!   scratch (`pending_read`, `pending_genesis`, `pending`, `scratch`, the accounting's system
 //!   `pending`) survives a transaction.
 //! - **R-F3:** the config's recorded collateral type, if any, has its collateral actor.
+//! - **Tier 2 (ADR-073, spec §3.1.1):** the type's `pause_level` is at most 3 and equals the
+//!   config's `system_level`; the TWAP ring holds at most 8 samples, timestamps strictly rising.
 //! - **Surplus (rows 10-12):** every started surplus auction exists with its close scratch
 //!   cleared; one is live iff the accounting's `surplus_live`; a live one's vault holding holds
 //!   at least `lot_left` (donations may add to it).
@@ -32,6 +34,7 @@ use engine_core::{
     system_state::{DebtAuctionState, SurplusAuctionState, SystemPhase},
 };
 use lee::Actor;
+use risk_core::TWAP_CAPACITY;
 use token_core::Definition;
 
 use crate::World;
@@ -56,8 +59,10 @@ pub fn check(w: &World) {
             }
         }
     }
-    if let Some(collateral) = decoded(w, w.collateral, CollateralState::decode) {
+    let collateral = decoded(w, w.collateral, CollateralState::decode);
+    if let Some(collateral) = &collateral {
         assert_eq!(collateral.pending, None, "F6: collateral scratch cleared");
+        check_tier2(collateral);
         assert_eq!(
             collateral.type_reserved, live_reserved,
             "reservations: type_reserved == sum over live auctions"
@@ -84,7 +89,36 @@ pub fn check(w: &World) {
             config.global_reserved, live_reserved,
             "reservations: global_reserved == sum over live auctions"
         );
+        if let Some(collateral) = &collateral {
+            assert_eq!(
+                config.ext.system_level, collateral.ext.pause_level,
+                "ADR-073: system_level == the type's pause_level"
+            );
+        }
     }
+}
+
+/// The type's Tier 2 state: a stored pause level of at most 3, and a TWAP ring of at most
+/// `TWAP_CAPACITY` samples with strictly increasing timestamps.
+fn check_tier2(c: &CollateralState) {
+    assert!(
+        c.ext.pause_level <= 3,
+        "ADR-073: pause_level {} > 3",
+        c.ext.pause_level
+    );
+    let samples = &c.ext.ring.samples;
+    assert!(
+        samples.len() <= TWAP_CAPACITY,
+        "ring holds {} > {TWAP_CAPACITY} samples",
+        samples.len()
+    );
+    assert!(
+        samples.windows(2).all(|pair| match pair {
+            [a, b] => a.ts_ms < b.ts_ms,
+            _ => true,
+        }),
+        "ring timestamps strictly increase"
+    );
 }
 
 fn check_auction(w: &World, a: &AuctionState, position: lee::AccountId, nonce: u64) {

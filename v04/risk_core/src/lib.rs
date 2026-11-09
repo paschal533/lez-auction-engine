@@ -9,6 +9,7 @@ pub mod args;
 pub mod error;
 pub mod feed;
 mod kani_proofs;
+pub mod pause;
 #[cfg(feature = "presets")]
 pub mod presets;
 pub mod price;
@@ -22,5 +23,6 @@ pub use error::RiskError;
 pub use feed::{
     FeedFault, FeedPolicy, LEGACY_SANITY_HI_BPS, LEGACY_SANITY_LO_BPS, validate_feed_ext,
 };
+pub use pause::{FeedCase, Gate, Level, Op, allowed};
 pub use price::{conf_bps, edge, fallback_bid_price, liq_price, live_bid_price, within_deviation};
 pub use twap::{Sample, TWAP_CAPACITY, TwapRing, record, twap};

@@ -429,6 +429,35 @@ fn slack_update_round_trips_at_index_46() {
     );
 }
 
+/// `SetPauseLevel` (Plan 9 Task 8, ADR-073) is appended after `SlackUpdate`: variant 47.
+#[test]
+fn set_pause_level_round_trips_at_index_47() {
+    let msg = EngineMsg::SetPauseLevel {
+        salt: 7,
+        collateral_def: id(1),
+        level: 2,
+        now_ms: 9,
+    };
+    let bytes = borsh::to_vec(&msg).expect("encodes");
+    assert_eq!(bytes.first(), Some(&47));
+    assert_eq!(
+        borsh::from_slice::<EngineMsg>(&bytes).expect("decodes"),
+        msg
+    );
+}
+
+/// `PauseLevelUpdate` (Plan 9 Task 8) is appended after `SetPauseLevel`: variant 48.
+#[test]
+fn pause_level_update_round_trips_at_index_48() {
+    let msg = EngineMsg::PauseLevelUpdate { level: 3 };
+    let bytes = borsh::to_vec(&msg).expect("encodes");
+    assert_eq!(bytes, [48, 3]);
+    assert_eq!(
+        borsh::from_slice::<EngineMsg>(&bytes).expect("decodes"),
+        msg
+    );
+}
+
 #[test]
 fn set_collateral_and_bid_ctx_carry_the_appended_fields() {
     let set = EngineMsg::SetCollateral {

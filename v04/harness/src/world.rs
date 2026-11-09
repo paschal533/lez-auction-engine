@@ -424,11 +424,17 @@ impl World {
             salt,
             collateral_def,
             ..
+        }
+        | EngineMsg::SetPauseLevel {
+            salt,
+            collateral_def,
+            ..
         } = msg
         {
             let config = config_actor(self.engine, proxy, *salt);
             let collateral = collateral_actor(self.engine, config.account_id, *collateral_def);
-            // The collateral actor observes: host params, oracle, clock.
+            // The collateral actor observes (after `SetPauseLevel` too): host params, oracle,
+            // clock.
             let clock = self.chain.clock();
             return vec![at, config, collateral, self.params, self.oracle, clock];
         }

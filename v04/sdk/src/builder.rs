@@ -320,14 +320,7 @@ pub fn plan_set_collateral_with(
     now_ms: u64,
 ) -> Result<Plan, SdkError> {
     let proxy = d.proxy(d.admin);
-    let actors = vec![
-        proxy,
-        d.config,
-        d.collateral(collateral_def),
-        d.host,
-        d.oracle,
-        d.clock,
-    ];
+    let actors = admin_observe_actors(d, collateral_def);
     let msg = EngineMsg::SetCollateral {
         salt: d.salt,
         collateral_def,
@@ -335,6 +328,41 @@ pub fn plan_set_collateral_with(
         now_ms,
         risk: Box::new(risk),
     };
+    Plan::new(proxy, actors, vec![d.admin], Vec::new(), &msg)
+}
+
+/// The actors of an admin message the collateral actor observes after: the admin's proxy, the
+/// config, the collateral actor, and what it observes (host params, oracle, clock).
+fn admin_observe_actors(d: &Deployment, collateral_def: AccountId) -> Vec<Actor> {
+    vec![
+        d.proxy(d.admin),
+        d.config,
+        d.collateral(collateral_def),
+        d.host,
+        d.oracle,
+        d.clock,
+    ]
+}
+
+/// `SetPauseLevel` (ADR-073) at the admin's proxy, signed by the admin: the same actors as
+/// [`plan_set_collateral`], since the level change is followed by an `Observe`.
+///
+/// # Errors
+/// [`SdkError::Encode`] if the message does not encode.
+pub fn plan_set_pause_level(
+    d: &Deployment,
+    collateral_def: AccountId,
+    level: u8,
+    now_ms: u64,
+) -> Result<Plan, SdkError> {
+    let proxy = d.proxy(d.admin);
+    let msg = EngineMsg::SetPauseLevel {
+        salt: d.salt,
+        collateral_def,
+        level,
+        now_ms,
+    };
+    let actors = admin_observe_actors(d, collateral_def);
     Plan::new(proxy, actors, vec![d.admin], Vec::new(), &msg)
 }
 

@@ -43,6 +43,13 @@ const fn refuse(field: &'static str) -> Result<(), RiskArgsError> {
 }
 
 impl RiskArgs {
+    /// Whether D4 (bids on a stale feed, spec §3.2.3) is on: a stale window and a TWAP window
+    /// both set. The one predicate both the stale cap at `Seized` and the fallback bid use.
+    #[must_use]
+    pub const fn d4_on(&self) -> bool {
+        self.stale_bid_max_age_ms > 0 && self.twap_window_ms > 0
+    }
+
     /// Checks the §3.1.6 and §3.2.4 ranges, then the Plan 9 ruling R9-3 bounds, in that fixed
     /// order; the first failure is returned. `max_oracle_age_ms` is the type's feed max age.
     pub fn validate(&self, max_oracle_age_ms: u64) -> Result<(), RiskArgsError> {
@@ -142,6 +149,21 @@ mod tests {
 
     fn field(r: RiskArgs) -> Result<(), &'static str> {
         r.validate(MAX_AGE).map_err(|e| e.field)
+    }
+
+    #[test]
+    fn d4_on_needs_both_windows() {
+        assert!(!base().d4_on(), "no stale window");
+        let on = RiskArgs {
+            stale_bid_max_age_ms: 3_600_000,
+            ..base()
+        };
+        assert!(on.d4_on());
+        let no_twap = RiskArgs {
+            twap_window_ms: 0,
+            ..on
+        };
+        assert!(!no_twap.d4_on());
     }
 
     #[cfg(feature = "presets")]

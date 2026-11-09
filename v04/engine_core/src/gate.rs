@@ -130,6 +130,13 @@ fn fallback_pricing(
     let Some(t) = fallback_twap(ring, now_ms, &coll.ext.risk, feed.max_age_ms)? else {
         return Ok(None);
     };
+    // An invalid observation always opens the pause clock (`feed::observe`); with it closed the
+    // discount would keep running through the outage, losing the frozen guarantee (the floor
+    // would still bound the payout).
+    debug_assert!(
+        coll.paused_since_ms.is_some(),
+        "a fallback bid needs an open pause"
+    );
     Ok(Some(BidPricing {
         price_ray: fallback_bid_price(t, ring.last_conf_bps, r_ray, &feed),
         fallback: true,
@@ -394,45 +401,61 @@ mod tests {
         );
     }
 
-    #[test]
-    fn stale_bid_prices_at_the_last_good_twap() {
-        let r = RAY * 13 / 10;
-        let stale = Err(PauseReason::Stale);
-        // A feed max age that passes ruling R9-3 (the fixture's 1 h would leave only the newest
-        // sample inside the frozen window, so D4 could never fire).
-        let warm = CollateralState {
+    /// The D4 redemption price inside the fixture's band.
+    const R_D4: u128 = RAY * 13 / 10;
+    const STALE: Result<u128, PauseReason> = Err(PauseReason::Stale);
+    const WIDE: Result<u128, PauseReason> = Err(PauseReason::LowConfidence);
+
+    /// The recommended fixture, warm, with its pause opened at `NOW` and a feed max age that
+    /// passes ruling R9-3 (the fixture's 1 h would leave only the newest sample inside the frozen
+    /// window, so D4 could never fire).
+    fn warm_stale() -> CollateralState {
+        CollateralState {
             paused_since_ms: Some(NOW),
             max_oracle_age_ms: 600_000,
             ..coll_with(RiskArgs::recommended(), warm_ring())
-        };
+        }
+    }
+
+    #[test]
+    fn stale_bid_prices_at_the_last_good_twap() {
+        let warm = warm_stale();
         let feed = warm.feed_params().expect("feed");
         let t = twap_at(&warm, &feed, NOW).expect("a twap");
+        let last_conf = warm.ext.ring.last_conf_bps;
         let expected = BidPricing {
-            price_ray: risk_core::fallback_bid_price(t, warm.ext.ring.last_conf_bps, r, &feed),
+            price_ray: risk_core::fallback_bid_price(t, last_conf, R_D4, &feed),
             fallback: true,
             paused_since_ms: Some(NOW),
         };
         assert_eq!(
-            bid_pricing(&warm, &obs(&warm, stale, 0), r, NOW),
+            bid_pricing(&warm, &obs(&warm, STALE, 0), R_D4, NOW),
             Ok(expected)
         );
         // Every invalid feed takes the fallback, not only a stale one.
-        let wide = Err(PauseReason::LowConfidence);
         assert_eq!(
-            bid_pricing(&warm, &obs(&warm, wide, 0), r, NOW),
+            bid_pricing(&warm, &obs(&warm, WIDE, 0), R_D4, NOW),
             Ok(expected)
         );
-        // The newest sample more than stale_bid_max_age_ms before now.
+    }
+
+    #[test]
+    fn stale_bid_refused_past_the_max_age() {
         const NEWEST: u64 = 2 * SPACING;
+        let warm = warm_stale();
+        let o = obs(&warm, STALE, 0);
         assert_eq!(
-            bid_pricing(&warm, &obs(&warm, stale, 0), r, NEWEST + 3_600_001),
+            bid_pricing(&warm, &o, R_D4, NEWEST + 3_600_001),
             Err(Refusal::Risk(RiskError::LastGoodTwapTooOld))
         );
-        assert!(bid_pricing(&warm, &obs(&warm, stale, 0), r, NEWEST + 3_600_000).is_ok());
-        // D4 off (legacy, or no stale window): the feed's own code.
+        assert!(bid_pricing(&warm, &o, R_D4, NEWEST + 3_600_000).is_ok());
+    }
+
+    #[test]
+    fn stale_bid_with_d4_off_is_the_feed_code() {
         let legacy = coll_with(RiskArgs::legacy(), warm_ring());
         assert_eq!(
-            bid_pricing(&legacy, &obs(&legacy, stale, 0), r, NOW),
+            bid_pricing(&legacy, &obs(&legacy, STALE, 0), R_D4, NOW),
             Err(Refusal::Engine(EngineError::PriceFeedStale))
         );
         let no_d4 = coll_with(
@@ -443,10 +466,14 @@ mod tests {
             warm_ring(),
         );
         assert_eq!(
-            bid_pricing(&no_d4, &obs(&no_d4, wide, 0), r, NOW),
+            bid_pricing(&no_d4, &obs(&no_d4, WIDE, 0), R_D4, NOW),
             Err(Refusal::Engine(EngineError::PriceFeedLowConfidence))
         );
-        // Level 3 and the admin flag still refuse first.
+    }
+
+    #[test]
+    fn stale_bid_level_3_and_admin_refuse_first() {
+        let warm = warm_stale();
         let halted = CollateralState {
             ext: CollateralExt {
                 pause_level: 3,
@@ -455,7 +482,7 @@ mod tests {
             ..warm.clone()
         };
         assert_eq!(
-            bid_pricing(&halted, &obs(&halted, stale, 0), r, NOW),
+            bid_pricing(&halted, &obs(&halted, STALE, 0), R_D4, NOW),
             Err(Refusal::Risk(RiskError::BidsPaused))
         );
         let paused = CollateralState {
@@ -463,7 +490,7 @@ mod tests {
             ..warm
         };
         assert_eq!(
-            bid_pricing(&paused, &obs(&paused, stale, 0), r, NOW),
+            bid_pricing(&paused, &obs(&paused, STALE, 0), R_D4, NOW),
             Err(Refusal::Engine(EngineError::Paused))
         );
     }

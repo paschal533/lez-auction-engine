@@ -12,6 +12,7 @@
 //! oracle at p = 0.5 RAY, three samples 300_000 ms apart, the liquidation 1_000 ms after the
 //! newest, then `World::go_stale`.
 
+use auction_engine_params::EngineError;
 use engine_core::{
     bid::{BidQuote, quote},
     check::{Refusal, fail_text},
@@ -219,6 +220,33 @@ fn stale_feed_bid_refused_without_min_obs() {
     );
 }
 
+/// An auction opened while D4 was off stored no stale cap (0): once D4 is turned on, a stale-feed
+/// bid on it is refused with the stale-feed code, as if D4 were still off, and moves nothing.
+#[test]
+fn stale_feed_bid_refused_on_an_auction_opened_without_d4() {
+    let mut w = World::new_tier2(RiskArgs::legacy());
+    w.set_now_ms(T0);
+    let position = w.open_unsafe_position(COLLATERAL, DEBT);
+    w.set_price(P);
+    w.liquidate(position, 0).expect("the keeper liquidates");
+    assert_eq!(auction_state(&w, position).stale_cap_ray, 0);
+    let set = w.set_collateral_msg_with(tier2_collateral_args(), RiskArgs::recommended());
+    let key = w.admin_key.clone();
+    w.send_engine(w.admin, &[&key], &set)
+        .expect("the TWAP and D4 are turned on");
+    w.warm_twap(P, 3, SPACING);
+    let bidder = w.fund_bidder("bidder", FUNDS);
+    invariants::check(&w);
+    w.go_stale();
+    // D4 itself would price this bid: the last-good TWAP exists and is fresh enough.
+    assert!(p_fb(&w) > 0);
+    refused(
+        &mut w,
+        |w| w.bid(&bidder, position, 0, (BID_IN, 0)),
+        EngineError::PriceFeedStale,
+    );
+}
+
 #[test]
 fn stale_feed_bid_held_at_the_floor() {
     let (mut w, position, bidder) = liquidated();
@@ -241,6 +269,14 @@ fn discount_stays_frozen_across_fallback_bids() {
     // Past `newest + max_age`, so the TWAP anchor is frozen for both bids.
     let slack = w.collateral_state().ctx.slack_ms;
     later(&mut w, slack);
+    // The floor does not bind, so the equal payouts below come from the frozen discount, not
+    // from a floor that pays `coin · cap / RAY` whatever the discount.
+    let a = auction_state(&w, position);
+    let price = p_fb(&w);
+    assert_eq!(
+        floored_price(price, a.stale_cap_ray, discount(&w, &a)),
+        price
+    );
     let first = bid_out(&mut w, &bidder, position, BID_IN);
     let onset = w.collateral_state().paused_since_ms;
     assert!(onset.is_some(), "the pause is open");

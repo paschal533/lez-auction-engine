@@ -78,8 +78,7 @@ pub struct SeizeReport {
 /// schedule, only when D4 is on (`stale_bid_max_age_ms > 0` and `twap_window_ms > 0`); else 0,
 /// the legacy value.
 fn stale_cap_of(ctx: &QuoteCtx, schedule: &Schedule) -> Result<u128, EngineError> {
-    let risk = &ctx.collateral.ext.risk;
-    if risk.stale_bid_max_age_ms == 0 || risk.twap_window_ms == 0 {
+    if !ctx.collateral.ext.risk.d4_on() {
         return Ok(0);
     }
     stale_cap(ctx.price_ray, schedule).map_err(|_| EngineError::Math)

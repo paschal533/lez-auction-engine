@@ -26,8 +26,9 @@ pub fn stale_cap(p_liq_ray: u128, schedule: &Schedule) -> Result<u128, MathError
 }
 
 /// The fallback bid price `min(P_fb, floor(stale_cap · (RAY - d) / RAY))` at the bid's (frozen)
-/// discount `d`. A `stale_cap` of 0 (an auction opened while D4 was off) gives 0, which the
-/// quote refuses (`quote_bid` refuses a zero price), so such an auction is never sold unfloored.
+/// discount `d`. A `stale_cap` of 0 (an auction opened while D4 was off) gives 0, which
+/// `engine_core::bid::quote` refuses explicitly (`PriceFeedStale`), so such an auction is never
+/// sold unfloored.
 #[must_use]
 pub fn floored_price(p_fb: u128, stale_cap_ray: u128, d_ray: u128) -> u128 {
     let keep = RAY.saturating_sub(d_ray);
@@ -51,7 +52,7 @@ pub fn fallback_twap(
     risk: &RiskArgs,
     max_age_ms: u64,
 ) -> Result<Option<u128>, RiskError> {
-    if risk.stale_bid_max_age_ms == 0 || risk.twap_window_ms == 0 {
+    if !risk.d4_on() {
         return Ok(None);
     }
     let (t, newest_ms) = twap(
@@ -109,7 +110,7 @@ mod tests {
         let d = bps_to_ray(1_000);
         assert_eq!(floored_price(RAY, RAY, d), RAY / 10 * 9);
         assert_eq!(floored_price(RAY / 2, RAY, d), RAY / 2);
-        // No cap recorded: the price is 0, which the quote refuses.
+        // No cap recorded: the price is 0, which the engine's quote refuses.
         assert_eq!(floored_price(RAY, 0, d), 0);
     }
 

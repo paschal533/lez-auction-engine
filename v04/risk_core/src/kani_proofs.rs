@@ -54,10 +54,47 @@ mod proofs {
         );
     }
 
+    /// Exact replacement for `auction_core::math::mul_div_floor` inside `twap_bounded_by_samples`
+    /// only. It is exact whenever `x · y < 2^128`. The harness guarantees that: prices are below
+    /// `2^64` and weights are `u64`. The `assert!` makes any call outside that range fail the
+    /// proof rather than silently return `Overflow`. `d == 0` gives `DivByZero`, as the original
+    /// does.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "d != 0 is checked; the product is checked"
+    )]
+    fn mul_div_floor_narrow(
+        x: u128,
+        y: u128,
+        d: u128,
+    ) -> Result<u128, auction_core::math::MathError> {
+        if d == 0 {
+            return Err(auction_core::math::MathError::DivByZero);
+        }
+        let n = x.checked_mul(y);
+        assert!(
+            n.is_some(),
+            "mul_div_floor stub used outside its exact range"
+        );
+        n.map(|n| n / d)
+            .ok_or(auction_core::math::MathError::Overflow)
+    }
+
     /// For any ring of up to 3 samples (strictly increasing times, prices below `2^64`) and any
-    /// query, a returned TWAP lies in `[min - 7, max]` of the ring's prices (spec §3.1.3).
+    /// query, a returned TWAP lies in `[min - 7, max]` of the prices of the samples it actually
+    /// used (spec §3.1.3). The used set is rebuilt here with the span rule of the proptest's
+    /// reference model. Each sample is current from its own time to `min(next.ts, anchor)`, or
+    /// to the anchor for the newest, clipped below at `anchor - window`. A non-newest sample
+    /// current for longer than `max_age` cuts itself and everything older.
+    ///
+    /// Unwinding: `unwind(9)` bounds the ring loops only, which have at most 3 iterations here.
+    /// The 128-iteration loop in `auction_core::math::div_wide`, which `mul_div_floor` reaches,
+    /// is never entered, because `mul_div_floor` is stubbed by the exact `mul_div_floor_narrow`.
+    /// Run it with `cargo kani -p risk_core --harness twap_bounded_by_samples -Z stubbing`.
+    /// Status: written, not run (Kani is not installed). Do not cite it as proven.
     #[kani::proof]
     #[kani::unwind(9)]
+    #[kani::stub(auction_core::math::mul_div_floor, mul_div_floor_narrow)]
     fn twap_bounded_by_samples() {
         use crate::twap::{Sample, TwapRing, twap};
         use alloc::vec::Vec;
@@ -65,7 +102,6 @@ mod proofs {
         kani::assume(len >= 1 && len <= 3);
         let mut samples: Vec<Sample> = Vec::new();
         let mut ts: u64 = kani::any();
-        let (mut lo_p, mut hi_p) = (u128::MAX, 0u128);
         for i in 0..len {
             if i != 0 {
                 let gap: u64 = kani::any();
@@ -77,8 +113,6 @@ mod proofs {
             }
             let price_ray: u128 = kani::any();
             kani::assume(price_ray < 1 << 64);
-            lo_p = lo_p.min(price_ray);
-            hi_p = hi_p.max(price_ray);
             samples.push(Sample {
                 ts_ms: ts,
                 price_ray,
@@ -88,8 +122,31 @@ mod proofs {
             samples,
             last_conf_bps: 0,
         };
-        if let Some((t, _)) = twap(&ring, kani::any(), kani::any(), kani::any(), kani::any()) {
-            assert!(lo_p.saturating_sub(7) <= t && t <= hi_p);
+        let (now, window, min_obs, max_age): (u64, u64, u8, u64) =
+            (kani::any(), kani::any(), kani::any(), kani::any());
+        let Some((t, _)) = twap(&ring, now, window, min_obs, max_age) else {
+            return;
+        };
+        // Rebuild the used samples' price range: newest first, span rule as documented above.
+        let Some(newest) = ring.samples.last() else {
+            return;
+        };
+        let anchor = now.min(newest.ts_ms.saturating_add(max_age));
+        let lo = anchor.saturating_sub(window);
+        let (mut lo_p, mut hi_p, mut used) = (u128::MAX, 0u128, 0usize);
+        for (i, s) in ring.samples.iter().enumerate().rev() {
+            let next = ring.samples.get(i.saturating_add(1));
+            let end = next.map_or(anchor, |n| n.ts_ms.min(anchor));
+            if next.is_some() && end.saturating_sub(s.ts_ms) > max_age {
+                break;
+            }
+            if end.saturating_sub(s.ts_ms.max(lo)) > 0 {
+                lo_p = lo_p.min(s.price_ray);
+                hi_p = hi_p.max(s.price_ray);
+                used = used.saturating_add(1);
+            }
         }
+        assert!(used >= 1 && used >= usize::from(min_obs));
+        assert!(lo_p.saturating_sub(7) <= t && t <= hi_p);
     }
 }

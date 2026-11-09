@@ -220,6 +220,20 @@ mod tests {
             twap(&ring(&[(0, 100), (10_000, 200)]), 5_000, 60_000, 1, 600_000),
             Some((100, 10_000))
         );
+        // Pins "never raise `end`": the newest (10_000) carries no weight and `end` stays at the
+        // anchor 5_000, so the weights are 1_000 (4_000..5_000) and 4_000 (0..4_000) of 5_000:
+        // T = 300·1/5 + 100·4/5 = 60 + 80 = 140. Raising `end` to 10_000 would give 6_000 and
+        // 4_000 of 10_000, i.e. 180 + 40 = 220.
+        assert_eq!(
+            twap(
+                &ring(&[(0, 100), (4_000, 300), (10_000, 200)]),
+                5_000,
+                60_000,
+                1,
+                600_000
+            ),
+            Some((140, 10_000))
+        );
     }
 
     #[test]
@@ -346,7 +360,8 @@ mod tests {
         out
     }
 
-    /// `twap` agrees with the reference on availability and the newest time, and `T` lies in
+    /// `twap` agrees exactly with the reference: on availability, on the newest time, and on
+    /// `T = Σ floor(p_i · w_i / Σw)` over the reference's own weights. `T` also lies in
     /// `[min - (k - 1), max]` of the `k` used prices, hence in `[min - 7, max]`.
     fn check_twap(
         r: &TwapRing,
@@ -364,6 +379,10 @@ mod tests {
         let got = twap(r, now, window, min_obs, max_age);
         prop_assert_eq!(got.is_some(), expect_some, "used {:?}", used);
         if let Some((t, ts)) = got {
+            let t_ref = used.iter().try_fold(0u128, |acc, &(p, w)| {
+                acc.checked_add(mul_div_floor(p, u128::from(w), u128::from(total)).ok()?)
+            });
+            prop_assert_eq!(Some(t), t_ref, "used {:?}", used);
             let lo_p = used.iter().map(|&(p, _)| p).min().unwrap_or_default();
             let hi_p = used.iter().map(|&(p, _)| p).max().unwrap_or_default();
             let slack = u128::try_from(used.len().saturating_sub(1)).unwrap_or(u128::MAX);

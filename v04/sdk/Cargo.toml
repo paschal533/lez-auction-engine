@@ -45,3 +45,7 @@ required-features = ["session"]
 [[example]]
 name = "system"
 required-features = ["session"]
+
+[[example]]
+name = "tier2"
+required-features = ["session"]

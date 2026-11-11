@@ -1,6 +1,6 @@
 //! A live session for the examples that drive a standalone sequencer (`examples/slice.rs`,
-//! `examples/system.rs`, run by `v04/scripts/e2e.sh`): the environment, derived signer keys, the
-//! simulate-send-confirm loop with its fee record, and the token, oracle and mock-host fixtures
+//! `examples/system.rs`, `examples/tier2.rs`, run by `v04/scripts/e2e.sh`): the environment,
+//! derived signer keys, the simulate-send-confirm loop with its fee record, and the token, oracle and mock-host fixtures
 //! the engine runs against.
 //!
 //! Environment: `SEQUENCER_URL` (default `http://127.0.0.1:3040`); `TOKEN_PROGRAM`,
@@ -433,16 +433,32 @@ impl Setup {
         live.run("token: stablecoin def", &pl).await
     }
 
-    /// The publisher (a relay actor) publishes `price_ray` at the head clock's time.
+    /// The publisher (a relay actor) publishes `price_ray` at the head clock's time, with zero
+    /// confidence.
     ///
     /// # Errors
     /// If the send fails.
     pub async fn publish(&self, live: &mut Live, label: &str, price_ray: u128) -> Res<()> {
+        self.publish_with_confidence(live, label, price_ray, 0)
+            .await
+    }
+
+    /// [`Setup::publish`] with `confidence` (raw, in the oracle's scale: RAY for the e2e types).
+    ///
+    /// # Errors
+    /// If the send fails.
+    pub async fn publish_with_confidence(
+        &self,
+        live: &mut Live,
+        label: &str,
+        price_ray: u128,
+        confidence: u128,
+    ) -> Res<()> {
         let publisher = Actor::new(self.publisher.account, self.p.relay);
         let publish = OracleMsg::Publish {
             price_ray,
             timestamp_ms: live.now_ms().await?,
-            confidence: 0,
+            confidence,
         };
         let forward = Forward {
             to: self.oracle,

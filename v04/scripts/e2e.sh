@@ -9,11 +9,13 @@
 #   7. run `cargo run -p sdk --example system` (Plan 6: settle_debt, one debt auction, one surplus
 #      auction, check_solvency; expects "system complete" and "scan ok:", the SDK block scanner
 #      finding both system auctions),
-#   8. stop the sequencer by its exact process name.
-# `e2e.sh` (or `e2e.sh all`) runs every step; `up`, `deploy`, `slice`, `system`, `down` run them in
-# stages. Exits non-zero on any failed step. Runs locally and on hosted CI
+#   8. run `cargo run -p sdk --example tier2` (Plan 9: TWAP warm-up refusal, confidence-edge
+#      prices, a level 1 bid, a stale-feed fallback bid, level 3 settles; expects "tier2 complete"),
+#   9. stop the sequencer by its exact process name.
+# `e2e.sh` (or `e2e.sh all`) runs every step; `up`, `deploy`, `slice`, `system`, `tier2`, `down` run
+# them in stages. Exits non-zero on any failed step. Runs locally and on hosted CI
 # (.github/workflows/v04-e2e.yml, which runs the stages as separate steps): it needs a few GB of
-# LEZ build and about 25 minutes of 15 s blocks.
+# LEZ build and about 40 minutes of 15 s blocks (the tier2 stage alone about 15).
 #
 # Environment (all optional):
 #   LEZ_DIR        LEZ checkout at v0.4.0-rc1      (default ~/lez-spikes/lez-v04, cloned if absent)
@@ -74,7 +76,7 @@ build_lez() {
 }
 
 build_v04() {
-  ( cd "$V04" && cargo build -p methods && cargo build -p sdk --features session --example slice --example system )
+  ( cd "$V04" && cargo build -p methods && cargo build -p sdk --features session --example slice --example system --example tier2 )
   for g in token oracle mock_host relay engine; do
     [[ -f "$GUESTS/$g.bin" ]] || die "missing guest $GUESTS/$g.bin"
   done
@@ -172,14 +174,16 @@ case "${1:-all}" in
     step "deploy the guests"; deploy_all
     step "the slice"; run_example slice
     step "the system instructions"; run_example system
+    step "the Tier 2 risk features"; run_example tier2
     step "stop the sequencer"; stop_sequencer; trap - EXIT
-    echo "e2e: slice complete, system complete" ;;
+    echo "e2e: slice complete, system complete, tier2 complete" ;;
   # Stages, for a session that cannot hold one long command: the sequencer keeps running between
   # them (no EXIT trap); `down` stops it.
   up) up; trap - EXIT; printf 'PAYER=%s\n' "$PAYER" > "$E2E_HOME/programs.env" ;;
   deploy) load_env; step "deploy the guests"; deploy_all ;;
   slice) load_env; step "the slice"; run_example slice; echo "e2e: slice complete" ;;
   system) load_env; step "the system instructions"; run_example system; echo "e2e: system complete" ;;
+  tier2) load_env; step "the Tier 2 risk features"; run_example tier2; echo "e2e: tier2 complete" ;;
   down) step "stop the sequencer"; stop_sequencer ;;
-  *) echo "usage: $0 [all|up|deploy|slice|system|down]" >&2; exit 2 ;;
+  *) echo "usage: $0 [all|up|deploy|slice|system|tier2|down]" >&2; exit 2 ;;
 esac

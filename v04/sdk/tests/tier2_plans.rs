@@ -1,13 +1,16 @@
-//! The Tier 2 plans against the in-process harness: `SetPauseLevel` (ADR-073) declares exactly
-//! World's actors and every actor its run changed, as `plans_declare_every_touched_actor` in
-//! `builder.rs` does for the slice.
+//! The Tier 2 plans against the in-process harness: `SetPauseLevel` (ADR-073) and
+//! `SetCollateral` with risk parameters (ADR-082) declare exactly World's actors and every actor
+//! their runs changed, as `plans_declare_every_touched_actor` in `builder.rs` does for the slice.
 
 use std::collections::BTreeSet;
 
 use engine_core::msg::EngineMsg;
-use harness::{Chain, World};
+use harness::{Chain, World, tier2::tier2_collateral_args};
 use lee::{AccountId, Actor, PrivateKey};
-use sdk::{Deployment, Plan, StateSource, fit_gas, plan_set_pause_level, simulate_with};
+use sdk::{
+    Deployment, Plan, RiskArgs, StateSource, fit_gas, plan_set_collateral_with,
+    plan_set_pause_level, simulate_with,
+};
 
 /// The harness chain as the SDK's state source.
 struct InProcess<'c>(&'c Chain);
@@ -64,6 +67,32 @@ fn set_pause_level_plan_declares_every_touched_actor() {
         assert_eq!(set(&plan.actors), set(&w.proxy_actors(w.admin, &msg)));
         run(&mut w, "set_pause_level", &plan, &[&key]);
         assert_eq!(w.collateral_state().ext.pause_level, level);
+        harness::invariants::check(&w);
+    }
+}
+
+#[test]
+fn set_collateral_with_plan_declares_every_touched_actor() {
+    let mut w = World::new_tier2(RiskArgs::legacy());
+    let d = Deployment::load(&InProcess(&w.chain), w.engine, w.config.account_id)
+        .expect("config loads");
+    let key = w.admin_key.clone();
+    let wider = RiskArgs {
+        max_spot_twap_dev_bps: 1_000,
+        ..RiskArgs::recommended()
+    };
+    for risk in [RiskArgs::recommended(), wider, RiskArgs::legacy()] {
+        let args = tier2_collateral_args();
+        let msg = w.set_collateral_msg_with(args.clone(), risk);
+        let plan = plan_set_collateral_with(&d, w.collateral_def, args, risk, w.now_ms)
+            .expect("the plan builds");
+        assert_eq!(plan.message, borsh::to_vec(&msg).expect("encodes"));
+        assert_eq!(plan.root, Actor::new(w.admin, w.engine));
+        assert_eq!(plan.signers, vec![w.admin]);
+        assert!(plan.evidence.is_empty());
+        assert_eq!(set(&plan.actors), set(&w.proxy_actors(w.admin, &msg)));
+        run(&mut w, "set_collateral_with", &plan, &[&key]);
+        assert_eq!(w.collateral_state().ext.risk, risk);
         harness::invariants::check(&w);
     }
 }

@@ -17,7 +17,7 @@
 //! `check_solvency` (row 16): `CheckSolvency`, a root at the config ([`World::check_solvency`]);
 //! a `Freeze` decision freezes new debt at the bound host ([`World::host_frozen`]).
 
-use auction_engine_params::args::EngineParamsArgs;
+use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use engine_core::{
     actors::{
         accounting_actor, buffer_holding, debt_actor, protocol_def, surplus_actor,
@@ -31,6 +31,7 @@ use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence, error::LeeError};
 use lee_core::program::TransactionEvent;
 use mock_host_core::Params;
 use oracle_core::OracleMsg;
+use risk_core::RiskArgs;
 use token_core::{TokenMsg, holding_seed};
 
 use crate::{World, world::Forward};
@@ -332,6 +333,21 @@ impl World {
     /// # Panics
     /// If any of these transactions fails.
     pub fn init_system(&mut self, params: EngineParamsArgs, ref_oracle: Option<Actor>) {
+        let args = Self::collateral_args();
+        self.init_system_with(params, ref_oracle, args, RiskArgs::legacy());
+    }
+
+    /// [`World::init_system`] configuring the collateral with `args` and `risk`.
+    ///
+    /// # Panics
+    /// If any of these transactions fails.
+    pub fn init_system_with(
+        &mut self,
+        params: EngineParamsArgs,
+        ref_oracle: Option<Actor>,
+        args: CollateralArgs,
+        risk: RiskArgs,
+    ) {
         let (_, taker) = self.chain.key(TAKER);
         let genesis = ProtocolGenesis {
             to: taker,
@@ -345,7 +361,7 @@ impl World {
         let init = self.init_msg_full(params, ref_oracle, Some(genesis));
         self.send_engine(self.admin, &[&key], &init)
             .expect("the engine is initialised");
-        let set = self.set_collateral_msg(Self::collateral_args());
+        let set = self.set_collateral_msg_with(args, risk);
         self.send_engine(self.admin, &[&key], &set)
             .expect("the collateral is configured");
         self.bind_host().expect("the host binds the config actor");

@@ -31,6 +31,17 @@ impl World {
         World::new_with(RAY / 2, |_| {}, tier2_collateral_args(), risk)
     }
 
+    /// [`World::new_tier2`] with the protocol token on and its genesis credited to the
+    /// [`crate::system::TAKER`] signer ([`World::init_system_with`]), so the surplus and debt
+    /// auctions can run too. The collateral arguments, `risk` and the redemption price are
+    /// [`World::new_tier2`]'s.
+    #[must_use]
+    pub fn new_tier2_system(risk: RiskArgs) -> World {
+        let mut w = World::bare_with(RAY / 2, |_| {});
+        w.init_system_with(World::engine_params(), None, tier2_collateral_args(), risk);
+        w
+    }
+
     /// `SetCollateral` of the world's collateral definition for salt [`SALT`] with `args` and
     /// `risk`, claiming the world's current time.
     #[must_use]

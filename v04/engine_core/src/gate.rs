@@ -335,6 +335,45 @@ mod tests {
         );
     }
 
+    /// TWAP on with the breaker off (`max_spot_twap_dev_bps == 0`, ruling R9-5): a spot far from
+    /// the TWAP still liquidates at `band(edge(min(M, T)))`, and a bid is not anchored. Pins both
+    /// `dev > 0` guards.
+    #[test]
+    fn breaker_off_neither_refuses_nor_anchors() {
+        // Fixture band [0.9 R, 1.1 R]; R = 1.3 RAY keeps 1.4 RAY inside it.
+        let r = RAY * 13 / 10;
+        let risk = RiskArgs {
+            max_spot_twap_dev_bps: 0,
+            ..RiskArgs::recommended()
+        };
+        let warm = coll_with(risk, warm_ring());
+        let feed = warm.feed_params().expect("feed");
+        let t = twap_at(&warm, &feed, NOW).expect("a twap");
+        // 40 % above the TWAP: the recommended 20 % breaker would refuse it.
+        let m = RAY * 14 / 10;
+        assert!(!within_deviation(
+            m,
+            t,
+            RiskArgs::recommended().max_spot_twap_dev_bps
+        ));
+        assert_eq!(
+            liquidation_price(&warm, &obs(&warm, Ok(m), 0), r, NOW),
+            Ok(liq_price(m, Some(t), 0, r, &feed))
+        );
+        // The bid pays at band(edge(M)), above the anchor floor(T · 1.2) the breaker band
+        // would have imposed.
+        let unanchored = bid_price(edge(m, 0), r, &feed);
+        assert!(unanchored > mul_div_floor(t, 12_000, 10_000).expect("fits"));
+        assert_eq!(
+            bid_pricing(&warm, &obs(&warm, Ok(m), 0), r, NOW),
+            Ok(BidPricing {
+                price_ray: unanchored,
+                fallback: false,
+                paused_since_ms: None,
+            })
+        );
+    }
+
     #[test]
     fn admin_pause_maps_level_3_refusals_to_paused() {
         let at = |level: u8, admin_paused: bool| {

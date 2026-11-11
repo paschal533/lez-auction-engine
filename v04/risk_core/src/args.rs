@@ -230,6 +230,54 @@ mod tests {
         );
     }
 
+    /// The true edges of the inclusive bounds the table above does not reach: a spacing equal to
+    /// the window, `TWAP_MIN_OBS_MAX` samples, and a stale window of `MAX_ORACLE_AGE_MS`.
+    #[test]
+    fn risk_args_inclusive_edges() {
+        let b = base();
+        let window = b.twap_window_ms;
+        assert_eq!(
+            field(RiskArgs {
+                twap_min_spacing_ms: window,
+                ..b
+            }),
+            Ok(())
+        );
+        assert_eq!(
+            field(RiskArgs {
+                twap_min_spacing_ms: window.checked_add(1).expect("fits"),
+                ..b
+            }),
+            Err("twap_min_spacing_ms")
+        );
+        assert_eq!(
+            field(RiskArgs {
+                twap_min_obs: TWAP_MIN_OBS_MAX,
+                ..b
+            }),
+            Ok(())
+        );
+        assert_eq!(TWAP_MIN_OBS_MAX, 8);
+        // D4 at the longest stale window: R9-3 needs the feed max age below it and the window
+        // above `max_age + (min_obs - 2) · spacing`, so a 600_000 ms feed and the longest window.
+        let d4 = RiskArgs {
+            twap_window_ms: TWAP_WINDOW_MAX_MS,
+            stale_bid_max_age_ms: MAX_ORACLE_AGE_MS,
+            ..b
+        };
+        assert_eq!(MAX_ORACLE_AGE_MS, 86_400_000);
+        assert_eq!(d4.validate(600_000), Ok(()));
+        assert_eq!(
+            RiskArgs {
+                stale_bid_max_age_ms: MAX_ORACLE_AGE_MS.checked_add(1).expect("fits"),
+                ..d4
+            }
+            .validate(600_000)
+            .map_err(|e| e.field),
+            Err("stale_bid_max_age_ms")
+        );
+    }
+
     #[test]
     fn twap_off_requires_every_field_zero() {
         let off = RiskArgs {

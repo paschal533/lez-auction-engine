@@ -181,8 +181,18 @@ fn keeper_reward_uses_the_smaller_of_spot_and_twap() {
     );
     let expected = reward_at(&coll, &config, &w, p_liq);
     assert!(expected < reward_at(&coll, &config, &w, spike));
+    // By hand: samples at P at 1_300_000, 1_600_000 and 1_900_000; the liquidation at 1_902_000
+    // weighs them 300_000, 300_000 and 2_000 (total 602_000), so
+    // T = floor(P · 150 / 301) · 2 + floor(P / 301). P = 5 · 10^26 is 297 mod 301, so the terms
+    // drop 2/301, 2/301 and 297/301: T = P - 1. p_liq = band(edge(min(1.1 P, T))) = T, inside
+    // the band [0.45, 0.75] RAY. The reward in coin is min(tip + chip, reward_cap, penalty) =
+    // min(5 + 600, 50, 60_000) = 50, in collateral floor(50 · T / RAY) = floor(25 - 50 / RAY)
+    // = 24 (at the spike it would be floor(50 · 0.55) = 27).
+    assert_eq!(t, P - 1);
+    assert_eq!(expected, 24);
     let a = auction_state(&w, position).expect("an auction");
     assert_eq!(a.keeper_reward, expected);
+    assert_eq!(a.keeper_reward, 24);
     invariants::check(&w);
 }
 
@@ -212,8 +222,12 @@ fn bid_price_takes_the_confidence_edge() {
     w.set_price_with_confidence(P, P / 200);
     let bidder = w.fund_bidder("bidder", 1_000_000);
     let a = auction_state(&w, position).expect("an auction");
-    let feed = w.collateral_state().feed_params().expect("feed");
-    let price = edge(liq_price(P, None, 0, R, &feed), 50);
+    let coll = w.collateral_state();
+    let feed = coll.feed_params().expect("feed");
+    let t = twap_of(&coll.ext.ring, w.now_ms);
+    let dev = RiskArgs::recommended().max_spot_twap_dev_bps;
+    let price = risk_core::price::live_bid_price(P, Some(t), 50, dev, R, &feed);
+    assert_eq!(price, edge(P, 50), "the anchor does not bind at the TWAP");
     let expected = out_at(&w, &a, price);
     assert!(expected < out_at(&w, &a, P), "the edge pays less");
     assert_eq!(bid_out(&mut w, &bidder, position), expected);
@@ -324,4 +338,24 @@ fn set_collateral_keeps_the_ring_and_the_level() {
     assert_eq!(config_state(&w).ext.system_level, 2);
     assert_eq!(after.risk, risk);
     invariants::check(&w);
+}
+
+/// `SetCollateral` on a configured type replaces its risk parameters (the guest's replace
+/// branch): each re-send with a different `RiskArgs` is the one stored.
+#[test]
+fn set_collateral_replaces_the_risk_args() {
+    let (mut w, _) = world(RiskArgs::legacy());
+    let key = w.admin_key.clone();
+    let wider = RiskArgs {
+        max_spot_twap_dev_bps: 1_000,
+        ..RiskArgs::recommended()
+    };
+    for risk in [RiskArgs::recommended(), wider, RiskArgs::legacy()] {
+        assert_ne!(w.collateral_state().ext.risk, risk, "a different risk");
+        let set = w.set_collateral_msg_with(tier2_collateral_args(), risk);
+        w.send_engine(w.admin, &[&key], &set)
+            .expect("the collateral is reconfigured");
+        assert_eq!(w.collateral_state().ext.risk, risk);
+        invariants::check(&w);
+    }
 }

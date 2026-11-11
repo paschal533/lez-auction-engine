@@ -1,6 +1,8 @@
 //! Pause levels on the [`World`] (spec §3.2, ADR-073): the admin's `SetPauseLevel` and a
-//! snapshot of every actor a refused transaction must leave alone.
+//! snapshot of every actor a refused transaction must leave alone. The operation x level matrix
+//! fixtures live in [`crate::levels_fixtures`] and are re-exported here.
 
+use clock_core::CLOCK_PROGRAM_ACCOUNT_IDS;
 use engine_core::{
     msg::EngineMsg,
     state::{AccountingState, LiquidationRecordState},
@@ -9,6 +11,7 @@ use lee::{Actor, error::LeeError};
 use lee_core::program::TransactionEvent;
 use mock_host_core::vault_id;
 
+pub use crate::levels_fixtures::{Fixture, expected, fixture, stale_fixture};
 use crate::{World, world::SALT};
 
 impl World {
@@ -33,11 +36,21 @@ impl World {
     /// The state of every engine actor and holding the world knows of: the config, accounting
     /// and collateral actors; each owner's record, host position and vault holdings; every
     /// auction of a counted record with its vault holdings; every surplus and debt auction the
-    /// accounting counted with the surplus vault; the buffer; and the collateral, stablecoin and
-    /// protocol holdings of every signer the chain has handed a key to.
+    /// accounting counted with the surplus vault; the buffer; the collateral, stablecoin and
+    /// protocol holdings of every signer the chain has handed a key to; and the oracle, the
+    /// three clock accounts and the collateral, stablecoin and protocol token definitions.
     #[must_use]
     pub fn snapshot_all(&self) -> Vec<(Actor, Option<Vec<u8>>)> {
         let mut actors = vec![self.config, self.accounting, self.collateral, self.params];
+        actors.push(self.oracle);
+        let clock = self.chain.program(crate::CLOCK);
+        actors.extend(
+            CLOCK_PROGRAM_ACCOUNT_IDS
+                .iter()
+                .map(|id| Actor::new(*id, clock)),
+        );
+        let definitions = [self.collateral_def, self.stable_def, self.protocol_def()];
+        actors.extend(definitions.map(|def| Actor::new(def, self.token)));
         actors.extend(self.position_actors());
         actors.extend(self.system_auction_actors());
         let buffer = self.buffer().account_id;

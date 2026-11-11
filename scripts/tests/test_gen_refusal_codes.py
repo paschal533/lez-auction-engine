@@ -29,11 +29,28 @@ impl EngineError {
 }
 """
 
+RISK_ERROR_RS = """
+pub enum RiskError {
+    TwapUnavailable,
+}
+impl RiskError {
+    pub const fn code(&self) -> u32 {
+        match self {
+            Self::TwapUnavailable => 70,
+        }
+    }
+}
+"""
+RISK_TEST_PATH = "v04/risk_core/tests/twap.rs"
+RISK_TEST = "#[test]\nfn twap_refuses_thin_window() { assert_eq!(e, RiskError::TwapUnavailable); }\n"
+
 
 class Fixture(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
         self.write(g.ERROR_RS_PATH, ERROR_RS)
+        self.write(g.RISK_ERROR_RS_PATH, RISK_ERROR_RS)
+        self.write(RISK_TEST_PATH, RISK_TEST)
         self.write("programs/a/src/admin.rs", "fn f() { return Err(EngineError::NotAdmin); }\n")
         self.write("programs/a/src/admin_tests.rs",
                    "#[test]\nfn rejects_stranger() { assert_eq!(x, EngineError::NotAdmin); }\n")
@@ -132,6 +149,31 @@ class ProofRulesTest(Fixture):
             self.assertIn("Paused: mapped by a From impl but no raise site", err)
         finally:
             g.MEANINGS.clear(); g.MEANINGS.update(saved)
+
+
+class RiskErrorTest(Fixture):
+    def setUp(self):
+        super().setUp()
+        self.saved = dict(g.MEANINGS)
+        g.MEANINGS.update(NotAdmin="a", WrongAccount="b", Paused="c")
+
+    def tearDown(self):
+        g.MEANINGS.clear(); g.MEANINGS.update(self.saved)
+
+    def test_risk_error_rows_are_marked_0_4_only(self):
+        self.run_main()
+        self.assertRegex(self.doc(), r"\| 6070 \| `TwapUnavailable` \(0\.4 only\) \| 70 \|")
+        self.assertIn("Codes 6070 and up are the 0.4 engine's `RiskError` (`v04/risk_core`)", self.doc())
+
+    def test_risk_error_proved_by_variant_path(self):
+        self.run_main()
+        self.assertRegex(self.doc(), r"\| 6070 \|[^\n]*`\(0\.4\) twap_refuses_thin_window`")
+
+    def test_risk_error_without_test_fails_check(self):
+        os.remove(os.path.join(self.root, RISK_TEST_PATH))
+        code, _, err = self.run_main()
+        self.assertEqual(1, code)
+        self.assertIn("TwapUnavailable: no proving test", err)
 
 
 class CheckTest(Fixture):

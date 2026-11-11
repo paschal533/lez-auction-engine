@@ -166,10 +166,9 @@ fn reply_state<T>(input: &ReceiveInput, decode: fn(&[u8]) -> Option<T>, err: Eng
     decode(reply.state.as_ref()).unwrap_or_else(|| fail(err))
 }
 
-/// The sentinel at the collateral actor (the caller checked it came from the actor itself).
-pub fn proceed(input: &ReceiveInput) -> Response {
-    let coll = CollateralState::decode(input.pre_state.as_ref())
-        .unwrap_or_else(|| fail(EngineError::WrongAccount("coll_config")));
+/// The sentinel at the collateral actor (the caller checked it came from the actor itself), with
+/// `coll` the receiver's state the caller already decoded (`read::proceed`).
+pub fn proceed(input: &ReceiveInput, coll: CollateralState) -> Response {
     let pending = coll
         .pending
         .clone()

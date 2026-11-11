@@ -4,10 +4,9 @@
 //! rounded up, the edge and the TWAP anchor are floored, and `band(x)` is v0.2.4's `bid_price`
 //! clamp to `[R·lo, R·hi]`.
 
-use auction_core::{
-    math::{mul_div_ceil, mul_div_floor},
-    price::{FeedParams, bid_price},
-};
+use auction_core::price::{FeedParams, bid_price};
+
+use crate::math::{mul_div_ceil, mul_div_floor};
 
 /// One in basis points.
 const BPS: u128 = 10_000;
@@ -94,7 +93,11 @@ pub fn within_deviation(m: u128, t: u128, dev_bps: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use auction_core::{math::mul_wide, price::OracleScale, units::RAY};
+    use auction_core::{
+        math::{mul_div_floor, mul_wide},
+        price::OracleScale,
+        units::RAY,
+    };
     use proptest::prelude::*;
 
     fn feed(band_lo_bps: u16, band_hi_bps: u16) -> FeedParams {

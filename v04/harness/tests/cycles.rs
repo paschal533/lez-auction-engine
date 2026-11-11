@@ -7,22 +7,17 @@
 //! token's `HOLDING` seed (ADR-062), so the only admission evidence is the buffer holding's `Pda`
 //! for a system op that reads it while it is absent (`StartDebt` here).
 
-use std::{env, fs, path::PathBuf};
-
 use auction_engine_params::args::{DEBT_RELIST_DELAY_MS, EngineParamsArgs};
 use engine_core::msg::EngineMsg;
 use harness::{
     World,
     bidding::Bidder,
+    cycles::{Row, measured, proxied, table, write_table},
     system::{TAKER, TAKER_GENESIS},
     world::RAY,
 };
 use lee::{AccountId, Actor, PrivateKey, PublicAccountEvidence};
 
-/// `max_gas_exec`, the per-transaction gas cap (spike S8).
-const GAS_CAP: u64 = 10_000_000;
-/// The base fee per cycle the table prices at.
-const BASE_FEE: u64 = 8;
 const COLLATERAL: u128 = 500_000;
 const DEBT: u128 = 600_000;
 const TARGET: u128 = 660_000;
@@ -40,57 +35,6 @@ const PARTIAL_BID_EXECUTIONS: u32 = 15;
 const FINAL_BID_EXECUTIONS: u32 = 21;
 const CLAIM_EXECUTIONS: u32 = 6;
 const SETTLE_EMPTY_EXECUTIONS: u32 = 6;
-
-struct Row {
-    instruction: &'static str,
-    executions: u32,
-    cycles: u64,
-}
-
-/// Cycles of one simulated transaction, which must succeed and fit the gas cap.
-fn measured(
-    instruction: &'static str,
-    executions: u32,
-    (cycles, outcome): (u64, Result<(), lee::error::LeeError>),
-) -> Row {
-    outcome.unwrap_or_else(|err| panic!("{instruction} does not simulate: {err:?}"));
-    assert!(
-        cycles > 0 && cycles < GAS_CAP,
-        "{instruction}: {cycles} cycles against a cap of {GAS_CAP}"
-    );
-    Row {
-        instruction,
-        executions,
-        cycles,
-    }
-}
-
-fn proxied(
-    w: &World,
-    signer: AccountId,
-    key: &PrivateKey,
-    msg: &EngineMsg,
-) -> (u64, Result<(), lee::error::LeeError>) {
-    let actors = w.proxy_actors(signer, msg);
-    w.chain
-        .cycles(Actor::new(signer, w.engine), &actors, &[key], msg)
-}
-
-fn table(rows: &[Row]) -> String {
-    let mut out = String::from(
-        "| Instruction | Executions | Cycles | Fee at base fee 8 (cycles x 8) |\n|---|---|---|---|\n",
-    );
-    for r in rows {
-        out.push_str(&format!(
-            "| {} | {} | {} | {} |\n",
-            r.instruction,
-            r.executions,
-            r.cycles,
-            r.cycles.checked_mul(BASE_FEE).expect("fee fits u64")
-        ));
-    }
-    out
-}
 
 fn liquidated() -> (World, AccountId, Bidder) {
     let mut w = World::new_at(RAY / 2);
@@ -196,15 +140,6 @@ fn every_slice_instruction_fits_the_gas_cap() {
     let markdown = table(&rows);
     println!("{markdown}");
     write_table("cycles-v04.md", &markdown);
-}
-
-/// Writes `markdown` to `name` in the target directory.
-fn write_table(name: &str, markdown: &str) {
-    let dir = env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target"));
-    fs::create_dir_all(&dir).expect("target dir");
-    fs::write(dir.join(name), markdown).expect("table written");
 }
 
 /// Executions of the system instructions, counted from the as-built message sequences (a

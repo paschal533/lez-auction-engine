@@ -4,7 +4,8 @@
 //! stale, so the last-good TWAP is constant for the whole of an outage.
 
 use alloc::vec::Vec;
-use auction_core::math::mul_div_floor;
+
+use crate::math::mul_div_floor;
 
 /// The ring's protocol capacity, like `MAX_POINTS`.
 pub const TWAP_CAPACITY: usize = 8;
@@ -130,6 +131,7 @@ pub fn twap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use auction_core::math::mul_div_floor;
     use proptest::prelude::*;
 
     fn ring(s: &[(u64, u128)]) -> TwapRing {

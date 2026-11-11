@@ -1,14 +1,17 @@
 # Cycles and fees per instruction
 
-Measured 2026-11-03 on LEZ `v0.4.0-rc1` (`1806e873`) by `harness/tests/cycles.rs`
-(`cargo test -p harness --test cycles -- --nocapture`), which simulates each transaction with
+Measured 2026-11-03 on LEZ `v0.4.0-rc1` (`1806e873`) and re-measured 2026-11-11 after Plan 9 (the
+legacy preset: TWAP, breaker and D4 off) by `harness/tests/cycles.rs`
+(`cargo test -p harness --test cycles -- --nocapture`; the shared helpers are in
+`harness/src/cycles.rs`), which simulates each transaction with
 `lee::simulate_public_transaction` right before it is sent. The transactions are the ones the other
 tests send. Fresh holdings are granted by the token's `HOLDING` seed (ADR-062), so the only
 admission evidence is the buffer holding's `Pda`, on a system op that reads that holding while its
 account is absent (`StartDebt` below).
 
 - **Gas cap:** 10,000,000 cycles per transaction (`max_gas_exec`, spike S8). The test asserts every
-  row succeeds and stays below it; the most expensive instruction, `Liquidate`, uses under 9% of it.
+  row succeeds and stays below it; the most expensive instruction, `Liquidate` under the Tier 2
+  preset with a full ring, uses under 9% of it.
 - **Gas limit:** the SDK simulates, then declares `ceil(cycles x 1.2)` (ADR-061): 20% headroom over
   the simulated cycles, still far below the cap for every row. A revert is charged its whole limit.
 - **Executions** are counted from the message sequences: every message delivered in the
@@ -23,15 +26,24 @@ account is absent (`StartDebt` below).
 Scenario: collateral 500_000, debt 600_000, redemption price and oracle 0.5; `SettleEmpty` on a
 3-unit lot whose whole seizure goes to the keeper reward.
 
-| Instruction | Executions | Cycles | Fee at base fee 8 | Plan 5 (2026-11-01) | Delta |
+| Instruction | Executions | Cycles (2026-11-11) | Fee at base fee 8 | 2026-11-03 | Delta |
 |---|---|---|---|---|---|
-| Init | 9 | 269,226 | 2,153,808 | 7 / 178,715 | +90,511 |
-| SetCollateral | 11 | 325,765 | 2,606,120 | 11 / 309,596 | +16,169 |
-| Liquidate | 29 | 839,357 | 6,714,856 | 27 / 772,287 | +67,070 |
-| Bid (partial) | 15 | 407,700 | 3,261,600 | 13 / 363,522 | +44,178 |
-| Bid (final) | 21 | 576,148 | 4,609,184 | 18 / 498,372 | +77,776 |
-| ClaimLeftover | 6 | 136,440 | 1,091,520 | 5 / 109,917 | +26,523 |
-| SettleEmpty | 6 | 208,291 | 1,666,328 | 6 / 190,764 | +17,527 |
+| Init | 9 | 268,510 | 2,148,080 | 269,226 | -716 |
+| SetCollateral | 11 | 321,027 | 2,568,216 | 325,765 | -4,738 |
+| Liquidate | 29 | 845,645 | 6,765,160 | 839,357 | +6,288 |
+| Bid (partial) | 15 | 410,776 | 3,286,208 | 407,700 | +3,076 |
+| Bid (final) | 21 | 582,089 | 4,656,712 | 576,148 | +5,941 |
+| ClaimLeftover | 6 | 137,873 | 1,102,984 | 136,440 | +1,433 |
+| SettleEmpty | 6 | 212,506 | 1,700,048 | 208,291 | +4,215 |
+
+Plan 9 delta (legacy preset, empty ring): no row gained an execution, and every row is within
+6,300 cycles of its 2026-11-03 figure. Plan 9's feed check, confidence edge and price gates use
+`risk_core::math::mul_div_floor`/`mul_div_ceil`, which give exactly `auction_core::math`'s results
+but divide natively when the product fits a u128. `auction_core`'s 128-step bit-serial division
+costs thousands of cycles per call in the guest. Before that change the observing rows had grown
+by 32,000-63,000 cycles. Plan 5 (2026-11-01) figures for the history: Init 7 / 178,715,
+SetCollateral 11 / 309,596, Liquidate 27 / 772,287, Bid (partial) 13 / 363,522, Bid (final)
+18 / 498,372, ClaimLeftover 5 / 109,917, SettleEmpty 6 / 190,764.
 
 The ADR-062 proxy hop adds one execution per token debit: `Liquidate` +2, `Bid` (partial) +2,
 `Bid` (final) +3, `ClaimLeftover` +1. Rows without a debit (`Init`, `SetCollateral`,
@@ -39,9 +51,8 @@ The ADR-062 proxy hop adds one execution per token debit: `Liquidate` +2, `Bid` 
 parameters, the protocol token, the system scratch) cost more to decode and commit everywhere, so
 the deltas are not all the hop. `Init` grew again with ADR-065: the host's `ReadState` and its reply are
 two more executions and 52,655 more cycles than the 216,571 it cost before; the other rows are not
-re-recorded for it. Re-measured on the final tree, the other slice rows differ from the figures above
-by between 549 cycles below (`SetCollateral`) and 1,060 above (`Liquidate`); they keep their
-recorded figures.
+re-recorded for it. (Before Plan 9, re-measured on the Plan 6 final tree, the other slice rows
+differed from their 2026-11-03 figures by between 549 cycles below and 1,060 above.)
 
 ## System instructions (Plan 6)
 
@@ -60,28 +71,30 @@ same may-touch actors (ruling R-8b) and otherwise exactly what the run touches. 
 the run does not reach never executes, so it adds no cycles: the SDK plans' simulated cycles match
 these rows, and the SDK fits each send's gas from its own simulation anyway.
 
-| Instruction | Executions | Cycles | Fee at base fee 8 (cycles x 8) |
-|---|---|---|---|
-| SetEngineParams | 6 | 193,353 | 1,546,824 |
-| SetSlack | 5 | 155,235 | 1,241,880 |
-| ObserveFeed | 7 | 176,218 | 1,409,744 |
-| SettleDebt | 8 | 206,767 | 1,654,136 |
-| StartSurplus | 10 | 255,298 | 2,042,384 |
-| TakeSurplus (partial) | 11 | 243,063 | 1,944,504 |
-| TakeSurplus (final) | 11 | 245,296 | 1,962,368 |
-| CloseSurplus | 11 | 234,469 | 1,875,752 |
-| StartDebt | 7 | 217,756 | 1,742,048 |
-| TakeDebt | 11 | 271,617 | 2,172,936 |
-| CloseDebt | 5 | 111,516 | 892,128 |
-| CheckSolvency (Healthy, burns the buffer) | 9 | 218,253 | 1,746,024 |
-| CheckSolvency (Freeze) | 8 | 236,486 | 1,891,888 |
+| Instruction | Executions | Cycles (2026-11-11) | Fee at base fee 8 (cycles x 8) | 2026-11-03 | Delta |
+|---|---|---|---|---|---|
+| SetEngineParams | 6 | 197,182 | 1,577,456 | 193,353 | +3,829 |
+| SetSlack | 5 | 159,059 | 1,272,472 | 155,235 | +3,824 |
+| ObserveFeed | 7 | 169,522 | 1,356,176 | 176,218 | -6,696 |
+| SettleDebt | 8 | 207,540 | 1,660,320 | 206,767 | +773 |
+| StartSurplus | 10 | 255,707 | 2,045,656 | 255,298 | +409 |
+| TakeSurplus (partial) | 11 | 243,219 | 1,945,752 | 243,063 | +156 |
+| TakeSurplus (final) | 11 | 245,448 | 1,963,584 | 245,296 | +152 |
+| CloseSurplus | 11 | 234,480 | 1,875,840 | 234,469 | +11 |
+| StartDebt | 7 | 218,152 | 1,745,216 | 217,756 | +396 |
+| TakeDebt | 11 | 271,714 | 2,173,712 | 271,617 | +97 |
+| CloseDebt | 5 | 111,562 | 892,496 | 111,516 | +46 |
+| CheckSolvency (Healthy, burns the buffer) | 9 | 219,264 | 1,754,112 | 218,253 | +1,011 |
+| CheckSolvency (Freeze) | 8 | 237,436 | 1,899,488 | 236,486 | +950 |
+
+Plan 9 delta: `ObserveFeed` runs the Observe block and came out 6,696 below its earlier figure
+(see the slice's note). `SetEngineParams` and `SetSlack`, which reach the collateral actor without
+observing, grew by under 4,000; the rest by under 1,100.
 
 `SetSlack` (ADR-064), with the collateral type recorded, is the proxy, the config probe, the config,
 the collateral probe and `SlackUpdate` at the collateral actor (3 without a recorded type). It never
-touches the accounting. Re-measured on the final tree, the other system rows came out between 338
-cycles below (`TakeSurplus`) and 343 above (`SettleDebt`) their recorded figures, except
-`SetEngineParams` at +740 (0.4%). That is likely from the larger guest. They keep their earlier
-figures here.
+touches the accounting. (Before Plan 9, re-measured on the Plan 6 final tree, the other system rows
+came out between 338 cycles below and 343 above their 2026-11-03 figures, `SetEngineParams` +740.)
 
 Path-dependent executions: an implicit settle that burns adds the buffer's `Burn` (+3) to
 `StartSurplus`, `StartDebt` and `CheckSolvency`; a configured reference oracle adds its read (+2) to
@@ -90,3 +103,41 @@ Path-dependent executions: an implicit settle that burns adds the buffer's `Burn
 is 5; `SetEngineParams` without a
 locked-field change is 5; `CheckSolvency` `Healthy`/`NoAction` without a burn is 6. Every system row
 stays under 3% of the cap.
+
+## Tier 2 (Plan 9): TWAP preset, ring full
+
+Measured 2026-11-11 by `harness/tests/cycles_tier2.rs`
+(`cargo test -p harness --test cycles_tier2 -- --nocapture`). Scenario: `World::new_tier2` under
+`RiskArgs::recommended()` (30 min window, 5 min spacing, `min_obs` 3, 20 % breaker, 1 h stale
+window), feed max age 600_000 ms, the slice's amounts (collateral 500_000, debt 600_000, redemption
+price and oracle 0.5). The ring holds 8 samples before every row, the worst case (ruling R9-10).
+Each row runs at least 1 s after the newest sample, because a sample at `now` has no weight.
+`ObserveFeed` is measured on a fresh publish, so it evicts the oldest sample. `SetPauseLevel` sets
+level 1. Budgets are asserted by the test. The R9-13 e2e values are not used here: R9-3 refuses
+them at this world's feed max age.
+
+| Instruction | Executions | Cycles | Fee at base fee 8 | Budget | Spec §4 estimate |
+|---|---|---|---|---|---|
+| Liquidate | 29 | 883,636 | 7,069,088 | <= 1,000,000 | 920,000-980,000 |
+| Bid (partial) | 15 | 431,669 | 3,453,352 | <= 520,000 | 470,000-490,000 |
+| Bid (final) | 21 | 606,461 | 4,851,688 | <= 720,000 | 650,000-690,000 |
+| ObserveFeed | 7 | 181,947 | 1,455,576 | gas cap | ~200,000 |
+| SetCollateral | 11 | 359,048 | 2,872,384 | gas cap | ~350,000 |
+| SetPauseLevel | 12 | 360,079 | 2,880,632 | <= 400,000 (R9-10) | ~330,000 |
+
+- Every budgeted row fits. `Liquidate`, `Bid (partial)`, `Bid (final)` and `ObserveFeed` come in
+  under the spec's estimates.
+- `SetCollateral` (+9,048) and `SetPauseLevel` (+30,079) are above their estimates, which are not
+  assertions. `SetPauseLevel` is 3.6 % of the cap: R9-10 set its assertion at 4 %, because §4's
+  "~330,000" and "< 3 %" contradict each other.
+- **Ring fill:** a partial bid with `twap_min_obs` 1 costs 415,266 cycles with 1 sample and 431,578
+  with 8. That spread of 16,312 is under the asserted 40,000
+  (`bid_cost_is_independent_of_ring_fill`).
+- **Over the legacy preset**, the full ring and the recommended preset add 37,991 to `Liquidate`,
+  20,893 to `Bid (partial)`, 24,372 to `Bid (final)`, 12,425 to `ObserveFeed` and 38,021 to
+  `SetCollateral`.
+- **Executions.** `SetPauseLevel` is 12: the admin's proxy; the seeded `Probe { Config }`;
+  `SetPauseLevel` at the config; the seeded `Probe { Collateral }`; `PauseLevelUpdate` at the
+  collateral actor; then the Observe block (`Observe`, the host's and the oracle's `ReadState` and
+  their replies, the clock's `AssertTimestamp`, `Proceed`). The TWAP and the level checks add
+  computation, not messages, so the other rows keep their slice and system counts.

@@ -4,13 +4,9 @@
 //! collateral never sells for less coin per unit than `(1 - d_max) / P_liq`, the worst price
 //! the auction's own schedule reaches at its opening price.
 
-use auction_core::{
-    math::{MathError, mul_div_floor},
-    schedule::Schedule,
-    units::RAY,
-};
+use auction_core::{math::MathError, schedule::Schedule, units::RAY};
 
-use crate::{args::RiskArgs, error::RiskError, twap::TwapRing, twap::twap};
+use crate::{args::RiskArgs, error::RiskError, math::mul_div_floor, twap::TwapRing, twap::twap};
 
 /// The stale cap stored at `Seized`: `floor(P_liq · RAY / (RAY - d_max))`, with `d_max` the last
 /// point of the auction's snapshotted schedule.
@@ -72,7 +68,7 @@ pub fn fallback_twap(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use auction_core::{schedule::SchedulePoint, units::bps_to_ray};
+    use auction_core::{math::mul_div_floor, schedule::SchedulePoint, units::bps_to_ray};
 
     fn schedule(last_bps: u16) -> Schedule {
         Schedule::new(&[

@@ -4,10 +4,11 @@
 
 use auction_core::{
     error::PauseReason,
-    math::mul_div_floor,
     price::{FeedParams, OracleReading, OracleScale, to_ray},
     units::BPS,
 };
+
+use crate::math::mul_div_floor;
 
 /// v0.2.4's lower sanity bound, `R / 2`, in basis points of `R`.
 pub const LEGACY_SANITY_LO_BPS: u32 = 5_000;
@@ -100,6 +101,7 @@ pub fn validate_feed_ext(
 mod tests {
     use super::*;
     use auction_core::{
+        math::mul_div_floor,
         price::{MAX_ORACLE_AGE_MS, validate_feed},
         units::RAY,
     };

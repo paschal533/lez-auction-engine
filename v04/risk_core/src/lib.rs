@@ -9,6 +9,7 @@ pub mod args;
 pub mod error;
 pub mod feed;
 mod kani_proofs;
+pub mod math;
 pub mod pause;
 #[cfg(feature = "presets")]
 pub mod presets;

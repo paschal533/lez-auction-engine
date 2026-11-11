@@ -3,7 +3,9 @@
 How the engine prices a collateral auction, what happens when the price feed goes bad, where
 oracle-extractable value can leak, and what a liquidation costs on LEZ 0.4. Decision record:
 ADR-005 (band-clamped price), ADR-012 (no restart, no expiry), ADR-067 (live pricing, bounded
-stale-feed bids) in `docs/design-log.md`.
+stale-feed bids), and for the v04 engine ADR-070 (TWAP), ADR-071 (confidence edge), ADR-072
+(bid anchor and deviation breaker), ADR-073 (pause levels) and ADR-074 (D4 as built) in
+`docs/design-log.md`.
 
 ## 1. Live price on every bid
 
@@ -22,7 +24,42 @@ Each bid reads the oracle again. The price is never fixed when the auction opens
 
 On 0.4 the same core runs behind the Observe block: every `Bid` reads the host and the oracle at
 the collateral actor, runs `require_live` and the band clamp, and only then reaches the auction
-(`live_price`, `v04/engine_core/src/feed.rs`; design note `docs/v04-port-design.md` §4.1).
+(`v04/engine_core/src/gate.rs`, `bid_pricing`; design note `docs/v04-port-design.md` §4.1).
+
+**The v04 TWAP (ADR-070).** Each collateral actor keeps a ring of at most 8 validated mids
+(`TWAP_CAPACITY`), written by the Observe block that `SetCollateral`, `ObserveFeed`, `Liquidate`
+and `Bid` already run and that `SetPauseLevel` ends with, and only while `twap_window_ms > 0`. A valid reading is recorded at
+`min(reading time, now)` unless it is not newer than the newest sample or less than
+`twap_min_spacing_ms` after it; an invalid reading is never recorded. The TWAP
+(`risk_core::twap::twap`) anchors at `min(now, newest + max_oracle_age_ms)`, so it is constant for
+the whole of an outage. It weights each sample by how long it was the current publication,
+clipped to `[anchor − window, anchor]`, stops at the first older sample that was current for
+longer than `max_oracle_age_ms` (a stale period breaks it), and is unavailable with fewer than
+`twap_min_obs` weighted samples. `T = Σ floor(p_i · w_i / Σw)`, so `T` lies in
+`[min p_i − 7, max p_i]` of the used samples (`twap_within_sample_range`).
+
+**The price per operation (ADR-071, ADR-072).** Every engine price is a payout (collateral per
+coin), so each one takes the smaller `P`. With `conf_bps = ceil(c · 10_000 / M)` and
+`edge(x) = floor(x · (10_000 − conf_bps) / 10_000)` (`risk_core::price`):
+
+| Operation | Price | Refused when |
+|---|---|---|
+| `Liquidate` (keeper reward, stale floor) | `band(edge(min(M, T)))` | pause level ≥ 1 (6073; 6020 under `admin_paused`); invalid feed (its own code); no TWAP (`TwapUnavailable`, 6070); breaker on (`dev > 0`) and `abs(M − T) · 10_000 > dev · T` (`SpotTwapDeviation`, 6071) |
+| `Bid`, live feed | `band(min(edge(M), floor(T · (10_000 + dev) / 10_000)))` | level 3 (6075; 6020 under `admin_paused`). The anchor applies only with `dev > 0` and the TWAP available: a bid during warm-up is `band(edge(M))`, never refused (ruling R9-5) |
+| `Bid`, stale feed (D4, §2) | `band(edge(T_lg))` at the ring's last confidence, then the floor | §2 |
+| TWAP off (`twap_window_ms = 0`, the legacy preset) | `band(edge(M))` for both | as v0.2.4, plus the levels |
+
+`band` is v0.2.4's `bid_price` clamp to `[R·lo, R·hi]`. The bid is anchored from above only: a
+manipulated spot cannot pay out more than `dev` beyond the TWAP, while in a fast fall (TWAP
+lagging below spot) bids still follow the market. At confidence 0, as the legacy producers write,
+`edge` is the identity, so the legacy preset prices exactly as before. Tests:
+`liquidate_refused_until_twap_has_min_obs`, `keeper_reward_uses_the_smaller_of_spot_and_twap`,
+`a_spot_spike_is_refused_by_the_deviation_breaker`, `bid_price_takes_the_confidence_edge`
+(nonzero confidence), `bid_payout_capped_by_the_twap_anchor`, `bid_during_twap_warm_up_is_not_refused`
+(`v04/harness/tests/twap.rs`); `liq_gate_order_admin_feed_twap_deviation`,
+`bid_pricing_anchors_once_warm_and_skips_the_breaker` (`v04/engine_core/src/gate.rs`);
+`deviation_matches_the_exact_rule`, `live_bid_is_capped_at_the_floored_anchor`
+(`v04/risk_core/src/price.rs`).
 
 **Why there is no `redo`, `cusp` or `tail`.** Maker's Clipper sets a starting price
 `top = feed x buf` at `kick` and lets it decay along an Abacus curve. The decay knows nothing
@@ -69,8 +106,9 @@ the next bid, so the sale stays within the scheduled discount of the current fee
 
 ## 2. Stale feeds and R5
 
-**Today.** A bid needs a valid feed. `validate_feed` (`price.rs` lines 59-85) checks age,
-confidence and the `[R/2, 2R]` range. If any check fails, the bid reverts with no state change
+**With D4 off** (v0.2.4, and the v04 legacy preset). A bid needs a valid feed. `validate_feed`
+(`price.rs` lines 59-85; on v04 `validate_feed_ext`, equal to it under the legacy policy) checks
+age, confidence and the `[R/2, 2R]` range. If any check fails, the bid reverts with no state change
 and no tokens moved, and the type counts as paused from the feed's derived onset (policy (b),
 ADR-007, ADR-032; `require_live`, `programs/auction_engine/src/feed.rs` lines 84-92):
 
@@ -88,18 +126,69 @@ an admin pause); for a stale feed, `derived_onset_closes_unobserved_gap`
 This is safe but not live. During an outage no debt is recovered, the lot carries the market risk,
 and its cap reservation stays held.
 
-**Decided rule (D4), planned for M1/M2, not built.** While a type's feed is stale or invalid, bids
-on its live auctions continue at the last good TWAP, only while that TWAP is younger than a
-configurable maximum age, and never below the auction's floor. Risk-reducing operations (settle,
-claim leftover, settle debt, owner actions) run under every pause level. The TWAP is milestone M2
-(E1); the stepped pause levels that apply D4 are milestone M1 (E2). Their exact parameters and the
-floor's definition belong to the Tier 2 engine design.
+**D4 as built (ADR-074), v04 only.** While a type's feed fails `validate_feed_ext`, a bid on one
+of its auctions proceeds only if all four hold (`engine_core::gate::bid_pricing`,
+`risk_core::stale::fallback_twap`):
+
+1. the pause gate lets it through: effective level <= 2 (at level 3 the gate answers first, with
+   `BidsPaused`, 6075, or `Paused`, 6020, under `admin_paused`);
+2. D4 is on: `stale_bid_max_age_ms > 0` and `twap_window_ms > 0` (`RiskArgs::d4_on`);
+3. the last-good TWAP `T_lg` is available with `twap_min_obs` samples (else `TwapUnavailable`,
+   6070);
+4. `now − newest.ts <= stale_bid_max_age_ms` (else `LastGoodTwapTooOld`, 6077).
+
+With D4 off the bid fails with the feed's own code, as above. `now` is the bid's claimed time, so
+condition 4 can pass up to `slack_ms` after the newest sample's age bound would (the feed-age check
+itself uses `now + slack_ms`); the floor bounds what that slack can pay out.
+
+The price is `P_fb = band(edge(T_lg))` with the ring's `last_conf_bps`, and the redemption price
+read in the same observation. At `Seized` the auction stores, only while D4 is on,
+
+```
+stale_cap_ray = floor(P_liq * RAY / (RAY - d_max_eff))
+```
+
+with `P_liq` the liquidation price and `d_max_eff` the last point of the auction's snapshotted
+schedule (`Schedule::max_discount_ray`; the health cap of E4 that would lower it is not built). A
+fallback bid pays at
+
+```
+P_used = min(P_fb, floor(stale_cap_ray * (RAY - d) / RAY))
+```
+
+where `d` is the bid's discount, **frozen**: the bid carries the open pause (`BidCtx`
+`paused_since_ms`, `fallback: true`), so `bid::quote` stops the discount clock at the outage's
+onset and an outage never hands a larger discount. In words, during a stale feed the auction never
+sells collateral for less coin per unit than `(1 − d_max_eff) / P_liq`, the worst price its own
+schedule reaches at its opening price. The bid is clamped to the floor, not refused;
+`min_collateral_out` protects the bidder. Live bids ignore the floor. An auction opened while D4
+was off stored `stale_cap_ray = 0`, so a fallback bid on it is refused with `PriceFeedStale`
+(6021) rather than sold unfloored.
+
+Risk-reducing operations (settle, claim leftover, settle debt, closes, `CheckSolvency`) run at
+every pause level (ADR-073).
+
+Tests: `stale_feed_bid_uses_the_last_good_twap`, `stale_feed_bid_refused_past_max_age`,
+`stale_feed_bid_refused_without_min_obs`, `stale_feed_bid_refused_on_an_auction_opened_without_d4`,
+`stale_feed_bid_held_at_the_floor`, `discount_stays_frozen_across_fallback_bids`,
+`fallback_final_bid_settles_and_releases` (`v04/harness/tests/stale_bids.rs`);
+`stale_bid_prices_at_the_last_good_twap`, `stale_bid_refused_past_the_max_age`,
+`stale_bid_with_d4_off_is_the_feed_code`, `stale_bid_level_3_and_admin_refuse_first`
+(`v04/engine_core/src/gate.rs`); `fallback_quote_freezes_the_discount`,
+`fallback_quote_is_held_at_the_floor_and_live_ignores_it`,
+`floorless_fallback_quote_is_refused_as_stale` (`v04/engine_core/src/bid.rs`);
+`quote_seized_sets_the_stale_cap_only_with_d4` (`v04/engine_core/src/liquidation.rs`);
+`floor_uses_the_capped_max_discount`, `fallback_price_clamped_to_the_floor`,
+`fallback_twap_follows_the_d4_conditions` (`v04/risk_core/src/stale.rs`). The Kani harness
+`fallback_price_never_breaches_the_floor` is written, not run (ADR-015). The `tier2` stage of
+`v04/scripts/e2e.sh` settles an auction with a fallback bid on a standalone sequencer; it ran once
+locally and passed; it has not run in CI yet.
 
 **Why bounded last-good TWAP, and not the two simpler rules:**
 
 | Rule | What goes wrong |
 |---|---|
-| Refuse every bid (today) | No recovery for the length of the outage. Black Thursday (Maker, March 2020: congestion, failing keepers, zero-bid auctions; `docs/research/research-3-auction-mechanics.md` §3, incident 1) showed that the hours the chain or a feed is degraded are the hours liquidations matter most. |
+| Refuse every bid (D4 off) | No recovery for the length of the outage. Black Thursday (Maker, March 2020: congestion, failing keepers, zero-bid auctions; `docs/research/research-3-auction-mechanics.md` §3, incident 1) showed that the hours the chain or a feed is degraded are the hours liquidations matter most. |
 | Freeze the price seen at auction open | The fixed-`top` problem of §1, plus no `redo` to escape it: the price drifts from the market for as long as the outage lasts. |
 | Last good TWAP, bounded by age and floor | Bids keep clearing on the most recent price the engine trusted. The age bound stops it once that price is too old to trust; the floor bounds the worst sale. A TWAP is harder to move with one bad print than a spot reading. |
 
@@ -132,7 +221,10 @@ it ADJ (row 23 of its feature table).
 
 **Measured** (`v04/CYCLES.md`, LEZ `v0.4.0-rc1`, `v04/harness/tests/cycles.rs`): `Liquidate` is 29
 executions and 839,357 cycles, under 9% of the 10,000,000-cycle gas cap. A partial bid is 15
-executions and 407,700 cycles; a final bid 21 and 576,148.
+executions and 407,700 cycles; a final bid 21 and 576,148. These are the 2026-11-03 figures, which
+the breakdown below uses. Re-measured 2026-11-11 after Plan 9, the execution counts are unchanged:
+under the legacy preset `Liquidate` is 845,645 cycles, and under the recommended preset with a full
+TWAP ring 883,636 (partial bid 431,669, final bid 606,461; `v04/CYCLES.md`, Tier 2 table).
 
 These figures include the whole conversation, not only the engine's counters: real token transfers
 through the token program, custody of the seized collateral in a per-auction vault, the host's own

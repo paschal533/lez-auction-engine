@@ -37,9 +37,12 @@ Scenario: collateral 500_000, debt 600_000, redemption price and oracle 0.5; `Se
 | SettleEmpty | 6 | 212,506 | 1,700,048 | 208,291 | +4,215 |
 
 Plan 9 delta (legacy preset, empty ring): no row gained an execution, and every row is within
-6,300 cycles of its 2026-11-03 figure. Plan 9's feed check, confidence edge and price gates use
-`risk_core::math::mul_div_floor`/`mul_div_ceil`, which give exactly `auction_core::math`'s results
-but divide natively when the product fits a u128. `auction_core`'s 128-step bit-serial division
+6,300 cycles of its 2026-11-03 figure. Plan 9's TWAP terms, the feed check's confidence limit and
+sanity bounds, `conf_bps`, the confidence edge, the TWAP anchor, the deviation test and the stale
+cap and floored price use `risk_core::math::mul_div_floor`/`mul_div_ceil`, which give exactly
+`auction_core::math`'s results but divide natively when the product fits a u128; the band clamp
+(`auction_core::price::bid_price`) and the Q64x64 `to_ray` path still call the frozen
+`mul_div_floor`. `auction_core`'s 128-step bit-serial division
 costs thousands of cycles per call in the guest. Before that change the observing rows had grown
 by 32,000-63,000 cycles. Plan 5 (2026-11-01) figures for the history: Init 7 / 178,715,
 SetCollateral 11 / 309,596, Liquidate 27 / 772,287, Bid (partial) 13 / 363,522, Bid (final)

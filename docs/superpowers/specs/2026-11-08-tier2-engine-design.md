@@ -131,6 +131,12 @@ re-exported for the harness:
 - **recommended** is the production proposal documented in `f8-parameters.md`. New tests and the
   new e2e stage use it (or a time-compressed copy).
 
+As built (Plan 9, ruling R9-1; amended in Plan 9 Task 14): the presets are inherent methods in
+`risk_core::presets` (`v04/risk_core/src/presets.rs`) behind the cargo feature `presets`, which
+`sdk` and `harness` (and `engine_core`'s dev-dependency) enable and the guest does not; the SDK
+re-exports `RiskArgs`. `recommended()` takes no argument in Plan 9. There is no `EngineExtArgs`
+yet: it arrives with E9 in Plan 10.
+
 ### 3.1 E1 — TWAP and confidence-adjusted pricing (R2)
 
 #### 3.1.1 Data
@@ -143,7 +149,9 @@ pub struct TwapRing { pub samples: Vec<Sample>, pub last_conf_bps: u16 }  // old
 
 `TwapRing` lives in `CollateralExt`. It is written by the Observe block's `proceed`
 (`v04/programs/methods/guest/src/bin/engine/observe.rs:168-220`), which every `SetCollateral`,
-`ObserveFeed`, `Liquidate` and `Bid` already runs; no new message or execution. Size: 4 + 8x24 + 2 =
+`ObserveFeed`, `Liquidate` and `Bid` already runs; no new message or execution. As built (amended
+in Plan 9 Task 14), `SetPauseLevel`'s trailing `Observe` runs the same block, so it writes the ring
+too (`pause.rs:68`, `observe.rs:171-191`). Size: 4 + 8x24 + 2 =
 198 bytes. The copy of the collateral state that rides in `LiqCtx`/`Open` and the auction's
 `QuoteCtx` scratch (`v04/engine_core/src/scratch.rs:86-92`) is stripped of the ring
 (`CollateralState::for_quote()`); nothing downstream reads it.
@@ -189,9 +197,18 @@ new gap parameter: the feed's own maximum age is the definition of "too long". T
 last-good TWAP constant for the whole of an outage (it does not slide the window over nothing).
 
 Bounds: `T` lies within `[min p_i − 7, max p_i]` of the used samples, the lower end saturating at
-0 (Kani). The upper bound is exact. The lower one is not `min p_i`: each of the at most 8 terms
+0 (proptest `twap_within_sample_range`; the Kani harness `twap_bounded_by_samples` is written, not
+run; amended in Plan 9 Task 14). The upper bound is exact. The lower one is not `min p_i`: each of the at most 8 terms
 floors away less than one unit, so `T` can sit up to 7 below the smallest price (prices 1 and 1
-with weights 1 and 2 give `T = 0`). Cost: at most 8 `mul_div_floor` calls.
+with weights 1 and 2 give `T = 0`). Cost: at most 8 `mul_div_floor` calls. As built (Plan 9 Task 11,
+ADR-070) that is `risk_core::math::mul_div_floor`, not the frozen `auction_core::math` one: it gives
+exactly `auction_core`'s results but divides natively when `x · y` fits a u128, and calls the frozen
+128-step bit-serial division only otherwise, because that division costs about 10,000 guest cycles
+a call. The same wrapper serves `validate_feed_ext`'s confidence limit and sanity bounds,
+`conf_bps`, `edge`, the TWAP anchor, `within_deviation`, the stale cap and the floored price. Two
+steps still call the frozen `auction_core::math::mul_div_floor`: `band`, which is
+`auction_core::price::bid_price` (two calls, for `R·lo` and `R·hi`) and ends every price in
+§3.1.4, and `auction_core::price::to_ray` for a Q64x64 reading (a Ray reading needs no division).
 
 #### 3.1.4 The confidence edge, and the price per operation (ADR-071)
 
@@ -277,6 +294,14 @@ TWAP at most 8 `mul_div_floor`; edge and anchor 3 more. Estimate for E1 alone ag
 `bid_cost_is_independent_of_ring_fill` (1 sample vs 8 samples differ by <= 40,000). The estimates are
 replaced by measurements in `v04/CYCLES.md` at the end of Plan 9.
 
+Measured (Plan 9, 2026-11-11, `RiskArgs::recommended()` with a full ring): `Bid (partial)` 431,669,
+`Bid (final)` 606,461, `Liquidate` 883,636, `ObserveFeed` 181,947, ring-fill spread 16,312; every
+budget holds. The estimate above priced each `mul_div_floor` as cheap; the frozen
+`auction_core::math` version is not (about 10,000 cycles a call), and with it the budgets failed,
+so the TWAP terms, the confidence edge, the anchor, the deviation test and the stale cap go through
+`risk_core::math`; the band clamp (`bid_price`) and the Q64x64 `to_ray` still call the frozen
+function (§3.1.3, ADR-070).
+
 ### 3.2 E2 — Pause levels and D4 (R5)
 
 #### 3.2.1 Levels
@@ -335,17 +360,29 @@ System columns "Stale-ok/no" refer to the collateral feed, which system operatio
 reference oracle keeps its fall-back-to-admin-price rule (`v04/engine_core/src/system.rs:36-58`).
 Where checked: `Liquidate` and `Bid` at the collateral actor's `proceed`; system starts and takes at
 the config `K` before it relays to the accounting or the auction. Rule table lives in
-`risk_core::pause::allowed(op, level, feed, grace) -> Result<(), RiskError>`; the handlers call it,
-so the matrix test and the code share one table.
+`risk_core::pause::allowed(op, level, feed) -> Result<Gate, RiskError>` (as built, Plan 9 rulings
+R9-7 and R9-8; `grace` and 6072 arrive with E3 in Plan 10). `Gate` is `Run`, `FeedRefusal` (a
+liquidation on a stale feed: the feed's own code) or `Fallback` (a bid on a stale feed: D4
+decides); `engine_core::gate` applies the feed codes and `Paused`, which `risk_core` cannot name.
+The gated handlers call it: `Liquidate` and `Bid` at the collateral actor, and at the config the
+system starts and takes, `CloseSurplus`, `CloseDebt`, `SettleDebt` and `CheckSolvency` (which it
+always lets run). The other operations always run and do not call it. The matrix test derives its
+expected outcomes from the same table. The pause gate comes before any feed code and, at the
+config, before `TokenNotConfigured`.
 
 #### 3.2.3 D4: bids on a stale feed (ADR-074)
 
 A bid on a type whose reading fails `validate_feed_ext` proceeds iff all hold:
-1. effective level <= 2;
+1. effective level <= 2. This condition never decides a refusal on its own: the level is checked
+   first (§3.2.2), so at level 3 the bid is refused `BidsPaused` (6075), or `Paused` (6020) under
+   `admin_paused`, before D4 is reached (amended in Plan 9 Task 14);
 2. `stale_bid_max_age_ms > 0` and `twap_window_ms > 0`;
 3. `twap(ring, now, ..)` is available with `min_obs` samples (else `TwapUnavailable`, 6070);
 4. `now - newest.ts <= stale_bid_max_age_ms` (else `LastGoodTwapTooOld`, 6077).
 Otherwise it fails with the feed's own code (6021-6023, 6076), as today.
+As built (amended in Plan 9 Task 14): an auction opened while D4 was off stored `stale_cap_ray = 0`
+(§3.2.4), so a fallback bid on it is refused with `PriceFeedStale` (6021) in `engine_core::bid`
+(`bid.rs:107-113`) instead of being sold unfloored; `BidCtx` does not carry the exact fault.
 
 Price: `P_fb = band(edge_lg(T_lg))` (R is the host's current redemption price, read in the same
 observation). The collateral actor sends `BidCtx { fallback: true, paused_since_ms, .. }`. The pause
@@ -359,7 +396,9 @@ the worst sale.
 
 At `Seized` the auction stores
 `stale_cap_ray = floor(P_liq * RAY / (RAY - d_max_eff))`, where `d_max_eff` is the last point of the
-auction's snapshotted (E4-capped) schedule. A fallback bid uses
+auction's snapshotted (E4-capped) schedule. As built (amended in Plan 9 Task 14): E4 is not built,
+so `d_max_eff` is the snapshotted schedule's `Schedule::max_discount_ray` (its last point), and the
+cap is computed only while D4 is on (else 0). A fallback bid uses
 `P_used = min(P_fb, floor(stale_cap_ray * (RAY - d) / RAY))` with `d` the bid's (frozen) discount.
 
 In words: **during a stale feed the auction never sells collateral for less coin per unit than
@@ -384,10 +423,16 @@ pre-flight, with the plan's ruling R9-3.)
 
 #### 3.2.6 Tests
 
-`risk_core`: `pause_table_is_exhaustive` (every `Op` x level x feed x grace has an entry, compile-time
-match), `risk_reducing_ops_allowed_everywhere`, `fallback_price_clamped_to_the_floor`,
-`floor_uses_the_capped_max_discount`; Kani `fallback_price_never_breaches_the_floor`.
-Harness (`v04/harness/tests/pause_levels.rs`, new):
+`risk_core`: `pause_table_is_exhaustive` (every `Op` x level x feed has an entry, compile-time
+match; the grace column arrives with E3 in Plan 10, as-built amendment, Plan 9 Task 14),
+`risk_reducing_ops_allowed_everywhere`, `fallback_price_clamped_to_the_floor`,
+`floor_uses_the_capped_max_discount`; Kani `fallback_price_never_breaches_the_floor` (written, not
+run).
+Harness (`v04/harness/tests/pause_levels.rs`, new). As built (ruling R9-12; amended in Plan 9 Task
+14): the two matrix tests are in `v04/harness/tests/pause_matrix.rs` and the D4 tests
+(`stale_feed_bid_*`, `discount_stays_frozen_across_fallback_bids`,
+`fallback_final_bid_settles_and_releases`) in `v04/harness/tests/stale_bids.rs`; the level tests
+stay in `pause_levels.rs`:
 - `every_operation_at_every_pause_level` — table-driven over the 17 operations of §3.2.2 x levels
   0-3; asserts the wire code and, for every refusal, that no actor state and no holding changed;
 - `every_operation_with_a_stale_feed` — the same over Stale-ok and Stale-no;
@@ -406,6 +451,12 @@ Level checks are a byte compare. A fallback bid skips nothing and adds one `mul_
 auction: within the E1 bid estimate. New row `SetPauseLevel`: ~12 executions (proxy, 2 probes,
 config, `PauseLevelUpdate`, the 7-execution Observe block), ~330,000 cycles (comparable to
 `SetCollateral`, 11 / 325,765).
+
+Measured (Plan 9, recommended preset, full ring): `SetPauseLevel` is 12 executions (hand-counted)
+and 360,079 cycles, 3.6 % of the cap, asserted `<= 400,000`. This is a recorded deviation from the
+estimate and from §4's "< 3 % of cap" (Plan 9 ruling R9-10, ADR-070): the row carries the whole
+7-execution Observe block (`ObserveFeed` alone is 181,947), and `SetCollateral`, at 11 executions,
+measures 359,048, so 300,000 is not reachable without restructuring the message.
 
 ### 3.3 E3 — Pinned readings and the grace period (R2, R5)
 
@@ -697,10 +748,19 @@ marks these rows "(0.4 only)".
 | `ObserveFeed` | 7 / 176,218 | 7 / ~200,000 | — |
 | `SetCollateral` | 11 / 325,765 | 11 / ~350,000 | — |
 | `TakeDebt` | 11 / 271,617 | 11 / ~280,000 | — |
-| `SetPauseLevel`, `ApplyPending` | — | ~12 / ~330,000; ~6-12 | < 3 % of cap |
+| `SetPauseLevel` | — | 12 / 360,079 (measured, Plan 9) | <= 400,000 (4 % of cap; recorded deviation, below) |
+| `ApplyPending` | — | ~6-12 | < 3 % of cap |
 
 All rows stay under 10 % of the 10,000,000-cycle cap. Every added loop is bounded by 8. Estimates
 are replaced by measurements at the end of each plan.
+
+Recorded deviation (Plan 9 ruling R9-10): this row first read "`SetPauseLevel` ~12 / ~330,000,
+< 3 % of cap"; the two figures contradict (3 % is 300,000). `SetPauseLevel` measured 360,079 cycles
+(3.6 %) and is asserted `<= 400,000`. Reason: it is 12 executions including the 7-execution Observe
+block; `ObserveFeed` alone is 181,947 and `SetCollateral` at 11 executions is 359,048 (all measured
+under `RiskArgs::recommended()` with a full ring, `v04/CYCLES.md`). Plan 9's measured rows:
+`Bid (partial)` 15 / 431,669, `Bid (final)` 21 / 606,461, `Liquidate` 29 / 883,636 (E1 only),
+`ObserveFeed` 7 / 181,947, `SetCollateral` 11 / 359,048.
 
 ## 5. Order of work and plan split
 

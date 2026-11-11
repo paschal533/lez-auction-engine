@@ -35,18 +35,18 @@ Counted from the source by `scripts/count-tests.py`, one row per area. CI fails 
 <!-- test-counts:begin -->
 | Area | Tests |
 |---|---:|
-| 0.4 engine (v04/) | 275 |
+| 0.4 engine (v04/) | 381 |
 | v0.2.4 programs | 851 |
 | Shared crates | 344 |
 | CLI | 85 |
-| Fuzz + Kani proofs | 2 |
+| Fuzz + Kani proofs | 6 |
 | Basecamp QML | 162 |
 | Core module C++ | 51 |
-| Python tooling | 106 |
-| **Total** | 1876 |
+| Python tooling | 113 |
+| **Total** | 1993 |
 <!-- test-counts:end -->
 
-Counts include `#[ignore]`d tests (run by named jobs) and the two Kani harnesses, which no CI job runs yet (SOFT2).
+Counts include `#[ignore]`d tests (run by named jobs) and the six Kani harnesses (two in `crates/auction_core`, four in `v04/risk_core`), which are written but have never been run: no Kani toolchain is installed and no CI job runs them (SOFT2, ADR-015).
 
 ## Dependencies
 

@@ -133,6 +133,28 @@ read the `ProgramHeader` at the loader actor, compare `image_id` with the reprod
 `DEPLOYMENTS.md` (ADR-047), and require `immutable == true` (or accept a named upgrade authority as a new,
 documented trust assumption).
 
+**Tier 2 state (Plan 9, ADR-070 to ADR-074).** Appended only: every existing field keeps its position, and
+each new field is the last of its struct (`v04/engine_core/src/state.rs`, `ext.rs`, `msg.rs`).
+
+| Actor / message | Appended | Holds |
+|---|---|---|
+| config `ConfigState` | `ext: ConfigExt { system_level: u8 }` | the system pause level (0-3) that gates `StartSurplus`/`StartDebt` (level >= 2) and the system takes (level 3), written by `SetPauseLevel` |
+| collateral actor `CollateralState` | `ext: CollateralExt { risk: RiskArgs, pause_level: u8, ring: TwapRing }` | the type's validated `RiskArgs` (twap_window_ms, twap_min_spacing_ms, twap_min_obs, max_spot_twap_dev_bps, stale_bid_max_age_ms), its pause level (0-3; `admin_paused` counts as 3), and the TWAP ring `TwapRing { samples: Vec<Sample { ts_ms: u64, price_ray: u128 }>, last_conf_bps: u16 }`, oldest first, at most 8 samples (198 bytes encoded when full) |
+| auction `AuctionState` | `stale_cap_ray: u128` | the D4 stale floor, set at `Seized` only while D4 is on; 0 otherwise, and in every legacy auction |
+| `SetCollateral` (1) | `risk: Box<RiskArgs>` | the type's Tier 2 parameters, validated at the config |
+| `BidCtx` (13) | `paused_since_ms: Option<u64>`, `fallback: bool` | a D4 fallback bid's open pause (so the auction's discount stays frozen) and its flag; `None`/`false` for a live bid |
+| `Configure` (15) | `risk: Box<RiskArgs>` | the validated `RiskArgs`, relayed from the config to the collateral actor (Plan 9 ruling R9-4) |
+| `SetPauseLevel { salt, collateral_def, level, now_ms }` (47, new) | — | root at the admin's proxy; the config checks the admin, `level <= 3` (`InvalidConfig`) and that `collateral_def` is its recorded type (`WrongAccount("collateral_def")`), writes `system_level`, then sends a seeded `Probe { Collateral }`, `PauseLevelUpdate` and `Observe { now_ms }` to the collateral actor |
+| `PauseLevelUpdate { level }` (48, new) | — | config to its collateral actor, accepted only from that config: writes `ext.pause_level`, sends nothing |
+
+The copy of the collateral state that rides in `LiqCtx`/`Open` and the auction's quote scratch drops the
+ring (`CollateralState::for_quote`). Indices 49 and 50 are reserved for Plan 12. The pure Tier 2 logic is in
+the v04-only crate `v04/risk_core` (`no_std` outside its tests; it depends on `auction_core` and,
+behind a feature, `borsh`), so the frozen v0.2.4 sources are untouched (ADR-069).
+
+Migration note: Borsh does not decode a pre-Plan-9 encoding into the new layout. No 0.4 state exists outside
+local runs, so: **recreate local state; tags unchanged.**
+
 ## 4. Instruction-by-instruction mapping
 
 ### 4.1 Five building blocks

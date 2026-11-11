@@ -55,10 +55,12 @@ mod proofs {
     }
 
     /// Exact replacement for `auction_core::math::mul_div_floor` inside `twap_bounded_by_samples`
-    /// only. It is exact whenever `x · y < 2^128`. The harness guarantees that: prices are below
-    /// `2^64` and weights are `u64`. The `assert!` makes any call outside that range fail the
-    /// proof rather than silently return `Overflow`. `d == 0` gives `DivByZero`, as the original
-    /// does.
+    /// only. `twap` calls `crate::math::mul_div_floor`, which divides natively when `x · y` fits
+    /// a u128 and reaches `auction_core::math::mul_div_floor` only when it does not. Under this
+    /// harness's bounds (prices below `2^64`, `u64` weights) the product always fits, so the
+    /// native path runs and this stub only guards the fallback. The `assert!` makes any call that
+    /// does reach it fail the proof rather than silently return `Overflow`. `d == 0` gives
+    /// `DivByZero`, as the original does.
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "d != 0 is checked; the product is checked"
@@ -88,8 +90,9 @@ mod proofs {
     /// current for longer than `max_age` cuts itself and everything older.
     ///
     /// Unwinding: `unwind(9)` bounds the ring loops only, which have at most 3 iterations here.
-    /// The 128-iteration loop in `auction_core::math::div_wide`, which `mul_div_floor` reaches,
-    /// is never entered, because `mul_div_floor` is stubbed by the exact `mul_div_floor_narrow`.
+    /// The 128-iteration loop in `auction_core::math::div_wide` is not entered: `twap`'s
+    /// `crate::math::mul_div_floor` takes its native path for these products, and its fallback
+    /// to `auction_core::math::mul_div_floor` is stubbed by the exact `mul_div_floor_narrow`.
     /// Run it with `cargo kani -p risk_core --harness twap_bounded_by_samples -Z stubbing`.
     /// Status: written, not run (Kani is not installed). Do not cite it as proven.
     #[kani::proof]

@@ -10,8 +10,10 @@ admission evidence is the buffer holding's `Pda`, on a system op that reads that
 account is absent (`StartDebt` below).
 
 - **Gas cap:** 10,000,000 cycles per transaction (`max_gas_exec`, spike S8). The test asserts every
-  row succeeds and stays below it; the most expensive instruction, `Liquidate` under the Tier 2
-  preset with a full ring, uses under 9% of it.
+  row succeeds and stays below it; the most expensive measured instruction, `Liquidate` under the
+  Tier 2 preset with a full ring at the price 0.5, uses under 9% of it. That is a fast-path figure:
+  at high prices (collateral base units per coin base unit) the `Liquidate` and `Bid` rows may cost
+  more, and that has not been measured (see "Price-dependent cost" in the Tier 2 section).
 - **Gas limit:** the SDK simulates, then declares `ceil(cycles x 1.2)` (ADR-061): 20% headroom over
   the simulated cycles, still far below the cap for every row. A revert is charged its whole limit.
 - **Executions** are counted from the message sequences: every message delivered in the
@@ -113,7 +115,8 @@ Measured 2026-11-11 by `harness/tests/cycles_tier2.rs`
 (`cargo test -p harness --test cycles_tier2 -- --nocapture`). Scenario: `World::new_tier2` under
 `RiskArgs::recommended()` (30 min window, 5 min spacing, `min_obs` 3, 20 % breaker, 1 h stale
 window), feed max age 600_000 ms, the slice's amounts (collateral 500_000, debt 600_000, redemption
-price and oracle 0.5). The ring holds 8 samples before every row, the worst case (ruling R9-10).
+price and oracle 0.5). The ring holds 8 samples before every row, the worst case for ring fill
+(ruling R9-10) at this price; it is not the worst case over prices (below).
 Each row runs at least 1 s after the newest sample, because a sample at `now` has no weight.
 `ObserveFeed` is measured on a fresh publish, so it evicts the oldest sample. `SetPauseLevel` sets
 level 1. Budgets are asserted by the test. The R9-13 e2e values are not used here: R9-3 refuses
@@ -128,8 +131,33 @@ them at this world's feed max age.
 | SetCollateral | 11 | 359,048 | 2,872,384 | gas cap | ~350,000 |
 | SetPauseLevel | 12 | 360,079 | 2,880,632 | <= 400,000 (R9-10) | ~330,000 |
 
-- Every budgeted row fits. `Liquidate`, `Bid (partial)`, `Bid (final)` and `ObserveFeed` come in
-  under the spec's estimates.
+- Every budgeted row fits at this price (the fast path, below). `Liquidate`, `Bid (partial)`,
+  `Bid (final)` and `ObserveFeed` come in under the spec's estimates.
+- **Price-dependent cost (open item).** These are fast-path figures at the price 0.5
+  (`P = RAY / 2`, `harness/tests/cycles_tier2.rs:28`). `risk_core::math` divides natively only
+  while `x · y` fits a u128 (`risk_core/src/math.rs:13-18`); otherwise it calls the frozen 128-step
+  division, about 10,000 cycles a call (spike S4). A TWAP term is `p · w`, with `p` the RAY price
+  and `w` a sample's weight in ms, and every weight is at most `min(twap_window_ms,
+  max_oracle_age_ms)` (`risk_core/src/twap.rs`). The TWAP limit, the price below which every
+  term is guaranteed the fast path, is `p < 2^128 / min(window, max_age)`. As a price in collateral
+  base units per coin base unit, that is about 567,000 in this world (max age 600_000 ms) and about
+  226,000 at the largest max age the recommended preset accepts (1,499,999 ms). It is about 189,000
+  for a 1,800,000 ms window when the max age is at least the window, and about 3,900 at the 24 h
+  maximum window and max age. The limit is a sufficient condition: above it, only a term whose own
+  `p · w` reaches 2^128 may take the slow path, at most 8 frozen divisions per `Liquidate` or `Bid`.
+  Every other multiply-divide stays native up to far higher prices: the sanity bound to a
+  redemption price of about 17,000,000, the anchor to about 23,000,000, `edge` to about
+  34,000,000. So `ObserveFeed`, `SetCollateral` and `SetPauseLevel`, which compute no TWAP, keep
+  their figures up to the first of these. **Slow-path rows have not been measured.** Whether
+  `Liquidate` and `Bid` stay inside their assertions just above the TWAP limit has not been
+  established by measurement. The pre-change measurement (ADR-070) was taken with every
+  multiply-divide on the frozen path: `Liquidate` 1,012,946, `Bid (partial)` 561,253,
+  `Bid (final)` 736,045, `SetPauseLevel` 407,582. It is a loose upper bound, approached only at
+  prices far above the TWAP limit, where the remaining multiply-divides also switch. The budget
+  assertions, "under 9 %" above, and the headroom for later plans are therefore established on the
+  fast path only. Cost stays bounded by a constant (the TWAP loop is bounded at 8 samples), but it depends on the price. Not decided yet:
+  a cheaper exact wide division in `risk_core::math`, or budgets for the slow path. Fallback (D4)
+  bids are not in this table.
 - `SetCollateral` (+9,048) and `SetPauseLevel` (+30,079) are above their estimates, which are not
   assertions. `SetPauseLevel` is 3.6 % of the cap: R9-10 set its assertion at 4 %, because §4's
   "~330,000" and "< 3 %" contradict each other.

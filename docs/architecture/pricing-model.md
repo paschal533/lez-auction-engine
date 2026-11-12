@@ -36,7 +36,11 @@ the whole of an outage. It weights each sample by how long it was the current pu
 clipped to `[anchor − window, anchor]`, stops at the first older sample that was current for
 longer than `max_oracle_age_ms` (a stale period breaks it), and is unavailable with fewer than
 `twap_min_obs` weighted samples. `T = Σ floor(p_i · w_i / Σw)`, so `T` lies in
-`[min p_i − 7, max p_i]` of the used samples (`twap_within_sample_range`).
+`[min p_i − 7, max p_i]` of the used samples (`twap_within_sample_range`). Limit, not enforced
+yet: because the ring holds 8 samples, the TWAP spans its whole window only while
+`twap_window_ms <= 8 · twap_min_spacing_ms`. Beyond that, one `ObserveFeed` per spacing interval
+keeps the average to about the last 7-8 intervals. The recommended preset is within the limit
+(6 samples per window).
 
 **The price per operation (ADR-071, ADR-072).** Every engine price is a payout (collateral per
 coin), so each one takes the smaller `P`. With `conf_bps = ceil(c · 10_000 / M)` and
@@ -182,7 +186,8 @@ Tests: `stale_feed_bid_uses_the_last_good_twap`, `stale_feed_bid_refused_past_ma
 `fallback_twap_follows_the_d4_conditions` (`v04/risk_core/src/stale.rs`). The Kani harness
 `fallback_price_never_breaches_the_floor` is written, not run (ADR-015). The `tier2` stage of
 `v04/scripts/e2e.sh` settles an auction with a fallback bid on a standalone sequencer; it ran once
-locally and passed; it has not run in CI yet.
+locally and passed; it has not run in CI yet. Its time-compressed window (300 s, 10 s spacing) is
+past the 8-sample ring limit (§1), so it exercises the flow, not TWAP manipulation resistance.
 
 **Why bounded last-good TWAP, and not the two simpler rules:**
 
@@ -224,7 +229,15 @@ executions and 839,357 cycles, under 9% of the 10,000,000-cycle gas cap. A parti
 executions and 407,700 cycles; a final bid 21 and 576,148. These are the 2026-11-03 figures, which
 the breakdown below uses. Re-measured 2026-11-11 after Plan 9, the execution counts are unchanged:
 under the legacy preset `Liquidate` is 845,645 cycles, and under the recommended preset with a full
-TWAP ring 883,636 (partial bid 431,669, final bid 606,461; `v04/CYCLES.md`, Tier 2 table).
+TWAP ring 883,636 (partial bid 431,669, final bid 606,461; `v04/CYCLES.md`, Tier 2 table). Those
+Tier 2 figures are fast-path figures at the price 0.5. Every TWAP term is guaranteed the fast path
+below a price limit, in collateral base units per coin base unit. For the recommended preset it is
+about 226,855 (its max age is below 1,500,000 ms). It is about 189,045 for a 30 min window when the
+max age is at least the window, and about 3,938 at a 24 h window and max age. Above the limit a
+term may take the frozen 128-step division: at most 8 per `Liquidate` or `Bid`. Other
+multiply-divides stay native to far higher prices. Those rows have not been measured, and whether
+they stay inside their assertions has not been established. So the budgets and "under 10 % of the
+cap" are established on the fast path only (ADR-070, open item).
 
 These figures include the whole conversation, not only the engine's counters: real token transfers
 through the token program, custody of the seized collateral in a per-auction vault, the host's own

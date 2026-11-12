@@ -13,7 +13,7 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 - SDK: plans, simulate-then-send with a fitted gas limit (ADR-061), block-level confirmation and the scanner (ADR-066).
 - CI: `v04.yml` runs fmt, clippy and `cargo test --workspace` on changes to `v04/` and the shared crates; green on `main`, run 42033888330.
 - End to end: `v04-e2e.yml` on a standalone sequencer with `RISC0_DEV_MODE=0`: run 42015414886 at 56876f5, green in 59m30s (cold cache); run 42033888263 at 5913f0a, green in 41m51s (warm) ([ci.md](docs/architecture/ci.md)).
-- Cycles and fees: [v04/CYCLES.md](v04/CYCLES.md). The most expensive instruction, `Liquidate`, uses under 9 % of the gas cap.
+- Cycles and fees: [v04/CYCLES.md](v04/CYCLES.md). The most expensive measured instruction, `Liquidate`, uses under 9 % of the gas cap at the measured price (a fast-path figure; at high prices the Tier 2 `Liquidate` and `Bid` rows may cost more and are not measured, see v04/CYCLES.md).
 - Waiting on upstream: the IDL and SPEL entrypoint (no SPEL for 0.4), the real host hooks (no lez-programs 0.4), the CLI and Basecamp module on `lez_core` 0.6.0, and a public 0.4 testnet. See [Dependencies](#dependencies).
 
 **v0.2.4 engine (LEZ v0.2.4, SPEL `1ef0500f`).** Plans 1 to 4 are merged to `main` (Plan 4 by PR #3).

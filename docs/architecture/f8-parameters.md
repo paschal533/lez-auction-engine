@@ -174,7 +174,21 @@ by its own range row, so the "TWAP off" rule decides only `twap_min_spacing_ms` 
 window 1_800_000 `> max_age + 300_000`). The harness's Tier 2 world uses 600_000
 (`TIER2_MAX_AGE_MS`, `v04/harness/src/tier2.rs`); `CollateralArgs::defaults_for_tests()`
 (3_600_000) refuses it. The e2e `tier2` stage uses a time-compressed copy (window 300_000, spacing
-10_000, `min_obs` 3, dev 2_000, stale 600_000, with `max_oracle_age_ms` 180_000).
+10_000, `min_obs` 3, dev 2_000, stale 600_000, with `max_oracle_age_ms` 180_000). Its window is 30
+spacings, past the ring limit below, so the stage exercises the flow, not TWAP manipulation
+resistance.
+
+**Known gap: window vs ring capacity (not enforced yet).** The ring holds `TWAP_CAPACITY` = 8
+samples, and the oldest has no weight before its own time. When `twap_window_ms > 8 ·
+twap_min_spacing_ms`, anyone calling the permissionless `ObserveFeed` once per spacing interval
+evicts older samples, so the TWAP covers only about the last 7-8 spacing intervals, not the
+configured window. Operators must keep `twap_window_ms <= 8 · twap_min_spacing_ms` for the TWAP to
+span its window. `RiskArgs::validate` does not check this yet; adding the check is a planned
+change, not made. The recommended preset is within it (1_800_000 / 300_000 = 6). Outside it, the
+bid anchor and the liquidation breaker track spot over that shorter span. A live bid still never
+pays more than `band(edge(M))` of a validated reading, and a D4 bid is still held at the stale
+floor (ADR-070, ADR-074). A related unenforced case: with `twap_min_spacing_ms <= slack_ms` one
+oracle publication can be recorded twice, because the sample time is the claimed `now` (ADR-070).
 
 **Legacy is v04 as built, at confidence 0.** Legacy turns the TWAP, the breaker and D4 off, so
 every price is `band(edge(M))`. The confidence edge (ADR-071) is always on: with confidence 0, as

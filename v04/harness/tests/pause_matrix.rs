@@ -113,8 +113,10 @@ fn every_operation_at_every_pause_level() {
     report(&mismatches);
 }
 
-/// The matrix exercises the risk-reducing operations end to end at level 3: `expected` gives
-/// `None` for each, so each is simulated and must succeed there (Task 8 review L2).
+/// Checks the expectation table only: `expected` gives `None` (runs) for every always-run
+/// operation at level 3, with either feed and either preset. It simulates nothing. The end-to-end
+/// evidence is the level-3 row of `every_operation_at_every_pause_level` (legacy preset, live feed
+/// only); always-run operations at level 3 with a stale feed are not simulated yet.
 #[test]
 fn risk_reducing_operations_run_at_level_3() {
     for op in ALWAYS_RUN {

@@ -3,10 +3,10 @@
 //!
 //! v0.2.4 observed, required a live type, priced with `bid_price`, took `t_eff` from the observed
 //! pause clock, then ran `quote_bid` and `apply_bid` with the type's current `min_bid` and
-//! `chost`. The collateral actor does the first part (Observe, `require_live`, `P`); [`quote`]
-//! does the rest. `BidCtx` is sent only after a live observation, and a live observation closes
-//! any open pause, so the pause clock `t_eff` needs is `paused_since = None` with the observed
-//! `paused_total`.
+//! `chost`. The collateral actor does the first part (Observe, the pause gate and the price,
+//! `gate::bid_pricing`); [`quote`] does the rest, with the pause clock the observation left:
+//! `paused_since = None` after a live observation (which closes any open pause), and the open
+//! pause of a stale feed for a D4 fallback bid (spec §3.2.3), so its discount stays frozen.
 
 pub use auction_core::auction::ChainEnd;
 use auction_core::{
@@ -18,6 +18,7 @@ use auction_core::{
     pause::PauseClock,
 };
 use auction_engine_params::EngineError;
+use risk_core::floored_price;
 
 use crate::state::{AccountingState, AuctionState};
 
@@ -34,6 +35,12 @@ pub struct BidQuote {
     pub paused_total_ms: u64,
     pub min_bid: u128,
     pub chost: u128,
+    /// The type's open pause after this observation: `None` for a live bid, the stale feed's
+    /// onset for a D4 fallback bid.
+    pub paused_since_ms: Option<u64>,
+    /// A D4 fallback bid (spec §3.2.3): `price_ray` is the last-good TWAP price, held at the
+    /// auction's stale floor here.
+    pub fallback: bool,
 }
 
 /// A quoted and applied bid.
@@ -49,11 +56,13 @@ pub struct BidOutcome {
 }
 
 /// v0.2.4's `quote_bid` and `apply_bid` on the auction `a` (any phase but `Auctioning` fails
-/// `NotAuctioning`, as v0.2.4's settled flag did).
+/// `NotAuctioning`, as v0.2.4's settled flag did). A fallback bid's price is
+/// `floored_price(P_fb, stale_cap_ray, d(t_eff))` (spec §3.2.4); see [`quoted_price`] for the
+/// floorless case.
 pub fn quote(a: &AuctionState, q: &BidQuote) -> Result<BidOutcome, EngineError> {
     let current = a.to_core()?;
     let clock = PauseClock {
-        paused_since_ms: None,
+        paused_since_ms: q.paused_since_ms,
         paused_total_ms: q.paused_total_ms,
         last_seen_oracle_ts: None,
     };
@@ -62,13 +71,14 @@ pub fn quote(a: &AuctionState, q: &BidQuote) -> Result<BidOutcome, EngineError> 
         current.type_paused_total_at_start,
         q.now_ms,
     );
+    let price_ray = quoted_price(a, q, current.schedule.discount_ray(t_eff))?;
     let fill = quote_bid(
         &current,
         &BidRequest {
             coin_in_max: q.max_debt_in,
             min_collateral_out: q.min_collateral_out,
         },
-        q.price_ray,
+        price_ray,
         t_eff,
         q.min_bid,
         q.chost,
@@ -80,6 +90,27 @@ pub fn quote(a: &AuctionState, q: &BidQuote) -> Result<BidOutcome, EngineError> 
         end,
         lot_empties: fill.collateral_out == current.collateral_left,
     })
+}
+
+/// The price `quote_bid` gets: `q.price_ray` for a live bid, the floored price for a fallback
+/// bid at discount `d_ray`.
+///
+/// A fallback bid whose floored price is 0 is refused here, with the stale-feed code: an auction
+/// opened while D4 was off stored `stale_cap_ray = 0`, so it has no floor and must not be sold
+/// on a stale feed, as if D4 were off (the feed's own code; `BidCtx` does not carry the exact
+/// fault, and `PriceFeedStale` is the closest). The check lives here, not in frozen
+/// `auction_core`'s `price_ray == 0` guard, which documents itself as unreachable.
+///
+/// # Errors
+/// `PriceFeedStale` for a floorless fallback bid.
+fn quoted_price(a: &AuctionState, q: &BidQuote, d_ray: u128) -> Result<u128, EngineError> {
+    if !q.fallback {
+        return Ok(q.price_ray);
+    }
+    match floored_price(q.price_ray, a.stale_cap_ray, d_ray) {
+        0 => Err(EngineError::PriceFeedStale),
+        price => Ok(price),
+    }
 }
 
 /// The cumulative totals a settling auction reports to the accounting.
@@ -178,7 +209,97 @@ mod tests {
             paused_total_ms: 0,
             min_bid: 25,
             chost: 110,
+            paused_since_ms: None,
+            fallback: false,
         }
+    }
+
+    /// A stale-feed (D4) bid at `now_ms` with the pause clock open since `since_ms`.
+    fn fallback_bid(price_ray: u128, since_ms: u64, now_ms: u64) -> BidQuote {
+        BidQuote {
+            price_ray,
+            now_ms,
+            paused_since_ms: Some(since_ms),
+            fallback: true,
+            ..bid(100_000, 0)
+        }
+    }
+
+    /// The fixture with the stale cap D4 would store at P_liq = 0.5, the cap, and a pause opened
+    /// 600 s in with a bid 600 s after it.
+    fn capped() -> (AuctionState, u128, u64, u64) {
+        let base = liquidated();
+        let schedule = base.to_core().expect("core").schedule;
+        let cap = risk_core::stale_cap(RAY / 2, &schedule).expect("fits");
+        let a = AuctionState {
+            stale_cap_ray: cap,
+            ..base
+        };
+        (a, cap, START + 600_000, START + 1_200_000)
+    }
+
+    #[test]
+    fn fallback_quote_freezes_the_discount() {
+        // The pause opened 600 s in; bids 600 s and 1_200 s later see the discount at 600 s.
+        let (a, _, since, later) = capped();
+        let latest = START + 1_800_000;
+        let frozen = BidQuote {
+            now_ms: since,
+            ..bid(100_000, 0)
+        };
+        let at_since = quote(&a, &frozen).expect("live").fill;
+        let one = quote(&a, &fallback_bid(RAY / 2, since, later)).expect("fallback");
+        let two = quote(&a, &fallback_bid(RAY / 2, since, latest)).expect("fallback");
+        assert_eq!(one.fill, at_since, "at P_liq the floor does not bind");
+        assert_eq!(two.fill, at_since, "the discount stays frozen");
+    }
+
+    #[test]
+    fn fallback_quote_is_held_at_the_floor_and_live_ignores_it() {
+        use risk_core::floored_price;
+        let (a, cap, since, later) = capped();
+        let frozen = BidQuote {
+            now_ms: since,
+            ..bid(100_000, 0)
+        };
+        let d = quote(&a, &frozen).expect("live").fill.discount_ray;
+        // A fallback price above the floor is held at floor(cap · (RAY - d) / RAY).
+        let floor = floored_price(RAY, cap, d);
+        assert!((RAY / 2..RAY).contains(&floor), "{floor}");
+        let held = quote(&a, &fallback_bid(RAY, since, later)).expect("fallback");
+        let at_floor = BidQuote {
+            price_ray: floor,
+            ..frozen
+        };
+        assert_eq!(held.fill, quote(&a, &at_floor).expect("live").fill);
+        let unfloored = BidQuote {
+            price_ray: RAY,
+            ..frozen
+        };
+        assert!(
+            held.fill.collateral_out < quote(&a, &unfloored).expect("live").fill.collateral_out
+        );
+        // A live bid ignores the floor.
+        let live = BidQuote {
+            fallback: false,
+            ..fallback_bid(RAY, since, later)
+        };
+        let open_live = quote(&a, &live).expect("live").fill;
+        assert_eq!(open_live, quote(&a, &unfloored).expect("live").fill);
+    }
+
+    #[test]
+    fn floorless_fallback_quote_is_refused_as_stale() {
+        let (_, _, since, later) = capped();
+        // An auction opened with D4 off stored no cap: refused with the stale-feed code.
+        let a = liquidated();
+        assert_eq!(a.stale_cap_ray, 0);
+        assert_eq!(
+            quote(&a, &fallback_bid(RAY / 2, since, later)).map(|o| o.fill),
+            Err(EngineError::PriceFeedStale)
+        );
+        // A live bid on the same auction is unaffected.
+        assert!(quote(&a, &bid(100_000, 0)).is_ok());
     }
 
     /// v0.2.4 `final_bid_reaches_target_and_settles_once`: 100_000, 100_000, then 460_000.

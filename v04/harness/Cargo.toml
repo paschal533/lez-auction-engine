@@ -21,3 +21,4 @@ oracle_core.workspace = true
 token_core.workspace = true
 engine_core.workspace = true
 auction_engine_params.workspace = true
+risk_core = { workspace = true, features = ["borsh", "presets"] }

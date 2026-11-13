@@ -13,6 +13,7 @@ borsh = { version = "1.5.7", features = ["derive"] }
 risc0-zkvm = { version = "=3.0.5", default-features = false, features = ["std"] }
 auction_engine_params = { path = "../../../../crates/auction_engine_params", features = ["borsh"] }
 engine_core = { path = "../../../engine_core" }
+risk_core = { path = "../../../risk_core", features = ["borsh"] }
 mock_host_core = { path = "../../mock_host_core" }
 oracle_core = { path = "../../oracle_core" }
 token_core = { path = "../../token_core" }

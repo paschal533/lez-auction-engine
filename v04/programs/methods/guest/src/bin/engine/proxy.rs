@@ -3,8 +3,8 @@
 //! PDA seed). The stateless proxy forwards the message, and the receiver checks it came from
 //! exactly `(signer, E)`:
 //!
-//! - `Init` / `SetCollateral` / `SetEngineParams` / `SetSlack` (admin) go to the signer's config
-//!   `config_actor(E, signer, salt)`;
+//! - `Init` / `SetCollateral` / `SetEngineParams` / `SetSlack` / `SetPauseLevel` (admin) go to the
+//!   signer's config `config_actor(E, signer, salt)`;
 //! - `Liquidate` (keeper, row 4) goes to the named collateral actor
 //!   `collateral_actor(E, config, def)`, which takes the keeper from the proxy's account;
 //! - `ClaimLeftover` (owner, row 8) goes to the named auction, which accepts it only from
@@ -49,7 +49,8 @@ pub fn root(input: &ReceiveInput, message: &EngineMsg) -> Option<Response> {
         EngineMsg::Init { salt, .. }
         | EngineMsg::SetCollateral { salt, .. }
         | EngineMsg::SetEngineParams { salt, .. }
-        | EngineMsg::SetSlack { salt, .. } => Some(forward_admin(input, message, *salt)),
+        | EngineMsg::SetSlack { salt, .. }
+        | EngineMsg::SetPauseLevel { salt, .. } => Some(forward_admin(input, message, *salt)),
         EngineMsg::Liquidate {
             config,
             collateral_def,

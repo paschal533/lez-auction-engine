@@ -23,6 +23,7 @@ use harness::{
     world::{Forward, RAY, SALT, SLACK_MS},
 };
 use lee::{AccountId, Actor};
+use risk_core::RiskArgs;
 use token_core::{Definition, TokenMsg};
 
 /// The genesis supply of the protocol token.
@@ -345,6 +346,7 @@ fn second_collateral_type_on_a_config_reverts() {
         collateral_def: other_def,
         args: World::collateral_args(),
         now_ms: w.now_ms,
+        risk: Box::new(RiskArgs::legacy()),
     };
     expect_revert(
         w.send_engine(w.admin, &[&key], &second),
@@ -622,6 +624,7 @@ fn protocol_definition_is_never_the_stablecoin_or_the_collateral() {
         collateral_def: w.protocol_def(),
         args: World::collateral_args(),
         now_ms: w.now_ms,
+        risk: Box::new(RiskArgs::legacy()),
     };
     expect_revert(
         w.send_engine(w.admin, &[&key], &set),

@@ -3,6 +3,7 @@
 resolver = "3"
 members = [
     "engine_core",
+    "risk_core",
     "programs/methods",
     "programs/mock_host_core",
     "programs/oracle_core",
@@ -25,6 +26,7 @@ clock_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.g
 lez_programs = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.4.0-rc1", package = "programs", default-features = false, features = ["artifacts"] }
 methods = { path = "programs/methods" }
 engine_core = { path = "engine_core" }
+risk_core = { path = "risk_core" }
 auction_engine_params = { path = "../crates/auction_engine_params", features = ["borsh"] }
 mock_host_core = { path = "programs/mock_host_core" }
 oracle_core = { path = "programs/oracle_core" }
@@ -48,6 +50,7 @@ keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e9977
 [workspace.lints.rust]
 rust_2018_idioms = { level = "deny", priority = -1 }
 unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 [workspace.lints.clippy]
 correctness = { level = "deny", priority = -1 }

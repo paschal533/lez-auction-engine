@@ -34,6 +34,7 @@ use harness::{
     world::{RAY, SALT},
 };
 use lee::{AccountId, Actor};
+use risk_core::RiskArgs;
 use token_core::TokenMsg;
 
 const COLLATERAL: u128 = 500_000;
@@ -156,6 +157,8 @@ impl Forged {
                 paused_total_ms: 0,
                 min_bid: 0,
                 chost: 0,
+                paused_since_ms: None,
+                fallback: false,
             },
             // Re-open the live auction with the attacker as keeper and host.
             open: EngineMsg::Open {
@@ -187,6 +190,7 @@ impl Forged {
                 collateral_def: w.collateral_def,
                 args: World::collateral_args(),
                 ctx: collateral.ctx,
+                risk: Box::new(RiskArgs::legacy()),
             },
             settle_empty: EngineMsg::SettleEmpty {
                 config: w.config.account_id,

@@ -25,6 +25,7 @@ use engine_core::{
     state::ConfigState,
 };
 use lee::{AccountId, Actor, PublicAccountEvidence};
+use risk_core::RiskArgs;
 use token_core::holding_actor;
 
 use crate::{SdkError, simulate::StateSource};
@@ -293,6 +294,8 @@ pub fn plan_init(engine: AccountId, admin: AccountId, args: InitArgs) -> Result<
 /// `SetCollateral` at the admin's proxy, signed by the admin: proxy, config, collateral actor,
 /// and what the collateral actor observes (host params, oracle, clock).
 ///
+/// Sends the legacy (Tier 2 off) risk parameters; see [`plan_set_collateral_with`].
+///
 /// # Errors
 /// [`SdkError::Encode`] if the message does not encode.
 pub fn plan_set_collateral(
@@ -301,21 +304,65 @@ pub fn plan_set_collateral(
     args: CollateralArgs,
     now_ms: u64,
 ) -> Result<Plan, SdkError> {
+    plan_set_collateral_with(d, collateral_def, args, RiskArgs::legacy(), now_ms)
+}
+
+/// [`plan_set_collateral`] with the type's Tier 2 risk parameters `risk` (ADR-082); the same
+/// actors and signer.
+///
+/// # Errors
+/// [`SdkError::Encode`] if the message does not encode.
+pub fn plan_set_collateral_with(
+    d: &Deployment,
+    collateral_def: AccountId,
+    args: CollateralArgs,
+    risk: RiskArgs,
+    now_ms: u64,
+) -> Result<Plan, SdkError> {
     let proxy = d.proxy(d.admin);
-    let actors = vec![
-        proxy,
-        d.config,
-        d.collateral(collateral_def),
-        d.host,
-        d.oracle,
-        d.clock,
-    ];
+    let actors = admin_observe_actors(d, collateral_def);
     let msg = EngineMsg::SetCollateral {
         salt: d.salt,
         collateral_def,
         args,
         now_ms,
+        risk: Box::new(risk),
     };
+    Plan::new(proxy, actors, vec![d.admin], Vec::new(), &msg)
+}
+
+/// The actors of an admin message the collateral actor observes after: the admin's proxy, the
+/// config, the collateral actor, and what it observes (host params, oracle, clock).
+fn admin_observe_actors(d: &Deployment, collateral_def: AccountId) -> Vec<Actor> {
+    vec![
+        d.proxy(d.admin),
+        d.config,
+        d.collateral(collateral_def),
+        d.host,
+        d.oracle,
+        d.clock,
+    ]
+}
+
+/// `SetPauseLevel` (ADR-073) at the admin's proxy, signed by the admin: the same actors as
+/// [`plan_set_collateral`], since the level change is followed by an `Observe`.
+///
+/// # Errors
+/// [`SdkError::Encode`] if the message does not encode.
+pub fn plan_set_pause_level(
+    d: &Deployment,
+    collateral_def: AccountId,
+    level: u8,
+    now_ms: u64,
+) -> Result<Plan, SdkError> {
+    let proxy = d.proxy(d.admin);
+    let msg = EngineMsg::SetPauseLevel {
+        salt: d.salt,
+        collateral_def,
+        level,
+        now_ms,
+    };
+    let actors = admin_observe_actors(d, collateral_def);
     Plan::new(proxy, actors, vec![d.admin], Vec::new(), &msg)
 }
 

@@ -2,11 +2,16 @@
 //! `bid` and `bid_with_settlement`, since the engine names the accounting itself.
 //!
 //! 1. Root `Bid` at the collateral actor `C = collateral_actor(E, config, def)`: Observe with the
-//!    bid's clock claim (`observe::start`); at `Proceed`, `require_live` and the bid price, then a
-//!    seeded `Probe { Auction }` (ruling R-9b) and `BidCtx` unseeded to the auction
-//!    `auction_actor(E, config, position, nonce)` ([`bid_ctx`]).
+//!    bid's clock claim (`observe::start`); at `Proceed`, the pause gate and the bid price
+//!    (`gate::bid_pricing`): live, the TWAP-anchored `band(edge(M))`; on an invalid feed at level
+//!    2 or below, the D4 fallback at the last-good TWAP (spec §3.2.3), refused with
+//!    `TwapUnavailable`, `LastGoodTwapTooOld` or, with D4 off, the feed's own code. Then a seeded
+//!    `Probe { Auction }` (ruling R-9b) and `BidCtx` unseeded to the auction
+//!    `auction_actor(E, config, position, nonce)` ([`bid_ctx`]), carrying the price, the fallback
+//!    flag and the observed open pause.
 //! 2. `BidCtx` at the auction, from exactly its collateral actor: v0.2.4's `quote_bid` and
-//!    `apply_bid` (`engine_core::bid::quote`). Every refusal of the quote (`NotAuctioning`,
+//!    `apply_bid` (`engine_core::bid::quote`), with a fallback price held at the auction's stale
+//!    floor and the discount frozen over the open pause. Every refusal of the quote (`NotAuctioning`,
 //!    `ZeroFill`, `Slippage`, `BelowMinBid`, `DustRemainder`) happens here, before any token
 //!    moves. Then, in order (debt first, ADR-010):
 //!    - `Burn(debt part)` at the bidder's holding `(bidder, T)` (authorized by its signature);
@@ -27,6 +32,7 @@ use engine_core::{
     },
     bid::{BidQuote, ChainEnd, SettledTotals, fold_settled, quote},
     check::{expect_from, expect_root, fail},
+    gate::BidPricing,
     msg::EngineMsg,
     state::{AccountingState, AuctionState, BidRequestRec, CollateralState, ObserveThen},
 };
@@ -57,12 +63,13 @@ pub fn on_bid(input: &ReceiveInput, route: &BidRoute, request: BidRequestRec) ->
     observe::start(input, coll, route.now_ms, ObserveThen::Bid(request))
 }
 
-/// At the collateral actor's `Proceed`, after a live observation: `BidCtx` for the auction, with
-/// the type's current `min_bid` and `chost` (v0.2.4 quotes with the current parameters).
+/// At the collateral actor's `Proceed`, after a priced observation: `BidCtx` for the auction with
+/// `pricing` (price, fallback flag, open pause) and the type's current `min_bid` and `chost`
+/// (v0.2.4 quotes with the current parameters).
 pub fn bid_ctx(
     input: &ReceiveInput,
     observed: &CollateralState,
-    (price_ray, now_ms): (u128, u64),
+    (pricing, now_ms): (&BidPricing, u64),
     request: &BidRequestRec,
 ) -> (SyncMessage, Actor, EngineMsg) {
     let params = observed.collateral_params().unwrap_or_else(|err| fail(err));
@@ -81,11 +88,13 @@ pub fn bid_ctx(
         nonce: request.nonce,
         max_debt_in: request.max_debt_in,
         min_collateral_out: request.min_collateral_out,
-        price_ray,
+        price_ray: pricing.price_ray,
         now_ms,
         paused_total_ms: observed.paused_total_ms,
         min_bid: params.min_bid,
         chost,
+        paused_since_ms: pricing.paused_since_ms,
+        fallback: pricing.fallback,
     };
     (probe, auction, ctx)
 }

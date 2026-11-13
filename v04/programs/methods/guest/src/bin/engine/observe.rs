@@ -8,9 +8,11 @@
 //!    `AssertTimestamp { now, now + slack }` to the clock, and `Proceed` to itself.
 //! 2. `on_reply` takes each reading only from exactly the actor asked, once.
 //! 3. `proceed` (run after every earlier subtree) needs both readings, runs `feed::observe`,
-//!    writes the pause clock, clears the scratch and runs the continuation: nothing more for
-//!    `SetCollateral`; for `Liquidate`, `require_live` and the bid price, then `LiqCtx` to the
-//!    config (row 4); for `Bid`, the same, then `BidCtx` to the auction (rows 5-6).
+//!    writes the pause clock, offers a valid reading to the TWAP ring (`feed::record`), clears
+//!    the scratch and runs the continuation: nothing more for `SetCollateral` and `ObserveFeed`;
+//!    for `Liquidate`, `gate::liquidation_price` (TWAP, deviation breaker), then `LiqCtx` to the
+//!    config (row 4); for `Bid`, `gate::bid_pricing` (TWAP anchor, or the D4 fallback on an
+//!    invalid feed), then `BidCtx` to the auction (rows 5-6).
 //!
 //! While an observation is pending the actor accepts nothing but the awaited replies and its
 //! own `Proceed` (design note §4.3 c, guard 2).
@@ -20,9 +22,9 @@ use borsh::BorshDeserialize;
 use engine_core::{
     actors::collateral_actor,
     check::{expect_from, expect_root, fail},
-    feed,
+    feed, gate,
     msg::{ClockMsg, EngineMsg},
-    state::{CollateralState, ObserveThen, OracleReadingRec, PendingObserve},
+    state::{BidRequestRec, CollateralState, ObserveThen, OracleReadingRec, PendingObserve},
 };
 use lee_core::{
     account::{AccountId, Actor},
@@ -164,10 +166,9 @@ fn reply_state<T>(input: &ReceiveInput, decode: fn(&[u8]) -> Option<T>, err: Eng
     decode(reply.state.as_ref()).unwrap_or_else(|| fail(err))
 }
 
-/// The sentinel at the collateral actor (the caller checked it came from the actor itself).
-pub fn proceed(input: &ReceiveInput) -> Response {
-    let coll = CollateralState::decode(input.pre_state.as_ref())
-        .unwrap_or_else(|| fail(EngineError::WrongAccount("coll_config")));
+/// The sentinel at the collateral actor (the caller checked it came from the actor itself), with
+/// `coll` the receiver's state the caller already decoded (`read::proceed`).
+pub fn proceed(input: &ReceiveInput, coll: CollateralState) -> Response {
     let pending = coll
         .pending
         .clone()
@@ -177,44 +178,75 @@ pub fn proceed(input: &ReceiveInput) -> Response {
         .unwrap_or_else(|| fail(EngineError::HostMismatch));
     let reading = pending
         .reading
-        .unwrap_or_else(|| fail(EngineError::OracleMismatch));
-    let obs = feed::observe(
-        &coll,
-        &reading.to_core(),
-        r_ray,
-        pending.now_ms,
-        coll.ctx.slack_ms,
-    )
-    .unwrap_or_else(|err| fail(err));
-    let observed = CollateralState {
+        .unwrap_or_else(|| fail(EngineError::OracleMismatch))
+        .to_core();
+    let now_ms = pending.now_ms;
+    let obs = feed::observe(&coll, &reading, r_ray, now_ms, coll.ctx.slack_ms)
+        .unwrap_or_else(|err| fail(err));
+    let cleared = CollateralState {
         pending: None,
         ..coll.with_pause_clock(obs.clock)
     };
-    let response = Response::set_state(observed.encode());
+    let seen = Seen {
+        observed: feed::record(&cleared, &reading, &obs, now_ms),
+        obs,
+        r_ray,
+        now_ms,
+    };
+    let response = Response::set_state(seen.observed.encode());
     match pending.then {
         ObserveThen::Record => response,
-        ObserveThen::Bid(request) => {
-            let price_ray = feed::live_price(&coll, &obs, r_ray).unwrap_or_else(|err| fail(err));
-            let (probe, auction, ctx) =
-                crate::bid::bid_ctx(input, &observed, (price_ray, pending.now_ms), &request);
-            response.send(probe).send_sync(auction, &ctx)
-        }
+        ObserveThen::Bid(request) => bid_then(input, response, &seen, &request),
         ObserveThen::Liquidate {
             keeper,
             position,
             nonce,
-        } => {
-            let price_ray = feed::live_price(&coll, &obs, r_ray).unwrap_or_else(|err| fail(err));
-            let config = Actor::new(observed.config, engine(input));
-            let ctx = EngineMsg::LiqCtx {
-                position,
-                nonce,
-                keeper,
-                now_ms: pending.now_ms,
-                price_ray,
-                collateral: Box::new(observed),
-            };
-            response.send_sync(config, &ctx)
-        }
+        } => liquidate_then(input, response, &seen, (keeper, position, nonce)),
     }
+}
+
+/// What `proceed` observed: the state it writes (pause clock and ring updated, scratch cleared),
+/// the observation, the redemption price and the clock claim.
+struct Seen {
+    observed: CollateralState,
+    obs: feed::Observed,
+    r_ray: u128,
+    now_ms: u64,
+}
+
+/// `Bid`'s continuation: the bid price (`gate::bid_pricing`: live, or the D4 fallback on an
+/// invalid feed), then `BidCtx` to the auction with the whole pricing.
+fn bid_then(
+    input: &ReceiveInput,
+    response: Response,
+    seen: &Seen,
+    request: &BidRequestRec,
+) -> Response {
+    let pricing = gate::bid_pricing(&seen.observed, &seen.obs, seen.r_ray, seen.now_ms)
+        .unwrap_or_else(|err| fail(err));
+    let (probe, auction, ctx) =
+        crate::bid::bid_ctx(input, &seen.observed, (&pricing, seen.now_ms), request);
+    response.send(probe).send_sync(auction, &ctx)
+}
+
+/// `Liquidate`'s continuation: the TWAP-backed liquidation price (`gate::liquidation_price`),
+/// then `LiqCtx` to the config with the observed state, ring stripped (`for_quote`).
+fn liquidate_then(
+    input: &ReceiveInput,
+    response: Response,
+    seen: &Seen,
+    (keeper, position, nonce): (AccountId, AccountId, u64),
+) -> Response {
+    let price_ray = gate::liquidation_price(&seen.observed, &seen.obs, seen.r_ray, seen.now_ms)
+        .unwrap_or_else(|err| fail(err));
+    let config = Actor::new(seen.observed.config, engine(input));
+    let ctx = EngineMsg::LiqCtx {
+        position,
+        nonce,
+        keeper,
+        now_ms: seen.now_ms,
+        price_ray,
+        collateral: Box::new(seen.observed.for_quote()),
+    };
+    response.send_sync(config, &ctx)
 }

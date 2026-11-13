@@ -16,6 +16,7 @@ on:
       - "patches/**"
       - "scripts/build-guests*"
       - "scripts/check-guests.sh"
+      - "scripts/check-frozen-v024.sh"
       - ".dockerignore"
       - "tools/risc0-packager/**"
       - "artifacts/guests/**"
@@ -30,6 +31,7 @@ on:
       - "patches/**"
       - "scripts/build-guests*"
       - "scripts/check-guests.sh"
+      - "scripts/check-frozen-v024.sh"
       - ".dockerignore"
       - "tools/risc0-packager/**"
       - "artifacts/guests/**"
@@ -45,7 +47,9 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
-        with: { persist-credentials: false }
+        with: { persist-credentials: false, fetch-depth: 0 }
+      - name: frozen v0.2.4 paths unchanged since the Tier 2 base (ADR-069)
+        run: scripts/check-frozen-v024.sh
       - run: scripts/ci/free-disk.sh
       - uses: dtolnay/rust-toolchain@1.94.0
       - uses: ./.github/actions/install-risc0

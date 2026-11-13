@@ -1712,7 +1712,7 @@ Accepted (Plan 7, Task 4; live wiring and e2e check Task 5)
 
 ---
 
-## ADR-067: Live Oracle Pricing on Every Bid; Bounded Last-Good TWAP Under a Stale Feed (Decided, to Build in M1/M2)
+## ADR-067: Live Oracle Pricing on Every Bid; Bounded Last-Good TWAP Under a Stale Feed (Built on v04, Plan 9)
 
 **Context**
 A Dutch collateral auction can fix its price when it opens or read the market at every bid. Public designs that fix it, such as Maker's Clipper with `top = feed x buf` at `kick`, need restart machinery (`redo`, allowed past `tail` or below `cusp`, with a reward) because the price drifts from the market after `kick`. Separately, RFP R5 asks that operations continue under a pause. Today a stale, low-confidence or out-of-range feed pauses the type and every bid is refused (ADR-005), so no debt is recovered during an outage.
@@ -1735,12 +1735,15 @@ A Dutch collateral auction can fix its price when it opens or read the market at
 
 **Evidence**
 - Code: `quote_bid` (`crates/auction_core/src/auction.rs` lines 91-150), `validate_feed` and `bid_price` (`crates/auction_core/src/price.rs`), `live_price` (`v04/engine_core/src/feed.rs`), the keeper reward (`crates/auction_core/src/liquidation.rs` lines 86-93).
-- Tests (as built): `bid_rejects_invalid_feed`, `discount_frozen_while_paused` (an admin pause), `unsold_auction_holds_max_discount_and_keeps_its_reservation` (`programs/integration_tests/tests/bid.rs`); for a stale feed's frozen clock, `derived_onset_closes_unobserved_gap` (`crates/auction_core/src/pause.rs`) and `observe_feed_persists_stale_pause` (`programs/integration_tests/tests/observe.rs`); `a_stale_feed_stops_the_bid` (`v04/harness/tests/bid.rs`). D4 has no tests yet; they land with E2 in M1.
+- Tests (as built): `bid_rejects_invalid_feed`, `discount_frozen_while_paused` (an admin pause), `unsold_auction_holds_max_discount_and_keeps_its_reservation` (`programs/integration_tests/tests/bid.rs`); for a stale feed's frozen clock, `derived_onset_closes_unobserved_gap` (`crates/auction_core/src/pause.rs`) and `observe_feed_persists_stale_pause` (`programs/integration_tests/tests/observe.rs`); `a_stale_feed_stops_the_bid` (`v04/harness/tests/bid.rs`, still passing under the legacy preset, D4 off). D4's tests are listed under Status and in ADR-074.
 - Cost: `Liquidate`, `Bid (partial)` and `Bid (final)` rows in `v04/CYCLES.md`; breakdown in `docs/architecture/pricing-model.md` §4.
 - Research: `docs/research/2026-11-07-evm-engines.md` §A1 (Clipper `redo`/`cusp`/`tail`), §A15 (OEV).
 
 **Status**
-Pricing accepted (as built since spec v5). Stale-feed rule decided (spec D4), to build in M1/M2.
+Pricing accepted (as built since spec v5). Stale-feed rule decided (spec D4) and **built (Plan 9)** on the v04 engine only; the v0.2.4 engine is frozen (ADR-069) and keeps refusing bids on an invalid feed.
+- As built, D4 is per type and off unless `RiskArgs.stale_bid_max_age_ms > 0` and the TWAP is on; the floor is `stale_cap_ray = floor(P_liq · RAY / (RAY − d_max_eff))`, fixed at `Seized`; the discount stays frozen during the outage (ADR-074). The TWAP is ADR-070; the stepped pause levels are ADR-073.
+- On v04, live bids now also take the confidence edge and a one-sided TWAP anchor (ADR-071, ADR-072); under the legacy preset at confidence 0 the bid price is `clamp(M, R·lo, R·hi)` as above.
+- Tests (D4): `stale_feed_bid_uses_the_last_good_twap`, `stale_feed_bid_refused_past_max_age`, `stale_feed_bid_refused_without_min_obs`, `stale_feed_bid_refused_on_an_auction_opened_without_d4`, `stale_feed_bid_held_at_the_floor`, `discount_stays_frozen_across_fallback_bids`, `fallback_final_bid_settles_and_releases` (`v04/harness/tests/stale_bids.rs`); `every_operation_with_a_stale_feed` (`v04/harness/tests/pause_matrix.rs`).
 
 ---
 
@@ -1766,5 +1769,289 @@ ADR-014 priced the build at ~$38–42k (planned ~$40k) with a separate audit lin
 
 **Status**
 Accepted (spec 2026-11-07, D3). Supersedes ADR-014.
+
+---
+
+## ADR-069: Tier 2 Leaves the v0.2.4 Sources Untouched; New Pure Logic in `v04/risk_core`
+
+**Context**
+The `rfp014-poc` guest, the v0.2.4 engine's public evidence, compiles `programs/**`, `crates/auction_core/src/**` and `crates/auction_engine_params/src/**`, and embeds their paths and line numbers in panic locations. Any edit to those files, even one behind a cargo feature, moves lines and so changes the guest. The Tier 2 engine design (spec 2026-11-08) needs new refusal codes, new per-type parameters, a parameterised feed check and new pure logic.
+
+**Options**
+- (A) Grow `auction_core` behind a cargo feature (the parent spec's S2).
+- (B) Edit nothing on those paths. Put new pure logic in a new v04-only crate and new fields in v04-only structs appended to v04 messages.
+
+**Decision**
+(B) (spec §2, supersedes S2).
+- **Frozen**: every file under the root `programs/`, `crates/auction_core/` and `crates/auction_engine_params/`, and the root `Cargo.toml` and `Cargo.lock`. `v04/programs/` is not frozen.
+- **Consequences**: `EngineError` gains no variant, so the new codes are `risk_core::RiskError` (ADR-076). `CollateralArgs` gains no field, so the Tier 2 parameters travel in `RiskArgs`, appended to `SetCollateral` and `Configure` (ADR-082). v0.2.4's `validate_feed` is re-implemented as `risk_core::feed::validate_feed_ext`, with the sanity window and the pin bounds as `FeedPolicy` fields; under `FeedPolicy::legacy` it returns exactly what `validate_feed` returns, and v04's `feed::observe` uses it.
+- **`v04/risk_core`**: pure, with no LEZ dependency; `no_std` outside its tests (`#![cfg_attr(not(test), no_std)]`, with `alloc`) and `forbid(unsafe_code)`. It depends on `auction_core` for math, units, the schedule and the price types; its `borsh` derives sit behind a `borsh` feature that `engine_core` and the guest enable, and its presets behind `presets` (ADR-082). It builds for the host and the riscv guest. Because `auction_core::math` is frozen, `risk_core` carries its own multiply-divide wrapper (ADR-070).
+- **The check**: `scripts/check-frozen-v024.sh [BASE]` runs `git diff --stat BASE -- programs/ crates/auction_core/ crates/auction_engine_params/ Cargo.toml Cargo.lock` (default base `23a57bb`) and exits 1 on any output. `guests.yml` runs it next to `scripts/check-guests.sh` and the rebuild-and-byte-compare.
+
+**Trade-offs**
+- `validate_feed_ext` duplicates `validate_feed`; a differential test holds them equal under the legacy policy.
+- A `git diff` against a commit does not see an untracked new file under a frozen path. A clean CI checkout does.
+- Two crates now hold price logic; the v04 engine runs `risk_core`'s.
+
+**Evidence**
+- Script: `scripts/check-frozen-v024.sh`; tests `test_clean_tree_passes`, `test_frozen_file_change_fails`, `test_v04_change_passes`, `test_root_manifest_change_fails` (`scripts/tests/test_check_frozen_v024.py`).
+- Differential (`v04/risk_core/src/feed.rs`): proptests `validate_feed_ext_matches_v024_under_legacy_policy` and `validate_feed_ext_matches_v024_at_the_boundaries`; `legacy_sanity_bounds_equal_v024`, `validate_feed_ext_saturates_the_high_bound_like_v024`, `validate_feed_ext_checks_in_v024_order_and_maps_faults`, `legacy_policy_pins_nothing`.
+- Kani `validate_feed_ext_equals_validate_feed_legacy` and `legacy_sanity_bounds_equal_v024` (`v04/risk_core/src/kani_proofs.rs`): Kani harnesses written, not run (no Kani in WSL), as ADR-015.
+
+**Status**
+Accepted (Plan 9, Task 1; applies to every Tier 2 plan)
+
+---
+
+## ADR-070: On-Chain TWAP: an 8-Slot Ring of Validated Mids at the Collateral Actor
+
+**Context**
+R2 asks for time-weighted or confidence-adjusted prices. v04 priced every liquidation and bid from one spot reading, so one bad print could set a keeper reward or a bid's payout. The upstream twap producer's Q64.64 scale is not reconciled with the host's 1e27 (lez-programs #401).
+
+**Options**
+- (A) Keep spot only.
+- (B) Read a TWAP from an external producer.
+- (C) Keep a ring of the engine's own validated observations at the collateral actor and average it on chain.
+
+**Decision**
+(C) (spec §3.1.1-§3.1.3; `v04/risk_core/src/twap.rs`).
+- **Data**: `CollateralExt.ring: TwapRing { samples: Vec<Sample { ts_ms, price_ray }>, last_conf_bps }`, oldest first, at most `TWAP_CAPACITY = 8` samples. Only the Observe block's `Proceed` writes it. `SetCollateral`, `ObserveFeed`, `Liquidate` and `Bid` already ran that block, and `SetPauseLevel` ends with it, so the ring adds no message or execution. The copy of the collateral state carried in `LiqCtx`, `Open` and the auction's quote scratch drops the ring (`CollateralState::for_quote`).
+- **Recording** (`record`, ruling R9-6): only while `twap_window_ms > 0`, so legacy state keeps an empty ring, and only for a reading that passes `validate_feed_ext`. The sample time is `min(reading.timestamp_ms, now_ms)`. The reading is skipped if that time is not after the newest sample's (the same publish seen again) or is less than `twap_min_spacing_ms` after it; otherwise it is appended, the oldest is dropped past 8, and `last_conf_bps` becomes the reading's confidence in bps. A reverted transaction drops its sample. `SetCollateral` keeps the ring and the pause level.
+- **TWAP** (`twap(ring, now, window, min_obs, max_age)`, with `max_age` the type's `max_oracle_age_ms`): `anchor = min(now, newest.ts + max_age)`, `lo = anchor − window` (saturating). Walking newest first, each sample weighs the time it was the current publication, clipped to `[lo, anchor]`. An older sample that was current for longer than `max_age` stops the walk: a stale period breaks the TWAP, so after an outage it needs `twap_min_obs` fresh samples. No TWAP (`None`) with fewer than `twap_min_obs` weighted samples or zero total weight. `T = Σ floor(p_i · w_i / Σw)`. The anchor keeps the last-good TWAP constant for the whole of an outage, which D4 uses (ADR-074).
+- **Bounds**: `T` lies in `[min p_i − 7, max p_i]` of the used samples, the lower end saturating at 0. The upper bound is exact. The lower one is not `min p_i`: each of the at most 8 terms floors away less than one unit (prices 1 and 1 with weights 1 and 2 give `T = 0`; Plan 9 pre-flight ruling).
+- **Multiply-divide (Plan 9 Task 11)**: the TWAP's terms, `validate_feed_ext`'s confidence limit and sanity bounds, `conf_bps`, `edge`, the TWAP anchor, the deviation test `within_deviation`, the stale cap and the floored price call `risk_core::math::{mul_div_floor, mul_div_ceil}` instead of `auction_core::math`. Two steps still call the frozen `auction_core::math::mul_div_floor`: the band clamp `band`, which is `auction_core::price::bid_price` (two calls, for `R·lo` and `R·hi`) and ends every price in `risk_core::price`, and `auction_core::price::to_ray`, which `validate_feed_ext` uses to convert a Q64x64 reading (a Ray reading needs no division). The frozen `auction_core` functions (ADR-069) always run a 128-step bit-serial division on u128, about 10,300 guest cycles a call (spike S4, ADR-022). `risk_core::math` divides natively when `x · y` fits a u128, where the 256-bit product's high half is 0 and the quotient is necessarily the same. When it does not fit, it splits one factor by the divisor, `x = q · d + r`, and returns `q · y + floor(r · y / d)` when `r · y` fits (added after the Plan 9 final review); that is exact, because `q · y` is an integer. It calls the frozen function only when neither applies. Results and errors are equal on every input, pinned by a differential test. It must not be "fixed" back to `auction_core::math`.
+
+**Trade-offs**
+- Up to 198 more bytes on the collateral actor, decoded and encoded on every observing message. A partial bid with 8 samples costs 16,312 cycles more than with 1.
+- The ring fills only as often as someone observes, and a keeper must observe about every `twap_min_spacing_ms` (the K1 keeper, not built). The spacing rule caps recording at one sample per spacing interval; it does not make extra observations harmless (next point).
+- **The window is at most 8 spacings (Plan 9 final review, enforced after it).** The ring holds 8 samples (`record` drops the oldest past 8), and the oldest weighs nothing before its own time (`start = max(s.ts, lo)`). With `twap_window_ms > 8 · twap_min_spacing_ms`, anyone calling the permissionless `ObserveFeed` once per spacing interval would evict older samples, and the TWAP would cover only about the last 7-8 spacing intervals, however long the window. `RiskArgs::validate` refuses such settings (field `twap_window_ms`, wire `InvalidConfig`; test `risk_args_refuse_a_window_longer_than_the_ring`). At the bound a full ring spans at least 7 spacings, so the TWAP covers at least 7/8 of its window; that last eighth is the accepted residue. The recommended preset has 6 spacings per window (1,800,000 / 300,000). The e2e `tier2` stage's spacing moved from 10,000 ms to 40,000 ms to satisfy the bound (300,000 / 40,000 = 7.5). Cost: the spacing is at most the feed max age (R9-3), so a window is at most 8 feed max ages, and a 24 h window needs samples at least 3 h apart. What still bounds a payout in the code: every sample is a validated oracle mid (`validate_feed_ext`: max age, `max_conf_bps`, the sanity window around `R`); a live bid never pays at more than `band(edge(M))`, because the anchor only lowers the price (`live_bid_price` takes the `min`), and `band` clamps to `[R·lo, R·hi]`; a D4 bid is also held at the stale floor (ADR-074).
+- **Sample time is the claimed `now` (Plan 9 final review).** `record` stores `min(reading.timestamp_ms, now_ms)`, and `now_ms` is the caller's claim, asserted only within `[clock − slack_ms, clock]`. A reading published within the last `slack_ms` can therefore be stored up to `slack_ms` before its publish time, which gives a fresh print up to `slack_ms` of weight it did not earn. With `twap_min_spacing_ms <= slack_ms` the same publication can be recorded twice: first at a backdated claim, then again at its own time, because the second time is more than `spacing` after the first and so passes the dedupe. It then counts twice toward `twap_min_obs`. The e2e `tier2` stage (spacing 10,000 ms; slack 60,000 ms, the SDK session default `DEFAULT_SLACK_MS`) is in this regime. Not enforced; a bound such as `twap_min_spacing_ms >= slack_ms` is not decided.
+- **Cost and price (Plan 9 final review, closed for the TWAP).** With the first native route alone, a TWAP term `p · w` went back to the frozen division once it passed 2^128, above a price of about 567,000 in the measured world. The second route removes that: a term is `p · w / Σw` with both weights below 2^64, so `(p mod Σw) · w` always fits and the term is native at any price. The same holds for every call that divides by 10,000. What still takes the frozen division does so at every price and is inside the measured rows: `auction_core`'s own band clamp and settlement arithmetic, and the stale cap, whose operands and divisor are all RAY-scale. One residue: `conf_bps = ceil(c · 10_000 / M)` takes one frozen division when the confidence `c`, as a price, is about 34,000,000 or more; not measured. Rejected: separate budgets for a slow path, which would have left the cost dependent on the price.
+- The gap rule reuses the feed's own maximum age, so there is no new parameter, but a type with a long maximum age tolerates long gaps in its TWAP.
+- A sample whose time equals `now` has zero weight, so it does not count toward `twap_min_obs` in the transaction that records it.
+
+**Evidence**
+- Tests (`v04/risk_core/src/twap.rs`): `twap_single_sample_is_its_price`, `twap_weights_by_time_current`, `twap_ignores_samples_before_the_window`, `twap_partly_weights_the_sample_crossing_the_window`, `twap_gap_longer_than_max_age_drops_older_samples`, `twap_below_min_obs_is_unavailable`, `twap_is_constant_during_an_outage`, `twap_with_now_before_the_newest_sample_does_not_underflow`, `record_skips_same_publish_and_close_spacing`, `record_clamps_a_future_timestamp_to_now`, `ring_drops_the_oldest_past_capacity`, `twap_floor_rounding_can_fall_below_the_smallest_price`; proptests `twap_within_sample_range` and `record_keeps_the_ring_spaced_and_bounded`. `for_quote_strips_the_ring` (`v04/engine_core/src/ext.rs`), `observe_reports_conf_bps_and_record_takes_valid_readings_only` (`v04/engine_core/src/feed.rs`). Harness (`v04/harness/tests/twap.rs`): `liquidate_refused_until_twap_has_min_obs`, `invalid_reading_is_not_recorded`, `observe_feed_fills_the_ring`, `set_collateral_keeps_the_ring_and_the_level`.
+- `risk_core::math` (`v04/risk_core/src/math.rs`): `edge_cases_match_auction_core` (17 fixed cases, including `d = 0`, overflow and `u128::MAX`), the 4,096-case proptests `equals_auction_core` and `split_route_equals_auction_core` (a wide factor, the other factor and the divisor up to 2^64), all against `auction_core::math`, floor and ceiling; and `a_twap_term_never_takes_the_frozen_path`.
+- Kani `twap_bounded_by_samples` (rings of up to 3 samples, prices below 2^64): Kani harnesses written, not run (no Kani in WSL), as ADR-015. Under its assumptions `twap`'s `crate::math` call always takes the native path; its `#[kani::stub]` of `auction_core::math::mul_div_floor` covers only the fallback, and needs `-Z stubbing`.
+- **Cost (Plan 9 ruling R9-10)**, measured by `v04/harness/tests/cycles_tier2.rs` under `RiskArgs::recommended()` with a full ring, at the price 0.5 (`v04/CYCLES.md`, Tier 2 table), re-measured 2026-11-12 after the second native route. A full ring is the worst case for ring fill. `tier2_rows_fit_the_budget` asserts the budgets and `bid_cost_is_independent_of_ring_fill` the spread at that price; `tier2_rows_fit_the_budget_at_a_high_price` asserts `Liquidate` and a partial `Bid` at a price of 2,000,000. "Before" is the same test run during Plan 9, before the `risk_core::math` change and the removal of a second collateral-state decode at `Proceed` (the two were not measured apart); it is not reproducible from a commit.
+
+| Row | Executions | Before | Measured | Budget |
+|---|---|---|---|---|
+| `Liquidate` | 29 | 1,012,946 | 884,567 | <= 1,000,000 |
+| `Bid (partial)` | 15 | 561,253 | 431,804 | <= 520,000 |
+| `Bid (final)` | 21 | 736,045 | 606,596 | <= 720,000 |
+| `SetPauseLevel` | 12 | 407,582 | 360,206 | <= 400,000 |
+| `ObserveFeed` | 7 | 229,450 | 182,074 | gas cap |
+| `SetCollateral` | 11 | 406,551 | 359,182 | gas cap |
+| Partial bid, 1 vs 8 samples | — | 70,499 | 16,306 | <= 40,000 |
+
+- **High price, measured.** At a price of 2,000,000 (collateral base units per coin base unit), where `p · w` is past u128 for every TWAP term of full weight, `Liquidate` costs 888,662 and a partial `Bid` 434,981: 4,095 and 3,177 above the figures at 0.5, and inside the same budgets. The world for that row raises the mock host's minimum collateral ratio to its largest value, because at that price the host's safety rule (`collateral · price < min_cr · debt`) admits no other lot that outlasts the keeper reward. `Bid (final)` is not measured there: the mock host admits no bid that reaches the target at that price. It prices through the same `bid_pricing` call as the partial bid. The headroom under the assertions is 111,338 (`Liquidate`, high price), 85,019 (partial bid, high price) and 113,404 (final bid, at 0.5); one frozen division costs about 10,300.
+- **Recorded deviation (R9-10)**: spec §4 gave `SetPauseLevel` "~330,000" and "< 3 % of cap" (300,000), which contradict. The assertion is 400,000 (4 % of the 10,000,000 cap), and the measured 360,206 is 3.6 %. The row is 12 executions, 7 of them the Observe block: `ObserveFeed` alone is 182,074, and `SetCollateral`, at 11 executions, is 359,182. So 300,000 is not reachable without restructuring the message, and it is a rare admin row. Spec §4 and §3.2.7 now state the measured figure. Execution counts are hand-counted from the message sequence (`SET_PAUSE_LEVEL_EXECUTIONS = 12`), not asserted: the simulator reports cycles only. The legacy rows, re-measured, gained no execution and moved by at most 6,300 cycles.
+
+**Status**
+Accepted (Plan 9, Tasks 4, 7 and 11)
+
+---
+
+## ADR-071: One Confidence Rule: Every Engine Price Values the Collateral at the High Edge
+
+**Context**
+The host decides whether a position is unsafe (ADR-060). Every price the engine itself uses decides how much collateral leaves per coin: a bid's payout, the keeper reward, the D4 floor. An oracle reading carries a confidence `c`; v04 used it only to reject a reading (`max_conf_bps`).
+
+**Options**
+- (A) Price at the mid `M`.
+- (B) Price at the edge of the confidence interval that pays out less, for every operation.
+- (C) A different edge per operation.
+
+**Decision**
+(B) (spec §3.1.4; `v04/risk_core/src/price.rs`, `v04/engine_core/src/gate.rs`).
+- `conf_bps = ceil(c · 10_000 / M)`, saturating at 10_000 (10_000 when `M = 0`); `edge(x) = floor(x · (10_000 − conf_bps) / 10_000)`. Rounding favours the protocol: the confidence is rounded up, the edge and the TWAP anchor are floored.
+- Every price takes the smaller `P` (collateral per coin): `Liquidate` (keeper reward and floor) `band(edge(min(M, T)))`; a live bid `band(min(edge(M), anchor))` (ADR-072); a stale-feed bid `band(edge(T_lg))` at the ring's `last_conf_bps` (ADR-074); with the TWAP off, `band(edge(M))` for both. `band` is v0.2.4's `bid_price` clamp to `[R·lo, R·hi]`.
+- The liquidation gate, in order (`liquidation_price`): the pause gate (ADR-073); an invalid feed (its own code); with the TWAP off, `band(edge(M))`; no TWAP (`TwapUnavailable`, 6070); the breaker (ADR-072); then the price. The grace period of spec §3.3 is not built (Plan 10).
+- The edge is always on, the legacy preset included. With confidence 0, which the legacy producers write, it is the identity, so legacy prices are v04's as built; with a nonzero confidence the legacy preset pays out less collateral than v0.2.4 would.
+- The parameter bounds and the warm-up rule (rulings R9-3, R9-5) are in ADR-072.
+
+**Trade-offs**
+- A wide (but still valid) confidence lowers every payout; `max_conf_bps` (at most 1_000) caps how far.
+- "Legacy equals v04 as built" holds only at confidence 0.
+- One rule needs no per-operation reasoning about which way a price should round, at the cost of a slightly smaller keeper reward and bid payout whenever confidence is nonzero.
+
+**Evidence**
+- Tests (`v04/risk_core/src/price.rs`): `edge_lowers_p_by_the_confidence`, `liq_price_is_the_smaller_of_spot_and_twap_at_the_edge`, `prices_stay_inside_the_band`, `rounding_favours_the_protocol`, `saturation_at_the_extremes`; proptests `conf_bps_is_the_exact_ceiling`, `edge_is_the_floor_and_monotone`, `liq_and_fallback_stay_in_band_and_take_the_smaller`.
+- `liq_gate_order_admin_feed_twap_deviation`, `legacy_liquidation_price_is_band_edge_m` (`v04/engine_core/src/gate.rs`).
+- Harness (`v04/harness/tests/twap.rs`): `keeper_reward_uses_the_smaller_of_spot_and_twap`, `bid_price_takes_the_confidence_edge` (the oracle publishes confidence P/200).
+
+**Status**
+Accepted (Plan 9, Tasks 5 and 7)
+
+---
+
+## ADR-072: Bids Anchored to the TWAP From Above Only; a Spot-vs-TWAP Breaker on Liquidations
+
+**Context**
+Live pricing (ADR-067) follows the market both ways. A manipulated spot that raises `P` pays a bidder more collateral, and a spot spike can set a liquidation's keeper reward and floor. Pricing bids at `min(M, T)` would make them lag the market in a fast fall of the collateral, when the TWAP sits below spot and bids get less than the market: the Black Thursday "no bids" failure.
+
+**Options**
+- (A) Bid at `min(M, T)`.
+- (B) Anchor bids to the TWAP on both sides.
+- (C) Anchor bids from above only, and refuse a liquidation while spot is far from the TWAP.
+
+**Decision**
+(C) (spec §3.1.4; `risk_core::price::{live_bid_price, within_deviation}`).
+- **Bid anchor**: `band(min(edge(M), floor(T · (10_000 + dev) / 10_000)))`, with `dev = max_spot_twap_dev_bps`; the anchor saturates to `u128::MAX` on overflow. A manipulated spot cannot pay out more than `dev` beyond the TWAP. No floor from below, which would pay out more.
+- **Warm-up and `dev = 0` (ruling R9-5)**: while the TWAP is unavailable, or with `dev = 0`, a live bid is priced `band(edge(M))`, unanchored, and is not refused. `dev = 0` also turns the breaker off.
+- **Breaker**: with `dev > 0`, a liquidation is refused (`SpotTwapDeviation`, 6071) unless `|M − T| · 10_000 <= dev · T`, exact and inclusive. The code tests `|M − T| <= floor(dev · T / 10_000)`, which is the same condition for integers; `T = 0` refuses. This replaced a floor-in-bps rule that let a deviation of up to just under `dev + 1` bps through (Plan 9 Task 5 ruling); the bid anchor uses the same exact bound.
+- **Parameters** (`RiskArgs`, docs/architecture/f8-parameters.md): `twap_window_ms` 0 or 60_000..=86_400_000; with the TWAP on, `twap_min_spacing_ms` 1_000..=window and `twap_min_obs` 1..=8; `max_spot_twap_dev_bps` 0 or 100..=5_000, nonzero only with the TWAP on; `stale_bid_max_age_ms` at most 86_400_000, nonzero only with the TWAP on.
+- **Reachability bounds (ruling R9-3)**, checked against the type's `max_oracle_age_ms`, because a config that breaks them can never liquidate or never use D4: `twap_min_spacing_ms <= max_oracle_age_ms`; `twap_min_obs <= twap_window_ms / twap_min_spacing_ms`; with `stale_bid_max_age_ms > 0`, `stale_bid_max_age_ms > max_oracle_age_ms` and `twap_window_ms > max_oracle_age_ms + (twap_min_obs − 2) · twap_min_spacing_ms` (saturating; the reason is in ADR-074); with the TWAP off, every other field 0.
+- **Order**: `RiskArgs::validate` checks the ranges first, then the R9-3 bounds, then the TWAP-off rule, and returns the first failure; every failure is `InvalidConfig` (6005) on the wire. With the TWAP off, a nonzero `max_spot_twap_dev_bps` or `stale_bid_max_age_ms` is already refused by its own range row, so the TWAP-off rule decides only `twap_min_spacing_ms` and `twap_min_obs`. Only the internal field name differs (Task 6 review); the wire code is the same.
+
+**Trade-offs**
+- The breaker also refuses a liquidation during a genuine move larger than `dev`, until the TWAP catches up; that is liveness traded for manipulation resistance, on liquidations only. Bids keep following the market.
+- With the TWAP on, no liquidation is possible until the ring holds `twap_min_obs` weighted samples, after setup and again after an outage (`TwapUnavailable`).
+- Manipulation profit on a bid is capped at `dev` above the TWAP, not removed.
+
+**Evidence**
+- Tests (`v04/risk_core/src/price.rs`): `bid_price_is_anchored_from_above_only`, `deviation_is_floor_bps_inclusive` (the name predates the exact rule; it checks the exact boundary, 1_200 in and 1_201 out at `T = 1_000`, `dev = 2_000`); proptests `live_bid_is_capped_at_the_floored_anchor`, `deviation_matches_the_exact_rule`.
+- `bid_pricing_anchors_once_warm_and_skips_the_breaker`, `breaker_off_neither_refuses_nor_anchors` (`v04/engine_core/src/gate.rs`).
+- Harness (`v04/harness/tests/twap.rs`): `a_spot_spike_is_refused_by_the_deviation_breaker`, `bid_payout_capped_by_the_twap_anchor`, `bid_during_twap_warm_up_is_not_refused`, `set_collateral_replaces_the_risk_args`.
+- Bounds: `risk_args_bounds_are_inclusive`, `risk_args_inclusive_edges`, `twap_off_requires_every_field_zero`, `risk_args_reject_unreachable_twap_and_dead_d4` (`v04/risk_core/src/args.rs`); `validate_risk_refuses_as_invalid_config` (`v04/engine_core/src/ext.rs`); `set_collateral_rejects_out_of_bound_risk_args`, `set_collateral_writes_the_risk_args` (`v04/harness/tests/risk_args.rs`).
+
+**Status**
+Accepted (Plan 9, Tasks 5, 6 and 7)
+
+---
+
+## ADR-073: Pause Levels 0-3 per Type, One Rule Table, and `SetPauseLevel`
+
+**Context**
+R5 asks that non-liquidation operations continue while a type is paused. v04 had one admin flag, `admin_paused`, which refuses `Liquidate` and `Bid` with `Paused` (6020), and a stale feed that refuses both. No test showed bids or settles continuing under a pause.
+
+**Options**
+- (A) Keep the single flag.
+- (B) Stepped levels per type, with one rule table that both the handlers and the tests use.
+- (C) A flag per operation.
+
+**Decision**
+(B) (spec §3.2.1-§3.2.2; `v04/risk_core/src/pause.rs`, `v04/engine_core/src/gate.rs`).
+- **Levels**: 0 normal; 1 no new liquidations of this type; 2 level 1 and no new system auctions (`StartSurplus`, `StartDebt`); 3 level 2 and no bids on this type's auctions and no system takes. No level moves collateral or cancels an auction, and every level is reversible.
+- **Data**: `CollateralExt.pause_level` and `ConfigExt.system_level`, both written by the same `SetPauseLevel`. With one type per config (R-F3) the system level equals that type's level.
+- **`admin_paused`** stays and means level 3 for that type's collateral operations only, with its v0.2.4 code `Paused` (6020). It does not raise `system_level`, so system auctions continue. The effective level is `max(pause_level, 3 if admin_paused)`. Only an effective level 3 or an invalid feed stops the discount clock; levels 1 and 2 leave live auctions' discount running.
+- **One rule table** (rulings R9-7, R9-8): `pause::allowed(op, level, feed) -> Result<Gate, RiskError>`, one `match` without a wildcard arm over the 17 operations of Plan 9 (`Liquidate`, `Bid`, `StartSurplus`, `StartDebt`, `TakeSurplus`, `TakeDebt`, `SettleEmpty`, `ClaimLeftover`, `SettleDebt`, `CheckSolvency`, `CloseSurplus`, `CloseDebt`, `ObserveFeed`, `SetCollateral`, `SetEngineParams`, `SetSlack`, `SetPauseLevel`; `Init` has no level yet). `Gate::FeedRefusal` (a liquidation on a stale feed) and `Gate::Fallback` (a bid on a stale feed, D4) tell `engine_core::gate` what to do, because `risk_core` cannot name `EngineError`: the gate applies the feed's own code and `Paused`. The grace column (6072) arrives with E3 in Plan 10.
+- **Where it runs**: `collateral_gate` at the collateral actor's `Proceed` for `Liquidate` and `Bid`; `system_gate` at the config root for `StartSurplus`, `StartDebt`, `SettleDebt`, `CheckSolvency` and the surplus and debt takes and closes. The other operations always run and do not call it.
+- **`SetPauseLevel` (47)** (ruling R9-9): root at the admin's proxy, seeded `Probe { Config }`. The config checks the admin (`NotAdmin`), `level <= 3` (`InvalidConfig`) and that `collateral_def` is its recorded type (`WrongAccount("collateral_def")`), writes `system_level`, then sends a seeded `Probe { Collateral }`, `PauseLevelUpdate { level }` (48) and `Observe { now_ms }`, so the pause clock records the change, as `SetCollateral` does. The collateral actor accepts `PauseLevelUpdate` only from its own config. Raising and lowering are both instant until delayed loosening (E8, Plan 12).
+- **Refusal order**: the pause gate comes first. At the collateral actor, `admin_paused` (`Paused`) is checked before the level table, and both before any feed code; a liquidation then checks the feed, the TWAP and the breaker (ADR-071). At the config the gate runs after the config and clock-claim checks but before `TokenNotConfigured`, so at level 3 a take on an engine with no protocol token reports `BidsPaused` (6075). A stored level above 3 is `InvalidConfig`.
+
+**Trade-offs**
+- **A level change needs a readable oracle and host.** `SetPauseLevel` ends with the Observe block, so if the oracle or host state cannot be decoded, the change reverts with `OracleMismatch` or `HostMismatch`: the emergency brake depends on their availability, as `SetCollateral` does. Known limit, recorded for E8 (Plan 12) to decide whether raising the level should skip the Observe.
+- A type at level 2 holds the engine's recovery path, because system auctions are engine-wide.
+- `SetPauseLevel` costs 12 executions, 360,206 cycles (3.6 % of the cap), above spec §4's estimate; the budget is a recorded deviation (R9-10, ADR-070).
+- The harness matrix runs a stale feed at level 0 only; levels 1-3 with a stale feed are covered by the pure rule table. In particular, the always-run operations at level 3 with a stale feed are not simulated yet.
+- **`SetPauseLevel` needs a recorded collateral type** (Plan 9 final review). The config refuses with `WrongAccount("collateral_def")` unless `collateral_def` is its recorded type (guest `pause.rs:50-52`). So neither the type level nor the system level can be raised before the first `SetCollateral`. The impact is low: without a type there are no liquidations or bids to stop.
+
+**Evidence**
+- Tests (`v04/risk_core/src/pause.rs`): `pause_table_is_exhaustive` (all 17 × 4 × 2 cells against a literal table), `risk_reducing_ops_allowed_everywhere`, `level_round_trips_through_u8`. `admin_pause_maps_level_3_refusals_to_paused`, `system_gate_reads_the_system_level` (`v04/engine_core/src/gate.rs`); `effective_level_is_3_under_admin_pause` (`ext.rs`); `set_pause_level_round_trips_at_index_47`, `pause_level_update_round_trips_at_index_48` (`msg_tests.rs`).
+- Harness (`v04/harness/tests/pause_levels.rs`): `admin_paused_keeps_the_v024_code`, `admin_paused_does_not_stop_system_auctions`, `level_2_blocks_starts_not_takes_or_closes`, `level_3_refuses_system_takes_and_bids`, `lowering_the_level_resumes_liquidation`, `set_pause_level_only_through_the_admin_proxy`, `level_change_records_the_pause_clock`, `pause_level_update_rejected_from_non_config_sender`, `set_pause_level_rejects_level_above_3`.
+- Matrix (`v04/harness/tests/pause_matrix.rs`): `every_operation_at_every_pause_level` (17 operations × levels 0-3, legacy preset, 68 cases), `every_operation_with_a_stale_feed` (17 operations at level 0, D4 on and off, 34 cases). In these two tests a case that should run is simulated; a refusal is sent, and the test checks its wire code, that no actor state or holding changed (`World::snapshot_all`) and that the invariants hold. The end-to-end evidence that risk-reducing operations run at level 3 is the level-3 row of `every_operation_at_every_pause_level` (legacy preset, live feed only). `risk_reducing_operations_run_at_level_3` and `stale_expectations_match_the_spec` check only the expectation table (`levels::expected`) and simulate nothing.
+- SDK: `set_pause_level_plan_declares_every_touched_actor` (`v04/sdk/tests/tier2_plans.rs`). The `tier2` stage of `v04/scripts/e2e.sh` sets levels 1 and 3 on a standalone sequencer; it has run locally and passed (last on 2026-11-13); it has not run in CI yet.
+
+**Status**
+Accepted (Plan 9, Tasks 8 and 10)
+
+---
+
+## ADR-074: D4 as Built: Stale-Feed Bids at the Last-Good TWAP, Held at a Floor
+
+**Context**
+ADR-067 decided D4: while a type's feed is stale or invalid, bids continue at the last good TWAP, only while it is young enough, and never below the auction's floor. It left the floor's definition and the age parameter to the Tier 2 design.
+
+**Options**
+- Floor: (A) none, the age bound only; (B) a floor fixed per auction at `Seized` from its own opening price and schedule; (C) refuse a bid below the floor.
+- Discount during the outage: (A) keep running; (B) frozen.
+
+**Decision**
+Floor (B), clamped rather than refused; discount (B) (spec §3.2.3-§3.2.4; `v04/risk_core/src/stale.rs`, `v04/engine_core/src/gate.rs`, `bid.rs`, `liquidation.rs`).
+- **Conditions**: a bid whose reading fails `validate_feed_ext` proceeds only if (1) the pause gate lets it through (effective level <= 2; at level 3 it is `BidsPaused` or, under `admin_paused`, `Paused`, first); (2) D4 is on, `stale_bid_max_age_ms > 0` and `twap_window_ms > 0` (`RiskArgs::d4_on`); (3) the TWAP is available with `twap_min_obs` samples, else `TwapUnavailable` (6070); (4) `now − newest.ts <= stale_bid_max_age_ms`, else `LastGoodTwapTooOld` (6077). With D4 off it fails with the feed's own code, as before.
+- **Price**: `P_fb = band(edge(T_lg))` at the ring's `last_conf_bps`, with the redemption price read in the same observation.
+- **Floor**: at `Seized` the auction stores `stale_cap_ray = floor(P_liq · RAY / (RAY − d_max_eff))`, with `P_liq` the liquidation price and `d_max_eff` the last point of the auction's snapshotted schedule (the E4 health cap that would lower it is not built). A fallback bid pays at `P_used = min(P_fb, floor(stale_cap_ray · (RAY − d) / RAY))`. So during a stale feed the auction never sells collateral for less coin per unit than `(1 − d_max_eff) / P_liq`, the worst price its own schedule reaches at its opening price. The bid is clamped, not refused; `min_collateral_out` protects the bidder. Live bids ignore the floor (ADR-067).
+- **Frozen discount**: the collateral actor sends `BidCtx { fallback: true, paused_since_ms, .. }` with the open pause of the invalid feed, and `bid::quote` builds its `PauseClock` from it, so the discount stops at the outage's onset. Live bids pass `None`, so their result is unchanged.
+- **Only while D4 is on**: the cap is computed only when `d4_on()`; otherwise it is 0, the legacy value, so legacy auctions are unchanged (Plan 9 pre-flight ruling). A fallback bid on an auction opened while D4 was off finds a cap of 0, and `engine_core::bid` refuses it explicitly with `PriceFeedStale` (6021), rather than relying on `auction_core`'s zero-price guard, which documents itself as unreachable (Task 9 review).
+- **Reachability (ruling R9-3)**: with D4 on, `stale_bid_max_age_ms > max_oracle_age_ms` and `twap_window_ms > max_oracle_age_ms + (twap_min_obs − 2) · twap_min_spacing_ms`. On a stale feed the TWAP anchor freezes at `newest.ts + max_oracle_age_ms` and the `k`-th newest sample is at most `newest.ts − (k − 1) · spacing`, so a shorter window can never hold `twap_min_obs` samples and condition 3 would always fail. For the same reason the e2e `tier2` stage uses a 300 s window, not spec §5's first 60 s (a recorded spec deviation, R9-13).
+
+**Trade-offs**
+- Bids are priced on data up to `stale_bid_max_age_ms` old; the age bound and the floor limit that.
+- Condition 4 compares against the bid's claimed time `now`, while the feed-age check uses `now + slack_ms`. A bidder can therefore stretch the window by up to `slack_ms` (1 s to 300 s, set by `SetSlack`) by understating the claim. Accepted (Task 9 review): it matches the spec's wording, and the floor bounds what it can pay out.
+- In a real crash below the floor, the auction sells at the floor, above market, so it may not fill until the feed returns.
+- `BidCtx` does not carry the exact feed fault, so the floorless refusal is `PriceFeedStale` whatever made the feed invalid.
+- A frozen discount means an outage never hands a larger discount, and also never a more attractive one to clear a lot.
+
+**Evidence**
+- Tests (`v04/harness/tests/stale_bids.rs`): `stale_feed_bid_uses_the_last_good_twap`, `stale_feed_bid_refused_past_max_age`, `stale_feed_bid_refused_without_min_obs`, `stale_feed_bid_refused_on_an_auction_opened_without_d4`, `stale_feed_bid_held_at_the_floor`, `discount_stays_frozen_across_fallback_bids`, `fallback_final_bid_settles_and_releases`; `every_operation_with_a_stale_feed` (`pause_matrix.rs`).
+- Unit: `floor_uses_the_capped_max_discount`, `fallback_price_clamped_to_the_floor`, `fallback_twap_follows_the_d4_conditions` (`v04/risk_core/src/stale.rs`); `d4_on_needs_both_windows` (`args.rs`); `stale_bid_prices_at_the_last_good_twap`, `stale_bid_refused_past_the_max_age`, `stale_bid_with_d4_off_is_the_feed_code`, `stale_bid_level_3_and_admin_refuse_first` (`v04/engine_core/src/gate.rs`); `fallback_quote_freezes_the_discount`, `fallback_quote_is_held_at_the_floor_and_live_ignores_it`, `floorless_fallback_quote_is_refused_as_stale` (`bid.rs`); `quote_seized_sets_the_stale_cap_only_with_d4` (`liquidation.rs`).
+- Kani `fallback_price_never_breaches_the_floor` (the price inequality only, not the lot-binding path of `quote_bid`): Kani harnesses written, not run (no Kani in WSL), as ADR-015.
+- e2e: the `tier2` stage of `v04/scripts/e2e.sh` (time-compressed recommended preset) settles an auction with a final bid on a stale feed on a standalone LEZ v0.4.0-rc1 sequencer; it passed locally with a 10,000 ms spacing and again on 2026-11-13 with the 40,000 ms spacing that the ring bound of ADR-070 needs; it has not run in CI yet. The stage exercises the flow, not TWAP manipulation resistance.
+- Cost: within the `Bid` rows of ADR-070.
+
+**Status**
+Accepted (Plan 9, Task 9 and its fix round). Builds ADR-067's stale-feed rule on v04.
+
+---
+
+## ADR-076: v04-Only Refusal Codes 6070+ in `risk_core::RiskError`, Wrapped With `EngineError`
+
+**Context**
+Tier 2 needs new refusals (no TWAP, spot far from the TWAP, the pause levels, an old last-good TWAP). `EngineError` lives in a frozen crate and cannot gain variants (ADR-069).
+
+**Options**
+- (A) Reuse existing codes (`InvalidConfig`, `Paused`), losing the reason.
+- (B) A v04 enum with codes above the shared enum's highest non-`Math` code (61) and below `Math` (99), printed in the same format.
+
+**Decision**
+(B) (spec §3.10).
+- `risk_core::RiskError`: Plan 9 defines `TwapUnavailable` (70), `SpotTwapDeviation` (71), `LiquidationsPaused` (73), `SystemAuctionsPaused` (74), `BidsPaused` (75) and `LastGoodTwapTooOld` (77); wire code = 6000 + code. 72, 76 and 78-80 are kept for Plans 10 and 12 (spec §3.10) and are not in the enum yet.
+- `engine_core::check::Refusal { Engine(EngineError), Risk(RiskError) }`, with `From` for both. `fail` and `fail_text` take `impl Into<Refusal>` and print `Program error [6000+code]: Program error {code}: {Name}`, so every existing call site compiles and prints as before.
+- An out-of-range parameter is still `InvalidConfig` (6005); feed faults keep 6021-6023; `admin_paused` keeps `Paused` (6020).
+- The catalogue `docs/architecture/refusal-codes.md` is generated by `scripts/gen-refusal-codes.py`, which also parses `v04/risk_core/src/error.rs` and marks those rows "(0.4 only)". The generator change came after every new code had a proving test (ruling R9-11), because `--check` fails on a code without one.
+
+**Trade-offs**
+- Two enums carry the refusal codes; a reader of a wire code must know that 6070 and up are v04's.
+- The v0.2.4 SDK and CLI do not know these codes; only the 0.4 engine raises them.
+
+**Evidence**
+- Tests: `risk_error_codes_are_70_and_up` (`v04/risk_core/src/error.rs`); `fail_text_formats_risk_errors`, `fail_panics_with_a_risk_error` (`v04/engine_core/src/check.rs`); generator `test_risk_error_rows_are_marked_0_4_only`, `test_risk_error_proved_by_variant_path`, `test_risk_error_without_test_fails_check` (`scripts/tests/test_gen_refusal_codes.py`).
+- Catalogue: `docs/architecture/refusal-codes.md` rows 6070, 6071, 6073, 6074, 6075 and 6077, each with its proving tests.
+
+**Status**
+Accepted (Plan 9, Tasks 2 and 13)
+
+---
+
+## ADR-082: F8 for Tier 2: No Defaults On Chain; `legacy` and `recommended` Presets Off Chain
+
+**Context**
+F8 requires that parameters are set at instance initialisation, with no hardcoded production values. Plan 9 adds five per-type parameters (`RiskArgs`), and the existing tests and e2e stages must keep passing unchanged.
+
+**Options**
+- (A) Defaults in on-chain code, overridable by the admin.
+- (B) Every value arrives in a message and is checked against a bound; named presets live off chain.
+
+**Decision**
+(B) (spec §3.0; Plan 9 ruling R9-1).
+- The engine holds no `RiskArgs` defaults: `SetCollateral` carries them, the config validates them (`RiskArgs::validate`, bounds in ADR-072), and `Configure` relays them.
+- **Presets**: `RiskArgs::legacy()` (TWAP, breaker and D4 off: v04 as built, at confidence 0, ADR-071) and `RiskArgs::recommended()` (30 min window, 5 min spacing, 3 samples, ±20 % band, 1 h stale window) are inherent methods in `risk_core::presets`, behind the cargo feature `presets`. An inherent method must live in the type's crate, and the guest must decode the type. `sdk` and `harness` enable the feature, as does `engine_core`'s dev-dependency for its unit tests; `engine_core`'s normal dependency and the guest do not. The SDK re-exports `RiskArgs`. In Plan 9 `recommended()` takes no argument.
+- The harness `World` uses the legacy preset by default, so every existing test runs unchanged. Tier 2 tests use `World::new_tier2(risk)` with `tier2_collateral_args()` (the test defaults with `max_oracle_age_ms` 600_000 and `band_hi_bps` 15_000, harness only, ruling R9-14): `recommended()` validates only for a feed max age in 300_000..=1_499_999.
+- **Not closed by Plan 9**: the five F8 gaps of `docs/architecture/f8-parameters.md` (reference-oracle confidence limit, reference-oracle clamp, debt relist delay, feed sanity window, reference-oracle scale) and `EngineExtArgs` arrive with E9 in Plan 10.
+
+**Trade-offs**
+- Every `SetCollateral` must carry all five values; the SDK presets make that one call.
+- The recommended values are a proposal, not tested against a production oracle's cadence.
+- A host build that compiles `sdk` or `harness` unifies the feature into `engine_core`'s `risk_core`; the guest's separate build never enables it.
+
+**Evidence**
+- Tests: `legacy_and_recommended_presets_validate`, `risk_args_reject_unreachable_twap_and_dead_d4` (`v04/risk_core/src/args.rs`, under `--features presets`); `set_collateral_writes_the_risk_args`, `set_collateral_rejects_out_of_bound_risk_args` (`v04/harness/tests/risk_args.rs`); `set_collateral_with_plan_declares_every_touched_actor` (`v04/sdk/tests/tier2_plans.rs`).
+- Docs: the `RiskArgs` section of `docs/architecture/f8-parameters.md`.
+
+**Status**
+Accepted in part (Plan 9: `RiskArgs` and the presets). The five F8 gaps stay open until Plan 10.
 
 ---

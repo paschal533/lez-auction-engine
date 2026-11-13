@@ -26,6 +26,8 @@
 //! - `debt`: roots `StartDebt` / `TakeDebt` / `CloseDebt` at the config, the debt auction's
 //!   `DebtOpen` / `DebtTake` / `DebtClose`, the accounting's `DebtTaken` / `DebtClosed` and the
 //!   config's `Mint` (variants 34-42, one [`debt::dispatch`] call).
+//! - `pause`: the config's `SetPauseLevel` and the collateral actor's `PauseLevelUpdate`
+//!   (ADR-073); the gates themselves are `engine_core::gate`.
 //!
 //! Errors are panics with the v0.2.4 text (`engine_core::check::fail`).
 
@@ -44,6 +46,8 @@ mod debt;
 mod liquidate;
 #[path = "engine/observe.rs"]
 mod observe;
+#[path = "engine/pause.rs"]
+mod pause;
 #[path = "engine/proxy.rs"]
 mod proxy;
 #[path = "engine/read.rs"]
@@ -83,12 +87,14 @@ fn handle_message(input: &ReceiveInput) -> Response {
             collateral_def,
             ref args,
             now_ms,
-        } => admin::on_set_collateral(input, salt, collateral_def, args, now_ms),
+            ref risk,
+        } => admin::on_set_collateral(input, salt, collateral_def, args, now_ms, risk),
         EngineMsg::Configure {
             collateral_def,
             ref args,
             ctx,
-        } => admin::on_configure(input, collateral_def, args, ctx),
+            ref risk,
+        } => admin::on_configure(input, collateral_def, args, ctx, risk),
         EngineMsg::InitReads => admin::on_init_reads(input),
         EngineMsg::Observe { now_ms } => observe::on_observe(input, now_ms),
         EngineMsg::Probe { kind } => proxy::probe(input, kind),
@@ -219,6 +225,8 @@ fn handle_message(input: &ReceiveInput) -> Response {
             paused_total_ms,
             min_bid,
             chost,
+            paused_since_ms,
+            fallback,
         } => bid::on_bid_ctx(
             input,
             &bid::BidCtxArgs {
@@ -233,6 +241,8 @@ fn handle_message(input: &ReceiveInput) -> Response {
                     paused_total_ms,
                     min_bid,
                     chost,
+                    paused_since_ms,
+                    fallback,
                 },
             },
         ),
@@ -271,6 +281,8 @@ fn handle_message(input: &ReceiveInput) -> Response {
         EngineMsg::SetEngineParams { .. } => admin::on_set_engine_params(input, &message),
         EngineMsg::SetSlack { .. } => admin::on_set_slack(input, &message),
         EngineMsg::SlackUpdate { slack_ms } => admin::on_slack_update(input, slack_ms),
+        EngineMsg::SetPauseLevel { .. } => pause::on_set_pause_level(input, &message),
+        EngineMsg::PauseLevelUpdate { level } => pause::on_pause_level_update(input, level),
         EngineMsg::ObserveFeed {
             config,
             collateral_def,

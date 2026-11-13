@@ -9,9 +9,11 @@
 use auction_core::{
     auction::Auction,
     liquidation::{CapState, LiquidationInput, LiquidationQuote, quote_liquidation},
+    schedule::Schedule,
 };
 use auction_engine_params::EngineError;
 use lee_core::account::{AccountId, Actor};
+use risk_core::stale_cap;
 
 use crate::state::{AuctionPhase, AuctionScratch, AuctionState, QuoteCtx, TAG_AUCTION};
 
@@ -60,6 +62,7 @@ pub fn awaiting_seize(id: &AuctionIdentity, ctx: QuoteCtx) -> AuctionState {
         schedule: ctx.collateral.schedule.clone(),
         type_paused_total_at_start: ctx.collateral.paused_total_ms,
         scratch: Some(AuctionScratch::Quote(Box::new(ctx))),
+        stale_cap_ray: 0,
     }
 }
 
@@ -71,8 +74,19 @@ pub struct SeizeReport {
     pub nominal_debt: u128,
 }
 
+/// The D4 stale cap (spec §3.2.4) at the liquidation price and the auction's snapshotted
+/// schedule, only when D4 is on (`stale_bid_max_age_ms > 0` and `twap_window_ms > 0`); else 0,
+/// the legacy value.
+fn stale_cap_of(ctx: &QuoteCtx, schedule: &Schedule) -> Result<u128, EngineError> {
+    if !ctx.collateral.ext.risk.d4_on() {
+        return Ok(0);
+    }
+    stale_cap(ctx.price_ray, schedule).map_err(|_| EngineError::Math)
+}
+
 /// v0.2.4's quote (`quote_liquidation` with the type and global caps) and `Auction::open` for the
-/// reported seizure. Returns the opened auction (phase `Auctioning`, scratch cleared) and the quote.
+/// reported seizure, with the D4 stale cap. Returns the opened auction (phase `Auctioning`,
+/// scratch cleared) and the quote.
 pub fn quote_seized(
     awaiting: &AuctionState,
     ctx: &QuoteCtx,
@@ -95,6 +109,7 @@ pub fn quote_seized(
         &params,
         &caps,
     )?;
+    let stale_cap_ray = stale_cap_of(ctx, &params.schedule)?;
     let opened = Auction::open(
         &quote,
         awaiting.start_ms,
@@ -104,6 +119,7 @@ pub fn quote_seized(
     let base = AuctionState {
         owner: report.owner,
         scratch: None,
+        stale_cap_ray,
         ..awaiting.clone()
     };
     Ok((AuctionState::from_core(&base, &opened), quote))
@@ -172,6 +188,44 @@ mod tests {
             (AuctionPhase::Auctioning, id(9), 1_000, None)
         );
         assert_eq!(a.schedule, c.collateral.schedule);
+    }
+
+    /// D4 on (stale window and TWAP window both set): `Seized` stores
+    /// `stale_cap(P_liq, schedule)`; legacy stores 0.
+    #[test]
+    fn quote_seized_sets_the_stale_cap_only_with_d4() {
+        use risk_core::{RiskArgs, stale_cap};
+        let report = SeizeReport {
+            owner: id(9),
+            collateral: 500_000,
+            nominal_debt: 600_000,
+        };
+        let seized = |risk: RiskArgs| {
+            let base = ctx(RAY / 2);
+            let c = QuoteCtx {
+                collateral: crate::state::CollateralState {
+                    ext: crate::ext::CollateralExt::new(risk),
+                    ..base.collateral.clone()
+                },
+                ..base
+            };
+            let awaiting = awaiting_seize(&identity(), c.clone());
+            let schedule = c.collateral.collateral_params().expect("params").schedule;
+            let (a, _) = quote_seized(&awaiting, &c, &report).expect("quotes");
+            (
+                a.stale_cap_ray,
+                stale_cap(RAY / 2, &schedule).expect("fits"),
+            )
+        };
+        assert_eq!(seized(RiskArgs::legacy()).0, 0);
+        let (stored, cap) = seized(RiskArgs::recommended());
+        assert!(cap > RAY / 2);
+        assert_eq!(stored, cap);
+        let no_d4 = RiskArgs {
+            stale_bid_max_age_ms: 0,
+            ..RiskArgs::recommended()
+        };
+        assert_eq!(seized(no_d4).0, 0);
     }
 
     #[test]

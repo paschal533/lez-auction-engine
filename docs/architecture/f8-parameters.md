@@ -146,6 +146,72 @@ bounded by `MIN_SLACK_MS..=MAX_SLACK_MS`.
 | `schedule` | ≤ `MAX_POINTS` points, first at 0 ms, time increasing, discount non-decreasing, each ≤ `MAX_DISCOUNT_BPS` |
 | `admin_paused` | — |
 
+### `RiskArgs` (v04, per type, `SetCollateral`)
+
+v04 only (Plan 9). `SetCollateral` carries a `risk: Box<RiskArgs>` as its last field, and the
+config relays it to the collateral actor in `Configure`. `RiskArgs::validate(max_oracle_age_ms)`
+(`v04/risk_core/src/args.rs`) checks it against the same message's `max_oracle_age_ms`; any
+failure is `InvalidConfig` (6005, `engine_core::ext::validate_risk`). The engine has no defaults:
+every value arrives in the message. Changeable the same way as `CollateralArgs`; a new
+`SetCollateral` keeps the type's TWAP ring and pause level.
+
+| Field | legacy | recommended | Bound in code (else `InvalidConfig`) | ADR |
+|---|---|---|---|---|
+| `twap_window_ms` | 0 (TWAP off) | 1_800_000 (30 min) | 0 or `TWAP_WINDOW_MIN_MS..=TWAP_WINDOW_MAX_MS` (60_000..=86_400_000); with D4 on (`stale_bid_max_age_ms > 0`), `> max_oracle_age_ms + (twap_min_obs − 2) · twap_min_spacing_ms` (saturating; `twap_min_obs − 2` floors at 0) (R9-3); TWAP on: `<= 8 · twap_min_spacing_ms` (the ring's capacity) | ADR-070, ADR-074 |
+| `twap_min_spacing_ms` | 0 | 300_000 (5 min) | TWAP on: `TWAP_SPACING_MIN_MS..=twap_window_ms` (1_000..); `<= max_oracle_age_ms` (R9-3); TWAP off: 0 | ADR-070 |
+| `twap_min_obs` | 0 | 3 | TWAP on: `1..=TWAP_MIN_OBS_MAX` (8); `<= twap_window_ms / twap_min_spacing_ms` (R9-3); TWAP off: 0 | ADR-070 |
+| `max_spot_twap_dev_bps` | 0 (breaker and bid anchor off) | 2_000 (±20 %) | 0 or `DEV_MIN_BPS..=DEV_MAX_BPS` (100..=5_000); nonzero only with the TWAP on | ADR-072 |
+| `stale_bid_max_age_ms` | 0 (D4 off) | 3_600_000 (1 h) | `<= MAX_ORACLE_AGE_MS` (86_400_000); nonzero only with the TWAP on; when nonzero, `> max_oracle_age_ms` (R9-3) | ADR-074 |
+
+Order of the checks: the ranges above field by field, then the R9-3 bounds, then "TWAP off means
+every other field is 0"; the first failure is returned (`RiskArgsError.field`, not on the wire).
+With the TWAP off, a nonzero `max_spot_twap_dev_bps` or `stale_bid_max_age_ms` is already refused
+by its own range row, so the "TWAP off" rule decides only `twap_min_spacing_ms` and
+`twap_min_obs`; the wire code is `InvalidConfig` either way.
+
+**The recommended preset needs a short feed max age.** By R9-3 it validates only when the type's
+`max_oracle_age_ms` lies in 300_000..=1_499_999 (spacing `<= max_age`; stale 3_600_000 `> max_age`;
+window 1_800_000 `> max_age + 300_000`). The harness's Tier 2 world uses 600_000
+(`TIER2_MAX_AGE_MS`, `v04/harness/src/tier2.rs`); `CollateralArgs::defaults_for_tests()`
+(3_600_000) refuses it. The e2e `tier2` stage uses a time-compressed copy (window 300_000, spacing
+40_000, `min_obs` 3, dev 2_000, stale 600_000, with `max_oracle_age_ms` 180_000). Its window is 7.5
+spacings, inside the ring bound below. Its spacing is still below the stage's 60 s slack, so the
+stage exercises the flow, not TWAP manipulation resistance.
+
+**Window vs ring capacity (enforced).** The ring holds `TWAP_CAPACITY` = 8 samples, and the
+oldest has no weight before its own time. A window longer than 8 spacings could be cut short by
+anyone: one permissionless `ObserveFeed` per spacing interval evicts older samples. So
+`RiskArgs::validate` refuses `twap_window_ms > 8 · twap_min_spacing_ms` (field `twap_window_ms`,
+wire `InvalidConfig`; `risk_args_refuse_a_window_longer_than_the_ring`). At the bound, a full ring
+spans at least 7 spacings, so the TWAP always covers at least 7/8 of its window. The recommended
+preset has 6 spacings per window. Two consequences: the spacing may not exceed
+`max_oracle_age_ms` (R9-3), so the window is at most 8 feed max ages; and the longest window
+(24 h) needs a spacing of at least 3 h. A related unenforced case: with
+`twap_min_spacing_ms <= slack_ms` one oracle publication can be recorded twice, because the sample
+time is the claimed `now` (ADR-070).
+
+**Legacy is v04 as built, at confidence 0.** Legacy turns the TWAP, the breaker and D4 off, so
+every price is `band(edge(M))`. The confidence edge (ADR-071) is always on: with confidence 0, as
+the existing producers write, it is the identity; with a nonzero confidence the legacy preset
+pays out less collateral than v0.2.4 would.
+
+**Where the presets live.** `RiskArgs::legacy()` and `RiskArgs::recommended()` are in
+`risk_core::presets` (`v04/risk_core/src/presets.rs`), behind the cargo feature `presets`. `sdk`
+and `harness` enable it (and `engine_core`'s dev-dependency, for its unit tests). `engine_core`'s
+normal dependency and the guest do not, so no production value is compiled into on-chain code
+(ADR-082). The SDK re-exports `RiskArgs`.
+
+New v04 constants (`v04/risk_core/src`), outside the table above:
+
+| Constant | Value | File | Kind |
+|---|---|---|---|
+| `TWAP_CAPACITY` | 8 | `twap.rs` | protocol limit (ring size, like `MAX_POINTS`) |
+| `TWAP_WINDOW_MIN_MS`, `TWAP_WINDOW_MAX_MS` | 60_000, 86_400_000 | `args.rs` | init parameter bound |
+| `TWAP_SPACING_MIN_MS` | 1_000 | `args.rs` | init parameter bound |
+| `TWAP_MIN_OBS_MAX` | 8 | `args.rs` | init parameter bound |
+| `DEV_MIN_BPS`, `DEV_MAX_BPS` | 100, 5_000 | `args.rs` | init parameter bound |
+| `LEGACY_SANITY_LO_BPS`, `LEGACY_SANITY_HI_BPS` | 5_000, 20_000 | `feed.rs` | production default — Tier 2 (the sanity window, gap 4 below: `FeedPolicy` carries it as fields, but the engine still fills them with these values) |
+
 ## F8 gaps (production default — Tier 2)
 
 Five values are fixed in code and cannot be set by the admin. Each is carried into spec §5 E9:
@@ -154,5 +220,8 @@ Five values are fixed in code and cannot be set by the admin. Each is carried in
    as a cap.
 2. Reference-oracle clamp: `REF_ORACLE_CLAMP_BPS` (±2_000 bps around the admin price).
 3. Debt-auction relist delay: `DEBT_RELIST_DELAY_MS` (600_000 ms).
-4. Feed sanity window: market price within [R / 2, 2 · R] (inline in `validate_feed`).
+4. Feed sanity window: market price within [R / 2, 2 · R] (inline in `validate_feed`). v04's
+   collateral feed check `validate_feed_ext` takes the window as `FeedPolicy` fields (Plan 9),
+   but `engine_core::feed::feed_policy` always fills them with `LEGACY_SANITY_LO_BPS` /
+   `LEGACY_SANITY_HI_BPS`, so the gap stands until Plan 10 (E9).
 5. Reference-oracle scale: hardcoded to `OracleScale::Ray` (`programs/auction_engine/src/system.rs:44-50`, `v04/engine_core/src/system.rs:41-47`), so a Q64x64 reference oracle cannot be configured, unlike a collateral feed's `oracle_scale`. It becomes an init parameter with Ray as the default.

@@ -8,7 +8,9 @@ pub mod actors;
 pub mod assertions;
 pub mod bid;
 pub mod check;
+pub mod ext;
 pub mod feed;
+pub mod gate;
 pub mod liquidation;
 pub mod msg;
 pub mod scratch;
@@ -17,4 +19,5 @@ pub mod state;
 pub mod system;
 pub mod system_state;
 
+pub use risk_core;
 pub use system_state::{RefReading, SystemCtx, SystemOp, SystemPending};

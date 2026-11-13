@@ -7,6 +7,7 @@ use lee_core::{
 };
 
 use crate::state::{AuctionPhase, AuctionState, ConfigState};
+use risk_core::RiskError;
 
 /// The least clock slack the config accepts, ms (ADR-064): below it a timed transaction can
 /// miss the claim window at the sequencer's block spacing and revert at its full gas.
@@ -48,9 +49,52 @@ pub fn host_params_match(
     Ok(())
 }
 
+/// Any refusal a handler can raise (ADR-076): the shared v0.2.4 [`EngineError`] or a v04-only
+/// [`RiskError`]. Both print the same failure text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// A shared v0.2.4 code (6000-6099).
+    Engine(EngineError),
+    /// A v04-only Tier 2 code (6070-6080).
+    Risk(RiskError),
+}
+
+impl Refusal {
+    /// The refusal code; the wire code is `6000 + code`.
+    #[must_use]
+    pub const fn code(&self) -> u32 {
+        match self {
+            Self::Engine(err) => err.code(),
+            Self::Risk(err) => err.code(),
+        }
+    }
+}
+
+impl From<EngineError> for Refusal {
+    fn from(err: EngineError) -> Self {
+        Self::Engine(err)
+    }
+}
+
+impl From<RiskError> for Refusal {
+    fn from(err: RiskError) -> Self {
+        Self::Risk(err)
+    }
+}
+
+impl core::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Engine(err) => core::fmt::Display::fmt(err, f),
+            Self::Risk(err) => core::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
 /// The v0.2.4 failure text: `Program error [6000+code]: Program error {code}: <Name>`.
 #[must_use]
-pub fn fail_text(err: EngineError) -> String {
+pub fn fail_text(err: impl Into<Refusal>) -> String {
+    let err = err.into();
     let code = err.code();
     format!(
         "Program error [{}]: Program error {code}: {err}",
@@ -59,7 +103,7 @@ pub fn fail_text(err: EngineError) -> String {
 }
 
 /// Aborts the message, and with it the whole transaction, with the v0.2.4 error text.
-pub fn fail(err: EngineError) -> ! {
+pub fn fail(err: impl Into<Refusal>) -> ! {
     panic!("{}", fail_text(err))
 }
 
@@ -177,6 +221,24 @@ mod tests {
     #[should_panic(expected = "Program error [6034]: Program error 34: NotAuctioning")]
     fn fail_panics_with_the_text() {
         fail(EngineError::NotAuctioning)
+    }
+
+    #[test]
+    fn fail_text_formats_risk_errors() {
+        assert_eq!(
+            fail_text(RiskError::TwapUnavailable),
+            "Program error [6070]: Program error 70: TwapUnavailable"
+        );
+        assert_eq!(
+            fail_text(RiskError::LastGoodTwapTooOld),
+            "Program error [6077]: Program error 77: LastGoodTwapTooOld"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Program error [6075]: Program error 75: BidsPaused")]
+    fn fail_panics_with_a_risk_error() {
+        fail(RiskError::BidsPaused)
     }
 
     #[test]

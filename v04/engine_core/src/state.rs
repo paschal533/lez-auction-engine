@@ -18,7 +18,11 @@ use lee_core::account::{AccountId, Actor};
 pub use crate::scratch::{
     AuctionScratch, BidRequestRec, ObserveThen, OracleReadingRec, PendingObserve, QuoteCtx,
 };
-use crate::{msg::ProtocolGenesis, system_state::SystemPending};
+use crate::{
+    ext::{CollateralExt, ConfigExt},
+    msg::ProtocolGenesis,
+    system_state::SystemPending,
+};
 
 pub const TAG_CONFIG: [u8; 8] = *b"AECONFIG";
 pub const TAG_COLL: [u8; 8] = *b"AECOLLAT";
@@ -175,6 +179,8 @@ pub struct ConfigState {
     /// `Proceed` sentinel, so it is `false` in every committed state. Appended last, so the
     /// layout of the fields before it is unchanged.
     pub pending_host_read: bool,
+    /// Tier 2 engine-level state (spec §3.0), appended last.
+    pub ext: ConfigExt,
 }
 tagged_state!(ConfigState, TAG_CONFIG);
 
@@ -211,6 +217,8 @@ pub struct CollateralState {
     /// the handler that starts an observation, filled by the replies, consumed and cleared by the
     /// `Proceed` sentinel, so it is `None` in every committed state.
     pub pending: Option<PendingObserve>,
+    /// Tier 2 per-type state (spec §3.0), appended last.
+    pub ext: CollateralExt,
 }
 tagged_state!(CollateralState, TAG_COLL);
 
@@ -430,6 +438,8 @@ pub struct AuctionState {
     /// then the vault check between `Seized` and its `StateReply`. Cleared before the `Finish`
     /// sentinel, so it is `None` in every committed state.
     pub scratch: Option<AuctionScratch>,
+    /// The D4 stale floor (spec §3.2.4), set at `Seized`; 0 while D4 is off. Appended last.
+    pub stale_cap_ray: u128,
 }
 tagged_state!(AuctionState, TAG_AUCTION);
 
@@ -549,6 +559,7 @@ pub(crate) mod fixtures {
             pending_genesis: None,
             collateral_def: None,
             pending_host_read: false,
+            ext: ConfigExt::default(),
         }
     }
 
@@ -582,6 +593,7 @@ pub(crate) mod fixtures {
                 slack_ms: 6_000,
             },
             pending: None,
+            ext: CollateralExt::new(risk_core::RiskArgs::legacy()),
         }
     }
 
@@ -621,6 +633,7 @@ pub(crate) mod fixtures {
             schedule: vec![point()],
             type_paused_total_at_start: 0,
             scratch: None,
+            stale_cap_ray: 0,
         }
     }
 }

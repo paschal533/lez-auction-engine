@@ -10,7 +10,8 @@ usage: gen-refusal-codes.py [--root DIR] [--check]
              and is not in KNOWN_GAPS, or a KNOWN_GAPS entry now has a test (exit 2 on bad usage)
 
 Source of truth: programs/auction_engine/core/src/error.rs (`EngineError` + `code()` arms); the 0.4
-engine shares the enum through crates/auction_engine_params. A test proves a variant when a #[test] fn
+engine shares the enum through crates/auction_engine_params and adds `RiskError`
+(v04/risk_core/src/error.rs, codes 6070 and up), catalogued after it. A test proves a variant when a #[test] fn
 (attributes included, so #[should_panic(expected = ..)] counts) names `EngineError::Variant`, the wire
 form `[60NN]` / `Program error NN`, or the bare quoted name ("Variant", "...: Variant") that the
 integration tests assert on. Only programs/, v04/ and crates/ are scanned; target dirs are skipped.
@@ -22,6 +23,8 @@ import re
 import sys
 
 ERROR_RS_PATH = "programs/auction_engine/core/src/error.rs"
+RISK_ERROR_RS_PATH = "v04/risk_core/src/error.rs"
+ENUMS = (("EngineError", ERROR_RS_PATH, ""), ("RiskError", RISK_ERROR_RS_PATH, " (0.4 only)"))
 DOC_PATH = "docs/architecture/refusal-codes.md"
 SCAN_DIRS = ("programs", "v04", "crates")
 SKIP_DIRS = {"target", "node_modules", ".git"}
@@ -87,6 +90,12 @@ MEANINGS = {
     'SurplusAuctionAlreadyLive': 'A surplus auction is already live.',
     'NotLive': 'The system auction is not live.',
     'RecoveryInProgress': 'A live debt auction (recovery) blocks this action.',
+    'TwapUnavailable': 'The TWAP has fewer than `twap_min_obs` samples in its window (liquidation, or a stale-feed bid).',
+    'SpotTwapDeviation': 'Spot deviates from the TWAP by more than `max_spot_twap_dev_bps`; liquidation refused.',
+    'LiquidationsPaused': 'The type is at pause level 1 or above.',
+    'SystemAuctionsPaused': 'The engine is at pause level 2 or above; no new surplus or debt auction.',
+    'BidsPaused': 'Pause level 3: no bids or system takes.',
+    'LastGoodTwapTooOld': 'The last good TWAP is older than `stale_bid_max_age_ms`; stale-feed bid refused.',
     'Math': 'Arithmetic overflow, underflow or division by zero.',
 }
 
@@ -182,13 +191,13 @@ def build_index(root):
     for rel, full in rust_files(root):
         raw = read(full)
         tests.extend((rel, n, body) for n, body in test_fns(raw))
-        if rel != ERROR_RS_PATH and not is_test_path(rel):
+        if rel not in (ERROR_RS_PATH, RISK_ERROR_RS_PATH) and not is_test_path(rel):
             sources[rel] = mask_rust(strip_test_mods(raw))
     return sources, tests
 
 
-def proof_pattern(variant, code):
-    alts = [rf"EngineError::{variant}\b", rf'"(?:[^"\n]*:\s*)?{variant}(?:\(|")']
+def proof_pattern(variant, code, enum_name="EngineError"):
+    alts = [rf"{enum_name}::{variant}\b", rf'"(?:[^"\n]*:\s*)?{variant}(?:\(|")']
     if code is not None:
         alts += [rf"\[{WIRE_BASE + code}\]", rf"Program error {code}\b"]
     return re.compile("|".join(alts))
@@ -205,14 +214,14 @@ def engine_label(rel):
     return "core"
 
 
-def find_uses(root, variant, code=None, index=None, error_text=""):
+def find_uses(root, variant, code=None, index=None, error_text="", enum_name="EngineError"):
     """{"raised_in": [paths], "tests": [fn names that prove it], "labelled": ["(engine) name"]}.
 
     code (the engine code) enables wire-form matching. NOT_PROOF fns are skipped; (sdk) tests predict
     a refusal rather than prove the program raises it, so they never count as proof."""
     sources, tests = index or build_index(root)
-    raise_re = re.compile(rf"EngineError::{variant}\b")
-    pat = proof_pattern(variant, code)
+    raise_re = re.compile(rf"{enum_name}::{variant}\b")
+    pat = proof_pattern(variant, code, enum_name)
     seen, names, labelled = set(), [], []
     for rel, name, body in tests:
         label = engine_label(rel)
@@ -227,7 +236,7 @@ def find_uses(root, variant, code=None, index=None, error_text=""):
     if core_names:
         core_re = re.compile(r"\b(?:" + "|".join(re.escape(n) for n in core_names) + r")\b")
         raised |= {r for r, t in sources.items() if core_re.search(t)}
-        if variant == "Math":
+        if variant == "Math" and enum_name == "EngineError":
             raised.add(ERROR_RS_PATH)
     return {"raised_in": sorted(raised), "tests": names, "labelled": labelled}
 
@@ -253,17 +262,16 @@ def from_arms(error_text):
     return out
 
 
-def render(root):
-    """(doc text, problems list) for the tree at root."""
-    error_text = read(os.path.join(root, ERROR_RS_PATH))
-    codes = parse_codes(error_text)
-    index = build_index(root)
+def enum_rows(root, index, enum_name, rel_path, suffix):
+    """(table rows, problems, gaps) for one error enum; the From-impl follow applies to EngineError only."""
+    error_text = read(os.path.join(root, rel_path))
+    from_text = error_text if enum_name == "EngineError" else ""
     rows, problems, gaps = [], [], []
-    for name, code in codes:
-        uses = find_uses(root, name, code, index, error_text)
+    for name, code in parse_codes(error_text):
+        uses = find_uses(root, name, code, index, from_text, enum_name)
         raised = capped(uses["raised_in"], MAX_PATHS) if uses["raised_in"] else "-"
         proved = capped(uses["labelled"], MAX_TESTS) if uses["labelled"] else "**no test**"
-        if not uses["raised_in"] and from_arms(error_text).get(name):
+        if not uses["raised_in"] and from_arms(from_text).get(name):
             problems.append(f"{name}: mapped by a From impl but no raise site found")
         if name not in MEANINGS:
             problems.append(f"{name}: no MEANINGS line")
@@ -274,14 +282,27 @@ def render(root):
                 problems.append(f"{name}: no proving test and not in KNOWN_GAPS")
         elif name in KNOWN_GAPS:
             problems.append(f"{name}: has a test but is still in KNOWN_GAPS")
-        rows.append(f"| {WIRE_BASE + code} | `{name}` | {code} | {raised} | {proved} | {MEANINGS.get(name, '')} |")
+        rows.append(f"| {WIRE_BASE + code} | `{name}`{suffix} | {code} | {raised} | {proved} | {MEANINGS.get(name, '')} |")
+    return rows, problems, gaps
+
+
+def render(root):
+    """(doc text, problems list) for the tree at root."""
+    index = build_index(root)
+    rows, problems, gaps = [], [], []
+    for enum_name, rel_path, suffix in ENUMS:
+        enum_found = enum_rows(root, index, enum_name, rel_path, suffix)
+        for acc, part in zip((rows, problems, gaps), enum_found):
+            acc.extend(part)
     lines = [
         "# Refusal codes", "",
         "<!-- generated by scripts/gen-refusal-codes.py; do not edit by hand -->", "",
         f"Every `EngineError` the auction engine can refuse with. The wire code is `{WIRE_BASE} + engine code`; "
         "a failed transaction reads `Program error [6001]: Program error 1: NotAdmin`. The v0.2.4 programs "
         "and the 0.4 engine share this enum (through `crates/auction_engine_params`), so one catalogue "
-        "covers both. `Proved by` lists the tests whose body names the variant or its wire form.", "",
+        "covers both. Codes 6070 and up are the 0.4 engine's `RiskError` (`v04/risk_core`), wrapped with "
+        "`EngineError` in `engine_core::check::Refusal`. "
+        "`Proved by` lists the tests whose body names the variant or its wire form.", "",
         "| Wire code | Variant | Engine code | Raised in | Proved by | Meaning |",
         "|---:|---|---:|---|---|---|", *rows, "", "## Gaps", ""]
     if gaps:

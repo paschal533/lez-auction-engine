@@ -21,10 +21,14 @@ use lee_core::{BlockId, Timestamp, program::TransactionEvent};
 use sha2::{Digest as _, Sha256};
 
 pub mod bidding;
+pub mod cycles;
 pub mod impostor;
 pub mod init;
 pub mod invariants;
+pub mod levels;
+pub mod levels_fixtures;
 pub mod system;
+pub mod tier2;
 pub mod world;
 pub use world::World;
 
@@ -117,6 +121,14 @@ impl Chain {
             .clone();
         let account = AccountId::from(&PublicKey::new_from_private_key(&key));
         (key, account)
+    }
+
+    /// The public account of every key [`Chain::key`] has handed out, in label order.
+    pub fn key_accounts(&self) -> Vec<AccountId> {
+        self.keys
+            .values()
+            .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
+            .collect()
     }
 
     /// Signs and applies one public transaction in the next block at `now_ms`.

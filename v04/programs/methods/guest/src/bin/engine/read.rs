@@ -95,8 +95,8 @@ fn on_host_reply(input: &ReceiveInput, config: ConfigState) -> Response {
 /// only once its read has been answered.
 pub fn proceed(input: &ReceiveInput) -> Response {
     expect_from(input, input.receiver, EngineError::WrongAccount("proceed"));
-    if CollateralState::decode(input.pre_state.as_ref()).is_some() {
-        return observe::proceed(input);
+    if let Some(coll) = CollateralState::decode(input.pre_state.as_ref()) {
+        return observe::proceed(input, coll);
     }
     if AccountingState::decode(input.pre_state.as_ref()).is_some() {
         return system::proceed(input);

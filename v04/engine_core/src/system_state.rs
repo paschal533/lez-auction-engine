@@ -6,6 +6,7 @@
 use auction_core::system::{DebtAuction, SurplusAuction};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::{AccountId, Actor};
+use risk_core::EngineExtArgs;
 
 use crate::state::{ConfigState, OracleReadingRec, SystemParamsRec};
 
@@ -28,6 +29,8 @@ pub struct SystemCtx {
     pub freeze_on_bad_debt: bool,
     pub bad_debt_freeze_threshold: u128,
     pub system: SystemParamsRec,
+    /// The engine's reference-oracle and relist parameters (Plan 10 ruling R10-6).
+    pub ext: EngineExtArgs,
 }
 
 impl SystemCtx {
@@ -46,6 +49,7 @@ impl SystemCtx {
             freeze_on_bad_debt: c.freeze_on_bad_debt,
             bad_debt_freeze_threshold: c.bad_debt_freeze_threshold,
             system: c.system.clone(),
+            ext: c.ext.engine,
         }
     }
 }
@@ -327,6 +331,7 @@ mod tests {
             (true, 600)
         );
         assert_eq!(ctx.system, c.system);
+        assert_eq!(ctx.ext, c.ext.engine);
     }
 
     #[test]

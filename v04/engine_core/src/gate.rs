@@ -538,7 +538,10 @@ mod tests {
     fn system_gate_reads_the_system_level() {
         let base = fixtures::config();
         let at = |system_level: u8| ConfigState {
-            ext: ConfigExt { system_level },
+            ext: ConfigExt {
+                system_level,
+                engine: risk_core::EngineExtArgs::legacy(),
+            },
             ..base.clone()
         };
         assert_eq!(system_gate(&at(1), Op::StartSurplus), Ok(()));

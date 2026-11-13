@@ -6,7 +6,7 @@
 use auction_engine_params::args::{CollateralArgs, EngineParamsArgs};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::{AccountId, Actor};
-use risk_core::RiskArgs;
+use risk_core::{EngineExtArgs, RiskArgs};
 
 use crate::{
     state::{CollateralState, ObserveCtx},
@@ -23,7 +23,8 @@ pub enum EngineMsg {
     ///    definition `(protocol_def(E, K), T)` with minter `K`, its genesis supply credited to
     ///    `protocol_genesis.to` (none without a genesis). The config names that definition only
     ///    while `params.protocol_token_enabled`; `ref_oracle` fills the reference-oracle slot,
-    ///    present iff `params.ref_oracle_enabled`.
+    ///    present iff `params.ref_oracle_enabled`. `ext` is the engine's reference-oracle and
+    ///    relist parameters (Plan 10, R10-1), appended last.
     Init {
         salt: u64,
         params: Box<EngineParamsArgs>,
@@ -35,6 +36,7 @@ pub enum EngineMsg {
         slack_ms: u64,
         ref_oracle: Option<Actor>,
         protocol_genesis: Option<ProtocolGenesis>,
+        ext: Box<EngineExtArgs>,
     },
     /// 1. Sets (or replaces) a collateral type's parameters, then observes the feed with the new
     ///    admin flag at the clock claim `now_ms` (row 2). `risk` is the type's Tier 2 parameters
@@ -195,11 +197,13 @@ pub enum EngineMsg {
     ///     seeded `Probe { Collateral }`) for `AssertCapAtMost`, and, if the protocol token, the
     ///     reference oracle or the system parameters change, the accounting for
     ///     `AssertSystemIdle`. The actors fixed at `Init` are not settable; `slack_ms` is, by
-    ///     [`EngineMsg::SetSlack`].
+    ///     [`EngineMsg::SetSlack`]. `ext` replaces the engine's reference-oracle and relist
+    ///     parameters; a change of `ext.ref_scale` is a locked-field change (R10-5).
     SetEngineParams {
         salt: u64,
         params: Box<EngineParamsArgs>,
         ref_oracle: Option<Actor>,
+        ext: Box<EngineExtArgs>,
     },
     /// 21. Root at `collateral_actor(E, config, collateral_def)`, permissionless (row 3; v0.2.4
     ///     `observe_feed`): observes the feed at the clock claim `now_ms` and records the pause

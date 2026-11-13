@@ -17,7 +17,7 @@ use lee::{AccountId, Actor, PrivateKey, error::LeeError};
 use lee_core::program::TransactionEvent;
 use mock_host_core::{HostMsg, Params, TAG_PARAMS, is_unsafe, position_id, vault_id};
 use oracle_core::OracleMsg;
-use risk_core::RiskArgs;
+use risk_core::{EngineExtArgs, RiskArgs};
 use token_core::{Holding, TokenMsg, holding_actor};
 
 use crate::Chain;
@@ -294,10 +294,21 @@ impl World {
     }
 
     /// `Init` for salt [`SALT`] with `params`, the reference oracle `ref_oracle` and the protocol
-    /// token's genesis `genesis`.
+    /// token's genesis `genesis`; the legacy engine parameters.
     pub fn init_msg_full(
         &self,
         params: EngineParamsArgs,
+        ref_oracle: Option<Actor>,
+        genesis: Option<ProtocolGenesis>,
+    ) -> EngineMsg {
+        self.init_msg_ext(params, EngineExtArgs::legacy(), ref_oracle, genesis)
+    }
+
+    /// [`World::init_msg_full`] with the engine parameters `ext`.
+    pub fn init_msg_ext(
+        &self,
+        params: EngineParamsArgs,
+        ext: EngineExtArgs,
         ref_oracle: Option<Actor>,
         genesis: Option<ProtocolGenesis>,
     ) -> EngineMsg {
@@ -312,19 +323,32 @@ impl World {
             slack_ms: SLACK_MS,
             ref_oracle,
             protocol_genesis: genesis,
+            ext: Box::new(ext),
         }
     }
 
-    /// `SetEngineParams` for salt [`SALT`] with `params` and the reference oracle `ref_oracle`.
+    /// `SetEngineParams` for salt [`SALT`] with `params`, the reference oracle `ref_oracle` and
+    /// the legacy engine parameters.
     pub fn set_engine_params_msg(
         &self,
         params: EngineParamsArgs,
+        ref_oracle: Option<Actor>,
+    ) -> EngineMsg {
+        self.set_engine_params_msg_ext(params, EngineExtArgs::legacy(), ref_oracle)
+    }
+
+    /// [`World::set_engine_params_msg`] with the engine parameters `ext`.
+    pub fn set_engine_params_msg_ext(
+        &self,
+        params: EngineParamsArgs,
+        ext: EngineExtArgs,
         ref_oracle: Option<Actor>,
     ) -> EngineMsg {
         EngineMsg::SetEngineParams {
             salt: SALT,
             params: Box::new(params),
             ref_oracle,
+            ext: Box::new(ext),
         }
     }
 

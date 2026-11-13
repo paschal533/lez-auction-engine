@@ -23,6 +23,7 @@ fn root_variant_indices_are_fixed() {
                 to: id(12),
                 supply: 13,
             }),
+            ext: Box::new(EngineExtArgs::legacy()),
         },
         EngineMsg::SetCollateral {
             salt: 1,
@@ -165,6 +166,7 @@ fn internal_variant_indices_are_fixed() {
             salt: 1,
             params: Box::new(EngineParamsArgs::defaults_for_tests()),
             ref_oracle: Some(actor(4, 5)),
+            ext: Box::new(EngineExtArgs::legacy()),
         },
         EngineMsg::ObserveFeed {
             config: id(3),
@@ -482,6 +484,38 @@ fn set_collateral_and_bid_ctx_carry_the_appended_fields() {
         fallback: true,
     };
     for (msg, index) in [(set, 1), (ctx, 13)] {
+        let bytes = borsh::to_vec(&msg).expect("encodes");
+        assert_eq!(bytes.first(), Some(&index), "{msg:?}");
+        assert_eq!(EngineMsg::try_from_slice(&bytes).expect("decodes"), msg);
+    }
+}
+
+#[test]
+fn init_and_set_engine_params_carry_the_ext() {
+    let ext = EngineExtArgs {
+        ref_clamp_bps: 1_500,
+        ..EngineExtArgs::legacy()
+    };
+    let init = EngineMsg::Init {
+        salt: 1,
+        params: Box::new(EngineParamsArgs::defaults_for_tests()),
+        host: Actor::new(id(1), id(2)),
+        token: id(3),
+        stable_def: id(4),
+        oracle: Actor::new(id(5), id(6)),
+        clock: Actor::new(id(7), id(8)),
+        slack_ms: 9,
+        ref_oracle: None,
+        protocol_genesis: None,
+        ext: Box::new(ext),
+    };
+    let set = EngineMsg::SetEngineParams {
+        salt: 1,
+        params: Box::new(EngineParamsArgs::defaults_for_tests()),
+        ref_oracle: None,
+        ext: Box::new(ext),
+    };
+    for (msg, index) in [(init, 0), (set, 20)] {
         let bytes = borsh::to_vec(&msg).expect("encodes");
         assert_eq!(bytes.first(), Some(&index), "{msg:?}");
         assert_eq!(EngineMsg::try_from_slice(&bytes).expect("decodes"), msg);

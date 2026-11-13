@@ -135,6 +135,7 @@ async fn engine_up(live: &mut Live, s: &Setup, taker: AccountId, slack_ms: u64) 
             to: taker,
             supply: GENESIS,
         }),
+        ext: risk_core::EngineExtArgs::legacy(),
     };
     let init = sdk::plan_init(s.p.engine, admin.account, args)?;
     live.run("engine: Init", &init).await?;

@@ -121,6 +121,7 @@ fn plans_declare_every_touched_actor() {
             slack_ms: SLACK_MS,
             ref_oracle: None,
             protocol_genesis: None,
+            ext: risk_core::EngineExtArgs::legacy(),
         },
     )
     .expect("init plan");
@@ -385,6 +386,7 @@ fn set_params(w: &World, params: EngineParamsArgs, ref_oracle: Option<Actor>) ->
         salt: SALT,
         params: params.clone(),
         ref_oracle,
+        ext: risk_core::EngineExtArgs::legacy(),
     };
     let plan = plan_set_engine_params(&InProcess(&w.chain), w.engine, w.admin, args)
         .expect("set-engine-params plan");

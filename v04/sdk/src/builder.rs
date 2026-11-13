@@ -25,7 +25,7 @@ use engine_core::{
     state::ConfigState,
 };
 use lee::{AccountId, Actor, PublicAccountEvidence};
-use risk_core::RiskArgs;
+use risk_core::{EngineExtArgs, RiskArgs};
 use token_core::holding_actor;
 
 use crate::{SdkError, simulate::StateSource};
@@ -225,6 +225,8 @@ pub struct InitArgs {
     pub ref_oracle: Option<Actor>,
     /// The protocol token's genesis supply and recipient, if any.
     pub protocol_genesis: Option<ProtocolGenesis>,
+    /// The engine's reference-oracle and relist parameters (Plan 10, R10-1).
+    pub ext: EngineExtArgs,
 }
 
 /// The keeper's `Liquidate`.
@@ -287,6 +289,7 @@ pub fn plan_init(engine: AccountId, admin: AccountId, args: InitArgs) -> Result<
         slack_ms: args.slack_ms,
         ref_oracle: args.ref_oracle,
         protocol_genesis: args.protocol_genesis,
+        ext: Box::new(args.ext),
     };
     Plan::new(proxy, actors, vec![admin], Vec::new(), &msg)
 }

@@ -121,6 +121,7 @@ async fn engine_up(live: &mut Live, s: &Setup, slack_ms: u64) -> Res<Deployment>
         slack_ms,
         ref_oracle: None,
         protocol_genesis: None,
+        ext: risk_core::EngineExtArgs::legacy(),
     };
     let init = sdk::plan_init(s.p.engine, admin.account, args)?;
     live.run("engine: Init", &init).await?;

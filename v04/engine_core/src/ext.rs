@@ -3,15 +3,29 @@
 
 use auction_engine_params::EngineError;
 use borsh::{BorshDeserialize, BorshSerialize};
-use risk_core::{RiskArgs, TwapRing};
+use risk_core::{EngineExtArgs, RiskArgs, TwapRing};
 
 use crate::state::CollateralState;
 
-/// Engine-level Tier 2 state on the config.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+/// Engine-level Tier 2 state on the config. No `Default`: a zeroed [`EngineExtArgs`] is not a
+/// valid configuration (Plan 10 ruling R10-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ConfigExt {
     /// The system pause level (spec §3.2.1): 0 = none.
     pub system_level: u8,
+    /// The validated engine parameters of the last `Init` or `SetEngineParams` (R10-1).
+    pub engine: EngineExtArgs,
+}
+
+impl ConfigExt {
+    /// A fresh extension: system level 0 and the engine parameters `engine`.
+    #[must_use]
+    pub const fn new(engine: EngineExtArgs) -> Self {
+        Self {
+            system_level: 0,
+            engine,
+        }
+    }
 }
 
 /// Per-type Tier 2 state on the collateral actor.
@@ -59,6 +73,11 @@ impl CollateralState {
 pub fn validate_risk(risk: &RiskArgs, max_oracle_age_ms: u64) -> Result<(), EngineError> {
     risk.validate(max_oracle_age_ms)
         .map_err(|_| EngineError::InvalidConfig)
+}
+
+/// `EngineExtArgs::validate` as an engine refusal: any out-of-bound field is `InvalidConfig`.
+pub fn validate_engine_ext(ext: &EngineExtArgs) -> Result<(), EngineError> {
+    ext.validate().map_err(|_| EngineError::InvalidConfig)
 }
 
 #[cfg(test)]
@@ -122,5 +141,21 @@ mod tests {
             Err(EngineError::InvalidConfig)
         );
         assert_eq!(validate_risk(&RiskArgs::legacy(), 3_600_000), Ok(()));
+    }
+
+    #[test]
+    fn validate_engine_ext_refuses_as_invalid_config() {
+        let bad = EngineExtArgs {
+            ref_scale: 2,
+            ..EngineExtArgs::legacy()
+        };
+        assert_eq!(validate_engine_ext(&bad), Err(EngineError::InvalidConfig));
+        assert_eq!(validate_engine_ext(&EngineExtArgs::legacy()), Ok(()));
+    }
+
+    #[test]
+    fn config_ext_new_starts_at_level_0() {
+        let ext = ConfigExt::new(EngineExtArgs::legacy());
+        assert_eq!((ext.system_level, ext.engine), (0, EngineExtArgs::legacy()));
     }
 }

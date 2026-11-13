@@ -82,7 +82,7 @@ impl RiskArgs {
         Ok(())
     }
 
-    /// R9-3: a TWAP that can fill, and a D4 that can fire.
+    /// R9-3: a TWAP that can fill and that the ring can span, and a D4 that can fire.
     fn check_reachable(&self, max_oracle_age_ms: u64) -> Result<(), RiskArgsError> {
         let window = self.twap_window_ms;
         let spacing = self.twap_min_spacing_ms;
@@ -93,6 +93,12 @@ impl RiskArgs {
             let fits = window.checked_div(spacing).unwrap_or(0);
             if u64::from(self.twap_min_obs) > fits {
                 return refuse("twap_min_obs");
+            }
+            // The ring keeps `TWAP_MIN_OBS_MAX` samples at least `spacing` apart, and a new one
+            // evicts the oldest. A longer window could be cut to the ring's span by observing
+            // once per spacing; at this bound the ring always spans at least 7/8 of the window.
+            if window > u64::from(TWAP_MIN_OBS_MAX).saturating_mul(spacing) {
+                return refuse("twap_window_ms");
             }
         }
         let stale = self.stale_bid_max_age_ms;
@@ -136,11 +142,12 @@ mod tests {
 
     const MAX_AGE: u64 = 86_400_000;
 
-    /// TWAP on at the minimum window, everything else at its lowest nonzero bound, D4 off.
+    /// TWAP on at the minimum window with 6 spacings in it, the other fields at their lowest
+    /// nonzero bound, D4 off.
     fn base() -> RiskArgs {
         RiskArgs {
             twap_window_ms: 60_000,
-            twap_min_spacing_ms: 1_000,
+            twap_min_spacing_ms: 10_000,
             twap_min_obs: 1,
             max_spot_twap_dev_bps: 100,
             stale_bid_max_age_ms: 0,
@@ -177,14 +184,16 @@ mod tests {
     fn risk_args_bounds_are_inclusive() {
         let b = base();
         assert_eq!(field(b), Ok(()));
-        for (w, ok) in [
-            (59_999, false),
-            (60_000, true),
-            (86_400_000, true),
-            (86_400_001, false),
+        // The spacing is an eighth of the longest window, so the ring bound passes there.
+        for (w, spacing, ok) in [
+            (59_999, 10_000, false),
+            (60_000, 10_000, true),
+            (86_400_000, 10_800_000, true),
+            (86_400_001, 10_800_000, false),
         ] {
             let r = field(RiskArgs {
                 twap_window_ms: w,
+                twap_min_spacing_ms: spacing,
                 ..b
             });
             assert_eq!(r, if ok { Ok(()) } else { Err("twap_window_ms") }, "{w}");
@@ -250,8 +259,10 @@ mod tests {
             }),
             Err("twap_min_spacing_ms")
         );
+        // 8 samples need 8 spacings in the window: 60_000 = 8 · 7_500.
         assert_eq!(
             field(RiskArgs {
+                twap_min_spacing_ms: 7_500,
                 twap_min_obs: TWAP_MIN_OBS_MAX,
                 ..b
             }),
@@ -259,22 +270,50 @@ mod tests {
         );
         assert_eq!(TWAP_MIN_OBS_MAX, 8);
         // D4 at the longest stale window: R9-3 needs the feed max age below it and the window
-        // above `max_age + (min_obs - 2) · spacing`, so a 600_000 ms feed and the longest window.
+        // above `max_age + (min_obs - 2) · spacing`. The longest window needs a spacing of an
+        // eighth of it, and the spacing may not exceed the feed max age, so a 10_800_000 ms feed.
         let d4 = RiskArgs {
             twap_window_ms: TWAP_WINDOW_MAX_MS,
+            twap_min_spacing_ms: 10_800_000,
             stale_bid_max_age_ms: MAX_ORACLE_AGE_MS,
             ..b
         };
         assert_eq!(MAX_ORACLE_AGE_MS, 86_400_000);
-        assert_eq!(d4.validate(600_000), Ok(()));
+        assert_eq!(d4.validate(10_800_000), Ok(()));
         assert_eq!(
             RiskArgs {
                 stale_bid_max_age_ms: MAX_ORACLE_AGE_MS.checked_add(1).expect("fits"),
                 ..d4
             }
-            .validate(600_000)
+            .validate(10_800_000)
             .map_err(|e| e.field),
             Err("stale_bid_max_age_ms")
+        );
+    }
+
+    /// The window is at most 8 spacings, the ring's capacity: a longer one could be cut short by
+    /// observing once per spacing, since each new sample past 8 evicts the oldest.
+    #[test]
+    fn risk_args_refuse_a_window_longer_than_the_ring() {
+        let b = base();
+        let at_ring = RiskArgs {
+            twap_window_ms: 80_000,
+            ..b
+        };
+        assert_eq!(field(at_ring), Ok(()));
+        let past_ring = RiskArgs {
+            twap_window_ms: 80_001,
+            ..b
+        };
+        assert_eq!(field(past_ring), Err("twap_window_ms"));
+        // The settings the bound exists for: a long window of 1 s samples.
+        assert_eq!(
+            field(RiskArgs {
+                twap_window_ms: TWAP_WINDOW_MAX_MS,
+                twap_min_spacing_ms: TWAP_SPACING_MIN_MS,
+                ..b
+            }),
+            Err("twap_window_ms")
         );
     }
 

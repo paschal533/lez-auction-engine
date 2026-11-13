@@ -1,8 +1,9 @@
 //! The Tier 2 risk features end to end on a live LEZ v0.4.0-rc1 sequencer, through the SDK (Plan 9
-//! Task 12), with the time-compressed values of Plan 9 ruling R9-13:
+//! Task 12), with the time-compressed values of Plan 9 ruling R9-13 (its spacing raised from 10 s
+//! to 40 s, so the window is at most 8 spacings, the ring's capacity):
 //!
 //! 1. `Init` (legacy engine params), then `SetCollateral` with the R9-13 `RiskArgs` (window
-//!    300_000 ms, spacing 10_000 ms, `min_obs` 3, breaker 2_000 bps, stale window 600_000 ms) and
+//!    300_000 ms, spacing 40_000 ms, `min_obs` 3, breaker 2_000 bps, stale window 600_000 ms) and
 //!    collateral (`max_oracle_age_ms` 180_000, `max_conf_bps` 100, `band_hi_bps` 15_000).
 //! 2. A large unsafe position P1 and a tiny one P2 (the lot-3 case), and a funded bidder.
 //! 3. `Liquidate` P1 is refused during the TWAP warm-up (6070, `TwapUnavailable`): simulated, not
@@ -13,7 +14,7 @@
 //! 6. `SetPauseLevel 1`, then a partial bid on P1 fills (level 1 stops liquidations, not bids).
 //! 7. No more publishing until the feed is stale (`now + slack > ts + 180_000`); a final bid on P1
 //!    fills as a D4 fallback bid at the last-good TWAP and settles the auction. R9-3 makes D4
-//!    reachable: 300_000 > 180_000 + (3 - 2) · 10_000, and 600_000 > 180_000.
+//!    reachable: 300_000 > 180_000 + (3 - 2) · 40_000, and 600_000 > 180_000.
 //! 8. `SetPauseLevel 3`: `ClaimLeftover` on P1 and `SettleEmpty` on P2 still run.
 //!
 //! Prints each transaction's hash, simulated cycles, `gas_limit` and fee, and `tier2 complete` on
@@ -48,8 +49,8 @@ const CONFIDENCE: u128 = PRICE_RAY / 200;
 const SALT: u64 = 1;
 /// The R9-13 feed max age, ms.
 const MAX_AGE_MS: u64 = 180_000;
-/// The R9-13 sample spacing, ms.
-const SPACING_MS: u64 = 10_000;
+/// The sample spacing, ms: the 300 s window is at most 8 spacings, the ring's capacity.
+const SPACING_MS: u64 = 40_000;
 /// P1: the scenario of `harness/tests/cycles.rs`, collateral 500_000, debt 600_000.
 const COLLATERAL: u128 = 500_000;
 const DEBT: u128 = 600_000;

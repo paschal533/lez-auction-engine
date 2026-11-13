@@ -6,6 +6,7 @@
 extern crate alloc;
 
 pub mod args;
+pub mod engine_ext;
 pub mod error;
 pub mod feed;
 mod kani_proofs;
@@ -20,6 +21,10 @@ pub mod twap;
 pub use args::{
     DEV_MAX_BPS, DEV_MIN_BPS, RiskArgs, RiskArgsError, TWAP_MIN_OBS_MAX, TWAP_SPACING_MIN_MS,
     TWAP_WINDOW_MAX_MS, TWAP_WINDOW_MIN_MS,
+};
+pub use engine_ext::{
+    EngineExtArgs, REF_CLAMP_MAX_BPS, REF_CONF_MAX_BPS, RELIST_DELAY_MAX_MS, RELIST_DELAY_MIN_MS,
+    SANITY_HI_MAX_BPS, SANITY_LO_MIN_BPS,
 };
 pub use error::RiskError;
 pub use feed::{

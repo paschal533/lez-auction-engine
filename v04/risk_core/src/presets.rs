@@ -2,6 +2,30 @@
 //! which only the SDK and the harness enable: on-chain code carries no production values (F8).
 
 use crate::args::RiskArgs;
+use crate::engine_ext::EngineExtArgs;
+
+impl EngineExtArgs {
+    /// v04 as built: 10 % reference confidence, 20 % clamp, 10 min relist delay, a 50 %..200 %
+    /// sanity window and the reference oracle read at scale 0.
+    #[must_use]
+    pub const fn legacy() -> Self {
+        Self {
+            ref_conf_bps: 1_000,
+            ref_clamp_bps: 2_000,
+            debt_relist_delay_ms: 600_000,
+            ref_sanity_lo_bps: 5_000,
+            ref_sanity_hi_bps: 20_000,
+            ref_scale: 0,
+        }
+    }
+
+    /// The production proposal: the same values as [`Self::legacy`] (spec §3.9: E9 is about who
+    /// chooses, not what).
+    #[must_use]
+    pub const fn recommended() -> Self {
+        Self::legacy()
+    }
+}
 
 impl RiskArgs {
     /// v04 as built: TWAP, deviation breaker and D4 all off.

@@ -38,7 +38,7 @@ pub struct RiskArgsError {
     pub field: &'static str,
 }
 
-const fn refuse(field: &'static str) -> Result<(), RiskArgsError> {
+pub(crate) const fn refuse(field: &'static str) -> Result<(), RiskArgsError> {
     Err(RiskArgsError { field })
 }
 

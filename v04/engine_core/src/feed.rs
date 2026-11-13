@@ -33,11 +33,18 @@ pub struct Observed {
     pub conf_bps: u16,
 }
 
-/// The type's feed policy. Plan 9 runs every type under v0.2.4's policy (sanity `[R/2, 2R]`,
-/// no pin bounds). A free fn rather than a `CollateralState` method: `state.rs` is at its size
-/// limit.
+/// The type's feed policy: v0.2.4's feed parameters with the sanity window and the pin bounds
+/// from the type's `RiskArgs`. A free fn rather than a `CollateralState` method: `state.rs` is at
+/// its size limit.
 pub fn feed_policy(coll: &CollateralState) -> Result<FeedPolicy, EngineError> {
-    Ok(FeedPolicy::legacy(&coll.feed_params()?))
+    let risk = &coll.ext.risk;
+    Ok(FeedPolicy {
+        sanity_lo_bps: risk.sanity_lo_bps,
+        sanity_hi_bps: risk.sanity_hi_bps,
+        feed_min_raw: risk.feed_min_raw,
+        feed_max_raw: risk.feed_max_raw,
+        ..FeedPolicy::legacy(&coll.feed_params()?)
+    })
 }
 
 /// One pause observation at `now_ms` (policy (b), ADR-007). `feed_valid` comes from
@@ -156,6 +163,21 @@ mod tests {
             last_seen_oracle_ts: None,
             ..coll()
         }
+    }
+
+    #[test]
+    fn sanity_window_is_a_parameter() {
+        let wide = OracleReading {
+            price_raw: 3 * RAY,
+            ..reading(0)
+        };
+        let legacy = fresh();
+        let obs = observe(&legacy, &wide, RAY, 0, 0).expect("observes");
+        assert_eq!(obs.feed, Err(PauseReason::OutOfRange));
+        let mut widened = fresh();
+        widened.ext.risk.sanity_hi_bps = 40_000;
+        let obs = observe(&widened, &wide, RAY, 0, 0).expect("observes");
+        assert_eq!(obs.feed, Ok(3 * RAY));
     }
 
     #[test]

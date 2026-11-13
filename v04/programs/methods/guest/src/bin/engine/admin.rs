@@ -470,7 +470,7 @@ pub fn on_set_collateral(
     }
     args.validate(config.global_cap)
         .unwrap_or_else(|err| fail(err));
-    validate_risk(risk, args.max_oracle_age_ms).unwrap_or_else(|err| fail(err));
+    validate_risk(risk, args).unwrap_or_else(|err| fail(err));
     let k = input.receiver.account_id;
     let configure = EngineMsg::Configure {
         collateral_def,
@@ -593,6 +593,12 @@ fn fresh_collateral(
             twap_min_obs: 0,
             max_spot_twap_dev_bps: 0,
             stale_bid_max_age_ms: 0,
+            sanity_lo_bps: 5_000,
+            sanity_hi_bps: 20_000,
+            feed_min_raw: 0,
+            feed_max_raw: u128::MAX,
+            grace_ms: 0,
+            grace_min_gap_ms: 0,
         }),
     }
 }

@@ -1,7 +1,7 @@
 //! The Tier 2 state extensions (spec §3.0): `ConfigState.ext` and `CollateralState.ext`, each
 //! appended last so every earlier field keeps its offset.
 
-use auction_engine_params::EngineError;
+use auction_engine_params::{EngineError, args::CollateralArgs};
 use borsh::{BorshDeserialize, BorshSerialize};
 use risk_core::{EngineExtArgs, RiskArgs, TwapRing};
 
@@ -70,8 +70,8 @@ impl CollateralState {
 }
 
 /// `RiskArgs::validate` as an engine refusal: any out-of-bound field is `InvalidConfig`.
-pub fn validate_risk(risk: &RiskArgs, max_oracle_age_ms: u64) -> Result<(), EngineError> {
-    risk.validate(max_oracle_age_ms)
+pub fn validate_risk(risk: &RiskArgs, args: &CollateralArgs) -> Result<(), EngineError> {
+    risk.validate(args.max_oracle_age_ms, args.band_lo_bps, args.band_hi_bps)
         .map_err(|_| EngineError::InvalidConfig)
 }
 
@@ -136,11 +136,23 @@ mod tests {
             twap_window_ms: 1,
             ..RiskArgs::legacy()
         };
+        let args = CollateralArgs {
+            max_oracle_age_ms: 3_600_000,
+            band_lo_bps: 9_000,
+            band_hi_bps: 11_000,
+            ..CollateralArgs::defaults_for_tests()
+        };
+        assert_eq!(validate_risk(&bad, &args), Err(EngineError::InvalidConfig));
+        assert_eq!(validate_risk(&RiskArgs::legacy(), &args), Ok(()));
+        // The sanity window must contain the type's own band.
+        let narrow = RiskArgs {
+            sanity_lo_bps: 9_001,
+            ..RiskArgs::legacy()
+        };
         assert_eq!(
-            validate_risk(&bad, 3_600_000),
+            validate_risk(&narrow, &args),
             Err(EngineError::InvalidConfig)
         );
-        assert_eq!(validate_risk(&RiskArgs::legacy(), 3_600_000), Ok(()));
     }
 
     #[test]

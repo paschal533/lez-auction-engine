@@ -77,6 +77,7 @@ const fn risk_args() -> RiskArgs {
         twap_min_obs: 3,
         max_spot_twap_dev_bps: 2_000,
         stale_bid_max_age_ms: 600_000,
+        ..RiskArgs::legacy()
     }
 }
 
@@ -415,8 +416,9 @@ async fn scenario(run: &mut Run) -> Res<()> {
 
 #[tokio::main]
 async fn main() -> Res<()> {
+    let bands = collateral_args();
     risk_args()
-        .validate(MAX_AGE_MS)
+        .validate(MAX_AGE_MS, bands.band_lo_bps, bands.band_hi_bps)
         .map_err(|err| format!("R9-3 refuses the stage's RiskArgs at {}", err.field))?;
     let programs = Programs::from_env()?;
     let slack_ms = sdk::session::slack_ms_from_env()?;

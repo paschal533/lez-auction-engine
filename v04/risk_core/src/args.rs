@@ -4,6 +4,8 @@
 
 use auction_core::price::MAX_ORACLE_AGE_MS;
 
+use crate::engine_ext::{SANITY_HI_MAX_BPS, SANITY_LO_MIN_BPS};
+
 /// Shortest nonzero TWAP window, ms (1 min).
 pub const TWAP_WINDOW_MIN_MS: u64 = 60_000;
 /// Longest TWAP window, ms (24 h).
@@ -16,9 +18,13 @@ pub const TWAP_MIN_OBS_MAX: u8 = 8;
 pub const DEV_MIN_BPS: u16 = 100;
 /// Widest spot-vs-TWAP band, bps.
 pub const DEV_MAX_BPS: u16 = 5_000;
+/// Longest grace period and longest minimum outage gap, ms (24 h).
+pub const GRACE_MAX_MS: u64 = 86_400_000;
 
-/// Per-type TWAP, deviation-breaker and D4 parameters. `twap_window_ms = 0` turns the TWAP off,
-/// `max_spot_twap_dev_bps = 0` the breaker, `stale_bid_max_age_ms = 0` D4.
+/// Per-type TWAP, deviation-breaker, D4, feed-window and grace parameters. `twap_window_ms = 0`
+/// turns the TWAP off, `max_spot_twap_dev_bps = 0` the breaker, `stale_bid_max_age_ms = 0` D4,
+/// `grace_ms = 0` the grace period. `sanity_*_bps` is the feed's sanity window around the
+/// redemption price and `feed_min_raw..feed_max_raw` the feed's own answer bounds (Plan 10, R10-7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(
     feature = "borsh",
@@ -30,6 +36,12 @@ pub struct RiskArgs {
     pub twap_min_obs: u8,
     pub max_spot_twap_dev_bps: u16,
     pub stale_bid_max_age_ms: u64,
+    pub sanity_lo_bps: u32,
+    pub sanity_hi_bps: u32,
+    pub feed_min_raw: u128,
+    pub feed_max_raw: u128,
+    pub grace_ms: u64,
+    pub grace_min_gap_ms: u64,
 }
 
 /// The first field [`RiskArgs::validate`] refused.
@@ -50,12 +62,45 @@ impl RiskArgs {
         self.stale_bid_max_age_ms > 0 && self.twap_window_ms > 0
     }
 
-    /// Checks the §3.1.6 and §3.2.4 ranges, then the Plan 9 ruling R9-3 bounds, in that fixed
-    /// order; the first failure is returned. `max_oracle_age_ms` is the type's feed max age.
-    pub fn validate(&self, max_oracle_age_ms: u64) -> Result<(), RiskArgsError> {
+    /// Checks the §3.1.6 and §3.2.4 ranges, then the Plan 9 ruling R9-3 bounds, then the Plan 10
+    /// feed-window and grace bounds (R10-7), in that fixed order; the first failure is returned.
+    /// `max_oracle_age_ms` and the two band edges are the type's own.
+    pub fn validate(
+        &self,
+        max_oracle_age_ms: u64,
+        band_lo_bps: u32,
+        band_hi_bps: u32,
+    ) -> Result<(), RiskArgsError> {
         self.check_ranges()?;
         self.check_reachable(max_oracle_age_ms)?;
-        self.check_off()
+        self.check_off()?;
+        self.check_feed_and_grace(band_lo_bps, band_hi_bps)
+    }
+
+    /// R10-7: the sanity window must contain the type's band, the pin bounds must be ordered,
+    /// and a grace period needs a nonzero outage gap (else it would start on every reading).
+    fn check_feed_and_grace(
+        &self,
+        band_lo_bps: u32,
+        band_hi_bps: u32,
+    ) -> Result<(), RiskArgsError> {
+        if !(SANITY_LO_MIN_BPS..=band_lo_bps).contains(&self.sanity_lo_bps) {
+            return refuse("sanity_lo_bps");
+        }
+        if !(band_hi_bps..=SANITY_HI_MAX_BPS).contains(&self.sanity_hi_bps) {
+            return refuse("sanity_hi_bps");
+        }
+        if self.feed_min_raw >= self.feed_max_raw {
+            return refuse("feed_min_raw");
+        }
+        if self.grace_ms > GRACE_MAX_MS {
+            return refuse("grace_ms");
+        }
+        if self.grace_min_gap_ms > GRACE_MAX_MS || (self.grace_ms > 0 && self.grace_min_gap_ms == 0)
+        {
+            return refuse("grace_min_gap_ms");
+        }
+        Ok(())
     }
 
     /// The §3.1.6 and §3.2.4 ranges, field by field.
@@ -141,6 +186,23 @@ mod tests {
     use super::*;
 
     const MAX_AGE: u64 = 86_400_000;
+    const BAND_LO: u32 = 9_000;
+    const BAND_HI: u32 = 11_000;
+
+    /// The six Plan 10 fields at their legacy values (the presets are behind a feature).
+    const OFF_FEED: RiskArgs = RiskArgs {
+        twap_window_ms: 0,
+        twap_min_spacing_ms: 0,
+        twap_min_obs: 0,
+        max_spot_twap_dev_bps: 0,
+        stale_bid_max_age_ms: 0,
+        sanity_lo_bps: 5_000,
+        sanity_hi_bps: 20_000,
+        feed_min_raw: 0,
+        feed_max_raw: u128::MAX,
+        grace_ms: 0,
+        grace_min_gap_ms: 0,
+    };
 
     /// TWAP on at the minimum window with 6 spacings in it, the other fields at their lowest
     /// nonzero bound, D4 off.
@@ -151,11 +213,12 @@ mod tests {
             twap_min_obs: 1,
             max_spot_twap_dev_bps: 100,
             stale_bid_max_age_ms: 0,
+            ..OFF_FEED
         }
     }
 
     fn field(r: RiskArgs) -> Result<(), &'static str> {
-        r.validate(MAX_AGE).map_err(|e| e.field)
+        r.validate(MAX_AGE, BAND_LO, BAND_HI).map_err(|e| e.field)
     }
 
     #[test]
@@ -176,8 +239,14 @@ mod tests {
     #[cfg(feature = "presets")]
     #[test]
     fn legacy_and_recommended_presets_validate() {
-        assert_eq!(RiskArgs::legacy().validate(3_600_000), Ok(()));
-        assert_eq!(RiskArgs::recommended().validate(600_000), Ok(()));
+        assert_eq!(
+            RiskArgs::legacy().validate(3_600_000, BAND_LO, BAND_HI),
+            Ok(())
+        );
+        assert_eq!(
+            RiskArgs::recommended().validate(600_000, BAND_LO, BAND_HI),
+            Ok(())
+        );
     }
 
     #[test]
@@ -279,13 +348,13 @@ mod tests {
             ..b
         };
         assert_eq!(MAX_ORACLE_AGE_MS, 86_400_000);
-        assert_eq!(d4.validate(10_800_000), Ok(()));
+        assert_eq!(d4.validate(10_800_000, BAND_LO, BAND_HI), Ok(()));
         assert_eq!(
             RiskArgs {
                 stale_bid_max_age_ms: MAX_ORACLE_AGE_MS.checked_add(1).expect("fits"),
                 ..d4
             }
-            .validate(10_800_000)
+            .validate(10_800_000, BAND_LO, BAND_HI)
             .map_err(|e| e.field),
             Err("stale_bid_max_age_ms")
         );
@@ -319,13 +388,7 @@ mod tests {
 
     #[test]
     fn twap_off_requires_every_field_zero() {
-        let off = RiskArgs {
-            twap_window_ms: 0,
-            twap_min_spacing_ms: 0,
-            twap_min_obs: 0,
-            max_spot_twap_dev_bps: 0,
-            stale_bid_max_age_ms: 0,
-        };
+        let off = OFF_FEED;
         assert_eq!(field(off), Ok(()));
         assert_eq!(
             field(RiskArgs {
@@ -355,7 +418,7 @@ mod tests {
     fn risk_args_reject_unreachable_twap_and_dead_d4() {
         let r = RiskArgs::recommended();
         assert_eq!(
-            r.validate(299_999).map_err(|e| e.field),
+            r.validate(299_999, BAND_LO, BAND_HI).map_err(|e| e.field),
             Err("twap_min_spacing_ms")
         );
         assert_eq!(
@@ -363,7 +426,7 @@ mod tests {
                 twap_min_obs: 7,
                 ..r
             }
-            .validate(600_000)
+            .validate(600_000, BAND_LO, BAND_HI)
             .map_err(|e| e.field),
             Err("twap_min_obs")
         );
@@ -372,7 +435,7 @@ mod tests {
                 stale_bid_max_age_ms: 600_000,
                 ..r
             }
-            .validate(600_000)
+            .validate(600_000, BAND_LO, BAND_HI)
             .map_err(|e| e.field),
             Err("stale_bid_max_age_ms")
         );
@@ -382,7 +445,7 @@ mod tests {
                 twap_window_ms: 900_000,
                 ..r
             }
-            .validate(600_000)
+            .validate(600_000, BAND_LO, BAND_HI)
             .map_err(|e| e.field),
             Err("twap_window_ms")
         );
@@ -391,7 +454,7 @@ mod tests {
                 twap_window_ms: 900_001,
                 ..r
             }
-            .validate(600_000),
+            .validate(600_000, BAND_LO, BAND_HI),
             Ok(())
         );
         assert_eq!(
@@ -400,7 +463,7 @@ mod tests {
                 stale_bid_max_age_ms: 0,
                 ..r
             }
-            .validate(600_000),
+            .validate(600_000, BAND_LO, BAND_HI),
             Ok(())
         );
         assert_eq!(
@@ -408,9 +471,93 @@ mod tests {
                 max_spot_twap_dev_bps: 2_000,
                 ..RiskArgs::legacy()
             }
-            .validate(600_000)
+            .validate(600_000, BAND_LO, BAND_HI)
             .map_err(|e| e.field),
             Err("max_spot_twap_dev_bps")
         );
+    }
+
+    #[test]
+    fn sanity_window_bounds_are_inclusive() {
+        let ok = |r: RiskArgs| field(r);
+        for (lo, good) in [(999, false), (1_000, true), (9_000, true), (9_001, false)] {
+            let r = ok(RiskArgs {
+                sanity_lo_bps: lo,
+                ..base()
+            });
+            assert_eq!(r, if good { Ok(()) } else { Err("sanity_lo_bps") }, "{lo}");
+        }
+        for (hi, good) in [
+            (10_999, false),
+            (11_000, true),
+            (100_000, true),
+            (100_001, false),
+        ] {
+            let r = ok(RiskArgs {
+                sanity_hi_bps: hi,
+                ..base()
+            });
+            assert_eq!(r, if good { Ok(()) } else { Err("sanity_hi_bps") }, "{hi}");
+        }
+    }
+
+    #[test]
+    fn pin_bounds_must_be_ordered() {
+        for (min, max, good) in [
+            (0, u128::MAX, true),
+            (5, 6, true),
+            (6, 6, false),
+            (7, 6, false),
+        ] {
+            let r = field(RiskArgs {
+                feed_min_raw: min,
+                feed_max_raw: max,
+                ..base()
+            });
+            assert_eq!(
+                r,
+                if good { Ok(()) } else { Err("feed_min_raw") },
+                "{min} {max}"
+            );
+        }
+    }
+
+    #[test]
+    fn grace_bounds_are_inclusive() {
+        let with = |grace_ms, grace_min_gap_ms| {
+            field(RiskArgs {
+                grace_ms,
+                grace_min_gap_ms,
+                ..base()
+            })
+        };
+        assert_eq!(with(86_400_000, 1), Ok(()));
+        assert_eq!(with(86_400_001, 1), Err("grace_ms"));
+        assert_eq!(with(1, 86_400_000), Ok(()));
+        assert_eq!(with(1, 86_400_001), Err("grace_min_gap_ms"));
+    }
+
+    #[test]
+    fn grace_needs_a_nonzero_min_gap() {
+        let with = |grace_ms, grace_min_gap_ms| {
+            field(RiskArgs {
+                grace_ms,
+                grace_min_gap_ms,
+                ..base()
+            })
+        };
+        assert_eq!(with(1, 0), Err("grace_min_gap_ms"));
+        assert_eq!(with(0, 5), Ok(()));
+    }
+
+    #[test]
+    fn grace_and_pins_work_with_the_twap_off() {
+        let r = RiskArgs {
+            grace_ms: 1_800_000,
+            grace_min_gap_ms: 600_000,
+            feed_min_raw: 1,
+            ..OFF_FEED
+        };
+        assert_eq!(field(r), Ok(()));
     }
 }

@@ -5,11 +5,11 @@
 //! re-exported here.
 
 use auction_core::{
-    error::PauseReason,
-    price::{FeedParams, MAX_CONF_BPS, OracleScale, effective_ref_price, validate_feed},
+    price::OracleScale,
     system::{close_debt, close_surplus, start_debt, start_surplus, take_debt, take_surplus},
 };
-use auction_engine_params::{EngineError, args::DEBT_RELIST_DELAY_MS};
+use auction_engine_params::EngineError;
+use risk_core::{FeedFault, FeedPolicy, effective_ref_price_ext, validate_feed_ext};
 
 pub use crate::solvency::check_solvency_op;
 use crate::{
@@ -29,32 +29,40 @@ pub fn implicit_settle(acc: &AccountingState, buffer: u128) -> (AccountingState,
 }
 
 /// The protocol token's reference price, RAY: the admin price; a configured reference oracle
-/// whose reading is valid (age against `now_ms + slack_ms` (ADR-058), confidence, within
-/// `[admin/2, 2·admin]`) overrides it, clamped to ±20 % of the admin price. A missing, invalid or
-/// undecodable reading falls back to the admin price (v0.2.4's `OutOfRange` fallback).
+/// whose reading is valid (age against `now_ms + slack_ms` (ADR-058), confidence, within the
+/// sanity window around `admin`, all from `ctx.ext`) overrides it, clamped to `ext.ref_clamp_bps`
+/// of the admin price. A missing, invalid or undecodable reading falls back to the admin price
+/// (v0.2.4's `OutOfRange` fallback), as does an unknown `ref_scale` (unreachable once validated).
 #[must_use]
 pub fn ref_price(ctx: &SystemCtx, reading: Option<RefReading>, now_ms: u64) -> u128 {
     let admin = ctx.ref_price_ray;
     if ctx.ref_oracle.is_none() {
         return admin;
     }
-    let params = FeedParams {
-        scale: OracleScale::Ray,
+    let scale = match ctx.ext.ref_scale {
+        0 => OracleScale::Ray,
+        1 => OracleScale::Q64x64,
+        _ => return admin,
+    };
+    let policy = FeedPolicy {
+        scale,
         max_age_ms: ctx.ref_max_age_ms,
-        max_conf_bps: MAX_CONF_BPS,
-        band_lo_bps: 10_000,
-        band_hi_bps: 10_000,
+        max_conf_bps: ctx.ext.ref_conf_bps,
+        sanity_lo_bps: ctx.ext.ref_sanity_lo_bps,
+        sanity_hi_bps: ctx.ext.ref_sanity_hi_bps,
+        feed_min_raw: 0,
+        feed_max_raw: u128::MAX,
     };
     let validity = match reading {
-        Some(RefReading::Valid(r)) => validate_feed(
+        Some(RefReading::Valid(r)) => validate_feed_ext(
             &r.to_core(),
-            &params,
+            &policy,
             admin,
             now_ms.saturating_add(ctx.slack_ms),
         ),
-        Some(RefReading::Undecodable) | None => Err(PauseReason::OutOfRange),
+        Some(RefReading::Undecodable) | None => Err(FeedFault::OutOfRange),
     };
-    effective_ref_price(admin, Some(validity))
+    effective_ref_price_ext(admin, Some(validity), ctx.ext.ref_clamp_bps)
 }
 
 /// v0.2.4 `start_surplus_auction` against the buffer's actual balance `buffer`: the implicit
@@ -153,16 +161,22 @@ pub fn close_surplus_op(
 }
 
 /// The debt start's checks before any read (v0.2.4 `start_debt_auction`): `nonce` is the
-/// accounting's next debt nonce, and the relist delay since the last debt auction's end has
-/// elapsed at the claimed time `now_ms` (ADR-039; the sum saturates, so an overflow blocks).
+/// accounting's next debt nonce, and the relist delay `relist_delay_ms` (the engine's
+/// `debt_relist_delay_ms`) since the last debt auction's end has elapsed at the claimed time
+/// `now_ms` (ADR-039; the sum saturates, so an overflow blocks).
 ///
 /// # Errors
 /// `NonceMismatch`, `DelayNotElapsed`.
-pub fn debt_precheck(acc: &AccountingState, nonce: u64, now_ms: u64) -> Result<(), EngineError> {
+pub fn debt_precheck(
+    acc: &AccountingState,
+    nonce: u64,
+    now_ms: u64,
+    relist_delay_ms: u64,
+) -> Result<(), EngineError> {
     if nonce != acc.debt_nonce {
         return Err(EngineError::NonceMismatch);
     }
-    let relist_at = acc.last_debt_end_ms.saturating_add(DEBT_RELIST_DELAY_MS);
+    let relist_at = acc.last_debt_end_ms.saturating_add(relist_delay_ms);
     if acc.last_debt_end_ms > 0 && now_ms < relist_at {
         return Err(EngineError::DelayNotElapsed);
     }
@@ -189,7 +203,7 @@ pub fn start_debt_op(
     now_ms: u64,
     nonce: u64,
 ) -> Result<(AccountingState, DebtAuctionState, u128), EngineError> {
-    debt_precheck(acc, nonce, now_ms)?;
+    debt_precheck(acc, nonce, now_ms, ctx.ext.debt_relist_delay_ms)?;
     let (settled, burned) = implicit_settle(acc, buffer);
     let buffer_after = buffer.checked_sub(burned).ok_or(EngineError::Math)?;
     let started = start_debt(
@@ -316,6 +330,7 @@ mod tests {
         ConfigState, OracleReadingRec, SchedulePointRec,
         fixtures::{actor, config, id},
     };
+    use auction_engine_params::args::DEBT_RELIST_DELAY_MS;
 
     const RAY: u128 = 1_000_000_000_000_000_000_000_000_000;
     const NOW: u64 = 10_000_000;
@@ -614,17 +629,17 @@ mod tests {
         };
         let delay = DEBT_RELIST_DELAY_MS;
         assert_eq!(
-            debt_precheck(&ended, 0, NOW + delay - 1),
+            debt_precheck(&ended, 0, NOW + delay - 1, delay),
             Err(EngineError::DelayNotElapsed)
         );
-        assert_eq!(debt_precheck(&ended, 0, NOW + delay), Ok(()));
-        assert_eq!(debt_precheck(&indebted(), 0, 0), Ok(()));
+        assert_eq!(debt_precheck(&ended, 0, NOW + delay, delay), Ok(()));
+        assert_eq!(debt_precheck(&indebted(), 0, 0, delay), Ok(()));
         let saturated = AccountingState {
             last_debt_end_ms: u64::MAX - 1,
             ..indebted()
         };
         assert_eq!(
-            debt_precheck(&saturated, 0, u64::MAX - 1),
+            debt_precheck(&saturated, 0, u64::MAX - 1, delay),
             Err(EngineError::DelayNotElapsed)
         );
     }

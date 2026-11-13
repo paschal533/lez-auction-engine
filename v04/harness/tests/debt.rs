@@ -19,6 +19,7 @@ use engine_core::{
     actors::{config_actor, debt_actor},
     check::fail_text,
     msg::EngineMsg,
+    risk_core::{EngineExtArgs, RiskArgs},
     system_state::SystemPhase,
 };
 use harness::{
@@ -302,6 +303,38 @@ fn relist_delay_boundary_uses_the_claimed_time() {
     expect_err(checked(&w, sent), EngineError::DelayNotElapsed);
     let sent = w.start_debt_at(1, relist);
     checked(&w, sent).expect("the delay elapsed at the claimed time");
+    assert_eq!(w.debt_state(1).start_ms, relist);
+}
+
+/// E9: the relist delay is the engine's `debt_relist_delay_ms`. A world initialised with 60_000
+/// starts a second debt auction 60_000 ms after the first ended; the legacy 600_000 refuses it.
+#[test]
+fn relist_delay_follows_the_engine_ext() {
+    const DELAY: u64 = 60_000;
+    let mut w = World::bare();
+    w.init_system_with_ext(
+        params(),
+        None,
+        World::collateral_args(),
+        RiskArgs::legacy(),
+        EngineExtArgs {
+            debt_relist_delay_ms: DELAY,
+            ..EngineExtArgs::legacy()
+        },
+    );
+    w.set_now_ms(T0);
+    w.book_shortfall();
+    w.fund_bidder(TAKER, TAKER_STABLE);
+    invariants::check(&w);
+    start(&mut w, 0).expect("starts");
+    take(&mut w, 0, u128::MAX, 0).expect("takes the lot");
+    assert_eq!(w.accounting_state().last_debt_end_ms, T0);
+    let relist = T0 + DELAY;
+    w.set_now_ms(relist + SLACK_MS - 1);
+    let sent = w.start_debt_at(1, relist - 1);
+    expect_err(checked(&w, sent), EngineError::DelayNotElapsed);
+    let sent = w.start_debt_at(1, relist);
+    checked(&w, sent).expect("the engine's delay elapsed at the claimed time");
     assert_eq!(w.debt_state(1).start_ms, relist);
 }
 

@@ -97,15 +97,53 @@ pub fn validate_feed_ext(
     Ok(m)
 }
 
+/// The admin price, overridden by a valid oracle price clamped to `±clamp_bps` of it (v0.2.4's
+/// `effective_ref_price` with the clamp lifted into a parameter; at 2_000 the results are equal).
+/// A missing or faulty reading gives the admin price. A `clamp_bps` of 0 pins the admin price.
+#[must_use]
+pub fn effective_ref_price_ext(
+    admin_ray: u128,
+    oracle: Option<Result<u128, FeedFault>>,
+    clamp_bps: u16,
+) -> u128 {
+    let Some(Ok(o)) = oracle else {
+        return admin_ray;
+    };
+    let clamp = u128::from(clamp_bps);
+    let lo = mul_div_floor(admin_ray, BPS.saturating_sub(clamp), BPS).unwrap_or(0);
+    let hi = mul_div_floor(admin_ray, BPS.saturating_add(clamp), BPS).unwrap_or(u128::MAX);
+    o.clamp(lo, hi)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use auction_core::{
         math::mul_div_floor,
-        price::{MAX_ORACLE_AGE_MS, validate_feed},
+        price::{MAX_ORACLE_AGE_MS, effective_ref_price, validate_feed},
         units::RAY,
     };
     use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn effective_ref_price_ext_matches_v024_at_2000(
+            admin in any::<u128>(), oracle in prop::option::of(prop::result::maybe_ok(any::<u128>(), Just(()))),
+        ) {
+            let v024 = oracle.map(|r| r.map_err(|()| PauseReason::OutOfRange));
+            let ext = oracle.map(|r| r.map_err(|()| FeedFault::OutOfRange));
+            prop_assert_eq!(
+                effective_ref_price_ext(admin, ext, 2_000),
+                effective_ref_price(admin, v024));
+        }
+    }
+
+    #[test]
+    fn ref_clamp_zero_pins_to_the_admin_price() {
+        for o in [0, RAY, 2 * RAY, 3 * RAY, u128::MAX] {
+            assert_eq!(effective_ref_price_ext(2 * RAY, Some(Ok(o)), 0), 2 * RAY);
+        }
+    }
 
     fn params(scale: OracleScale) -> FeedParams {
         FeedParams {

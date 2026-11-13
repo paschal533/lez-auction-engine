@@ -17,6 +17,8 @@ pub mod scratch;
 pub mod solvency;
 pub mod state;
 pub mod system;
+#[cfg(test)]
+mod system_ref_tests;
 pub mod system_state;
 
 pub use risk_core;

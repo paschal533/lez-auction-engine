@@ -8,6 +8,9 @@
 //! in `World::new_tier2`. The R9-13 e2e values are not used: R9-3 refuses them at
 //! `TIER2_MAX_AGE_MS`. A sample recorded at `now == ts` has no weight, so every measured row runs
 //! at least 1_000 ms after the newest sample.
+//!
+//! `Liquidate` and a partial `Bid` are measured a second time at a price of 2_000_000
+//! ([`HIGH`]), where `price · weight` of a TWAP term is past u128, against the same budgets.
 
 use engine_core::msg::EngineMsg;
 use harness::{
@@ -15,16 +18,54 @@ use harness::{
     bidding::Bidder,
     cycles::{Row, measured, proxied, table, write_table},
     tier2::tier2_collateral_args,
-    world::RAY,
+    world::{MIN_CR_RAY, RAY},
 };
 use lee::{AccountId, Actor, error::LeeError};
 use risk_core::{RiskArgs, TWAP_CAPACITY};
 
-const COLLATERAL: u128 = 500_000;
-const DEBT: u128 = 600_000;
+/// One measured world: the oracle price (= R), the host's minimum collateral ratio, and a
+/// position that is unsafe under them.
+#[derive(Clone, Copy)]
+struct Scenario {
+    price: u128,
+    min_cr_ray: u128,
+    collateral: u128,
+    debt: u128,
+    funds: u128,
+    /// A partial bid's coin in.
+    bid_in: u128,
+}
+
+/// `cycles.rs`'s scenario.
+const BASE: Scenario = Scenario {
+    price: P,
+    min_cr_ray: MIN_CR_RAY,
+    collateral: 500_000,
+    debt: 600_000,
+    funds: 1_000_000,
+    bid_in: 100_000,
+};
+/// [`BASE`]'s debt at a price of 2_000_000 RAY (2e33). A full spacing's weight is 300_000 ms
+/// and `2e33 · 300_000 > 2^128`, so the TWAP terms of full weight are past `risk_core::math`'s
+/// first route.
+///
+/// The mock host calls a position unsafe when `collateral · price < min_cr · debt`, and a bid
+/// pays `coin · price` collateral. At this price no lot is both unsafe at the host's 150 % and
+/// large enough to outlast the keeper reward (up to 50 coin, 1e8 collateral) and a partial bid,
+/// so the host's ratio is raised to the largest value. A bid that reaches the target does not
+/// exist here (the lot is worth 25_000 coin against 660_000), so only `Liquidate` and a partial
+/// `Bid` are measured; the final `Bid` prices through the same `bid_pricing` call.
+const HIGH: Scenario = Scenario {
+    price: 2_000_000_000_000_000_000_000_000_000_000_000,
+    min_cr_ray: u128::MAX,
+    collateral: 50_000_000_000,
+    debt: 600_000,
+    funds: 1_000_000,
+    bid_in: 5_000,
+};
+/// [`BASE`]'s target: the debt plus the 10 % penalty.
 const TARGET: u128 = 660_000;
-const FUNDS: u128 = 1_000_000;
-/// The oracle price, = R.
+/// The oracle price of [`BASE`], = R.
 const P: u128 = RAY / 2;
 /// The chain time the position opens at, ms.
 const T: u64 = 1_000_000;
@@ -32,14 +73,16 @@ const T: u64 = 1_000_000;
 const SPACING: u64 = 300_000;
 /// How long after the newest sample each measured row runs, ms.
 const AFTER_SAMPLE_MS: u64 = 1_000;
-/// A partial bid's coin in.
-const BID_IN: u128 = 100_000;
 
 /// Budgets (spec §4, ruling R9-10).
 const PARTIAL_BID_BUDGET: u64 = 520_000;
 const FINAL_BID_BUDGET: u64 = 720_000;
 const LIQUIDATE_BUDGET: u64 = 1_000_000;
 const SET_PAUSE_LEVEL_BUDGET: u64 = 400_000;
+/// Most a row may cost at [`HIGH`]'s price over the same row at [`BASE`]'s. The frozen division
+/// costs about 10,000 cycles a call (spike S4) and a full ring has 6 terms past u128, so a TWAP
+/// back on the frozen path would add about 60,000.
+const HIGH_PRICE_EXTRA: u64 = 20_000;
 /// Most a partial bid's cycles may differ between a ring of 1 sample and one of 8 (spec §3.1.9).
 const RING_FILL_SPREAD: u64 = 40_000;
 
@@ -67,14 +110,14 @@ fn later(w: &mut World, ms: u64) {
     w.set_now_ms(now);
 }
 
-/// The Tier 2 world under `risk` with one unsafe position, the ring warmed with `samples` samples
-/// at `P`, at `AFTER_SAMPLE_MS` past the newest.
-fn warmed(risk: RiskArgs, samples: u8) -> (World, AccountId) {
-    let mut w = World::new_tier2(risk);
+/// The Tier 2 world of `s` under `risk` with one unsafe position, the ring warmed with `samples`
+/// samples at the scenario's price, at `AFTER_SAMPLE_MS` past the newest.
+fn warmed(s: Scenario, risk: RiskArgs, samples: u8) -> (World, AccountId) {
+    let mut w = World::new_tier2_at(s.price, s.min_cr_ray, risk);
     w.set_now_ms(T);
-    let position = w.open_unsafe_position(COLLATERAL, DEBT);
-    w.set_price(P);
-    w.warm_twap(P, samples, SPACING);
+    let position = w.open_unsafe_position(s.collateral, s.debt);
+    w.set_price(s.price);
+    w.warm_twap(s.price, samples, SPACING);
     later(&mut w, AFTER_SAMPLE_MS);
     assert_eq!(ring_len(&w), usize::from(samples));
     (w, position)
@@ -113,10 +156,15 @@ const BUDGETS: [(&str, u64); 4] = [
     ("Bid (partial)", PARTIAL_BID_BUDGET),
     ("Bid (final)", FINAL_BID_BUDGET),
 ];
+/// The rows [`auction_rows`] measures.
+const AUCTION_BUDGETS: [(&str, u64); 2] = [
+    ("Liquidate", LIQUIDATE_BUDGET),
+    ("Bid (partial)", PARTIAL_BID_BUDGET),
+];
 
-/// Every budgeted row is present and fits its budget (and, by `measured`, the gas cap).
-fn assert_budgets(rows: &[Row]) {
-    for (instruction, budget) in BUDGETS {
+/// Every row of `budgets` is present and fits its budget (and, by `measured`, the gas cap).
+fn assert_budgets(rows: &[Row], budgets: &[(&str, u64)]) {
+    for &(instruction, budget) in budgets {
         let row = rows
             .iter()
             .find(|r| r.instruction == instruction)
@@ -165,29 +213,34 @@ fn admin_and_feed_rows(w: &mut World, rows: &mut Vec<Row>) {
     assert_eq!(ring_len(w), TWAP_CAPACITY);
 }
 
-#[test]
-fn tier2_rows_fit_the_budget() {
-    let mut rows = Vec::new();
-    let (mut w, position) = warmed(RiskArgs::recommended(), full_ring());
-    admin_and_feed_rows(&mut w, &mut rows);
-
+/// `Liquidate` and a partial `Bid` of scenario `s` on the full ring of `w`. Returns the bidder.
+fn auction_rows(s: Scenario, w: &mut World, position: AccountId, rows: &mut Vec<Row>) -> Bidder {
     rows.push(measured(
         "Liquidate",
         LIQUIDATE_EXECUTIONS,
-        liquidate_cycles(&w, position),
+        liquidate_cycles(w, position),
     ));
     w.liquidate(position, 0).expect("the keeper liquidates");
-    let bidder = w.fund_bidder("bidder", FUNDS);
-    assert_eq!(ring_len(&w), TWAP_CAPACITY);
+    let bidder = w.fund_bidder("bidder", s.funds);
+    assert_eq!(ring_len(w), TWAP_CAPACITY);
 
-    let partial = w.bid_msg(bidder.account, position, 0, (BID_IN, 0), w.now_ms);
+    let partial = w.bid_msg(bidder.account, position, 0, (s.bid_in, 0), w.now_ms);
     rows.push(measured(
         "Bid (partial)",
         PARTIAL_BID_EXECUTIONS,
-        bid_cycles(&w, &bidder, &partial, position),
+        bid_cycles(w, &bidder, &partial, position),
     ));
     w.send_bid(&partial, &[&bidder.key]).expect("partial bid");
-    assert_eq!(ring_len(&w), TWAP_CAPACITY);
+    assert_eq!(ring_len(w), TWAP_CAPACITY);
+    bidder
+}
+
+#[test]
+fn tier2_rows_fit_the_budget() {
+    let mut rows = Vec::new();
+    let (mut w, position) = warmed(BASE, RiskArgs::recommended(), full_ring());
+    admin_and_feed_rows(&mut w, &mut rows);
+    let bidder = auction_rows(BASE, &mut w, position, &mut rows);
     let last = w.bid_msg(bidder.account, position, 0, (TARGET, 0), w.now_ms);
     rows.push(measured(
         "Bid (final)",
@@ -199,7 +252,38 @@ fn tier2_rows_fit_the_budget() {
     let markdown = table(&rows);
     println!("{markdown}");
     write_table("cycles-v04-tier2.md", &markdown);
-    assert_budgets(&rows);
+    assert_budgets(&rows, &BUDGETS);
+}
+
+/// `Liquidate` and a partial `Bid` at [`HIGH`]'s price fit the same budgets and cost at most
+/// [`HIGH_PRICE_EXTRA`] more than at [`BASE`]'s: a TWAP term's `price · weight` is past u128
+/// there, and `risk_core::math` still divides natively.
+#[test]
+fn tier2_rows_fit_the_budget_at_a_high_price() {
+    let weight = u128::from(SPACING);
+    assert!(HIGH.price.checked_mul(weight).is_none(), "past route 1");
+    let mut rows = Vec::new();
+    let (mut w, position) = warmed(HIGH, RiskArgs::recommended(), full_ring());
+    auction_rows(HIGH, &mut w, position, &mut rows);
+
+    let markdown = table(&rows);
+    println!("{markdown}");
+    write_table("cycles-v04-tier2-high-price.md", &markdown);
+    assert_budgets(&rows, &AUCTION_BUDGETS);
+
+    let mut base_rows = Vec::new();
+    let (mut w, position) = warmed(BASE, RiskArgs::recommended(), full_ring());
+    auction_rows(BASE, &mut w, position, &mut base_rows);
+    assert_eq!(rows.len(), base_rows.len());
+    for (high, base) in rows.iter().zip(&base_rows) {
+        assert!(
+            high.cycles <= base.cycles.saturating_add(HIGH_PRICE_EXTRA),
+            "{}: {} at the high price, {} at the base price",
+            high.instruction,
+            high.cycles,
+            base.cycles
+        );
+    }
 }
 
 /// A partial bid's cycles with `samples` samples in the ring, `twap_min_obs` 1.
@@ -208,10 +292,15 @@ fn partial_bid_cycles(samples: u8) -> u64 {
         twap_min_obs: 1,
         ..RiskArgs::recommended()
     };
-    let (mut w, position) = warmed(risk, samples);
+    let (mut w, position) = warmed(BASE, risk, samples);
     w.liquidate(position, 0).expect("the keeper liquidates");
-    let bidder = w.fund_bidder("bidder", FUNDS);
-    let partial = w.bid_msg(bidder.account, position, 0, (BID_IN, 0), w.now_ms);
+    assert_eq!(
+        ring_len(&w),
+        usize::from(samples),
+        "liquidating adds no sample"
+    );
+    let bidder = w.fund_bidder("bidder", BASE.funds);
+    let partial = w.bid_msg(bidder.account, position, 0, (BASE.bid_in, 0), w.now_ms);
     let row = measured(
         "Bid (partial)",
         PARTIAL_BID_EXECUTIONS,

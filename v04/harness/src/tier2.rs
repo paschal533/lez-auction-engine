@@ -7,7 +7,7 @@ use engine_core::{msg::EngineMsg, state::CollateralState};
 use oracle_core::{OracleMsg, OracleState};
 use risk_core::RiskArgs;
 
-use crate::world::{Forward, RAY, SALT, World};
+use crate::world::{Forward, MIN_CR_RAY, RAY, SALT, World};
 
 /// The Tier 2 world's feed max age, ms. R9-3 needs it below the recommended preset's
 /// `stale_bid_max_age_ms` (3_600_000) and window less one spacing (1_800_000 - 300_000).
@@ -28,7 +28,19 @@ impl World {
     /// [`World::new`] at redemption price `RAY / 2` with [`tier2_collateral_args`] and `risk`.
     #[must_use]
     pub fn new_tier2(risk: RiskArgs) -> World {
-        World::new_with(RAY / 2, |_| {}, tier2_collateral_args(), risk)
+        World::new_tier2_at(RAY / 2, MIN_CR_RAY, risk)
+    }
+
+    /// [`World::new_tier2`] at redemption price `redemption_price_ray`, with the host's minimum
+    /// collateral ratio `min_cr_ray`.
+    #[must_use]
+    pub fn new_tier2_at(redemption_price_ray: u128, min_cr_ray: u128, risk: RiskArgs) -> World {
+        World::new_with(
+            redemption_price_ray,
+            |host| host.min_cr_ray = min_cr_ray,
+            tier2_collateral_args(),
+            risk,
+        )
     }
 
     /// [`World::new_tier2`] with the protocol token on and its genesis credited to the

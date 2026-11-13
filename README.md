@@ -13,7 +13,7 @@ A liquidation and auction engine for the Logos Execution Zone (LEZ), built as a 
 - SDK: plans, simulate-then-send with a fitted gas limit (ADR-061), block-level confirmation and the scanner (ADR-066).
 - CI: `v04.yml` runs fmt, clippy and `cargo test --workspace` on changes to `v04/` and the shared crates; green on `main`, run 42033888330.
 - End to end: `v04-e2e.yml` on a standalone sequencer with `RISC0_DEV_MODE=0`: run 42015414886 at 56876f5, green in 59m30s (cold cache); run 42033888263 at 5913f0a, green in 41m51s (warm) ([ci.md](docs/architecture/ci.md)).
-- Cycles and fees: [v04/CYCLES.md](v04/CYCLES.md). The most expensive measured instruction, `Liquidate`, uses under 9 % of the gas cap at the measured price (a fast-path figure; at high prices the Tier 2 `Liquidate` and `Bid` rows may cost more and are not measured, see v04/CYCLES.md).
+- Cycles and fees: [v04/CYCLES.md](v04/CYCLES.md). The most expensive measured instruction, `Liquidate`, uses under 9 % of the gas cap, measured at a price of 0.5 and again at 2,000,000 (the final `Bid` is measured at 0.5 only, see v04/CYCLES.md).
 - Waiting on upstream: the IDL and SPEL entrypoint (no SPEL for 0.4), the real host hooks (no lez-programs 0.4), the CLI and Basecamp module on `lez_core` 0.6.0, and a public 0.4 testnet. See [Dependencies](#dependencies).
 
 **v0.2.4 engine (LEZ v0.2.4, SPEL `1ef0500f`).** Plans 1 to 4 are merged to `main` (Plan 4 by PR #3).
@@ -35,7 +35,7 @@ Counted from the source by `scripts/count-tests.py`, one row per area. CI fails 
 <!-- test-counts:begin -->
 | Area | Tests |
 |---|---:|
-| 0.4 engine (v04/) | 381 |
+| 0.4 engine (v04/) | 385 |
 | v0.2.4 programs | 851 |
 | Shared crates | 344 |
 | CLI | 85 |
@@ -43,7 +43,7 @@ Counted from the source by `scripts/count-tests.py`, one row per area. CI fails 
 | Basecamp QML | 162 |
 | Core module C++ | 51 |
 | Python tooling | 113 |
-| **Total** | 1993 |
+| **Total** | 1997 |
 <!-- test-counts:end -->
 
 Counts include `#[ignore]`d tests (run by named jobs) and the six Kani harnesses (two in `crates/auction_core`, four in `v04/risk_core`), which are written but have never been run: no Kani toolchain is installed and no CI job runs them (SOFT2, ADR-015).

@@ -36,11 +36,11 @@ the whole of an outage. It weights each sample by how long it was the current pu
 clipped to `[anchor − window, anchor]`, stops at the first older sample that was current for
 longer than `max_oracle_age_ms` (a stale period breaks it), and is unavailable with fewer than
 `twap_min_obs` weighted samples. `T = Σ floor(p_i · w_i / Σw)`, so `T` lies in
-`[min p_i − 7, max p_i]` of the used samples (`twap_within_sample_range`). Limit, not enforced
-yet: because the ring holds 8 samples, the TWAP spans its whole window only while
-`twap_window_ms <= 8 · twap_min_spacing_ms`. Beyond that, one `ObserveFeed` per spacing interval
-keeps the average to about the last 7-8 intervals. The recommended preset is within the limit
-(6 samples per window).
+`[min p_i − 7, max p_i]` of the used samples (`twap_within_sample_range`). The ring holds 8
+samples, so `RiskArgs::validate` refuses `twap_window_ms > 8 · twap_min_spacing_ms`: a longer
+window could be cut to the ring's span by one `ObserveFeed` per spacing interval. At the bound a
+full ring spans at least 7 spacings, 7/8 of the window. The recommended preset has 6 spacings per
+window.
 
 **The price per operation (ADR-071, ADR-072).** Every engine price is a payout (collateral per
 coin), so each one takes the smaller `P`. With `conf_bps = ceil(c · 10_000 / M)` and
@@ -185,9 +185,10 @@ Tests: `stale_feed_bid_uses_the_last_good_twap`, `stale_feed_bid_refused_past_ma
 `floor_uses_the_capped_max_discount`, `fallback_price_clamped_to_the_floor`,
 `fallback_twap_follows_the_d4_conditions` (`v04/risk_core/src/stale.rs`). The Kani harness
 `fallback_price_never_breaches_the_floor` is written, not run (ADR-015). The `tier2` stage of
-`v04/scripts/e2e.sh` settles an auction with a fallback bid on a standalone sequencer; it ran once
-locally and passed; it has not run in CI yet. Its time-compressed window (300 s, 10 s spacing) is
-past the 8-sample ring limit (§1), so it exercises the flow, not TWAP manipulation resistance.
+`v04/scripts/e2e.sh` settles an auction with a fallback bid on a standalone sequencer; it passed
+locally with a 10 s spacing and again on 2026-11-13 with the 40 s spacing the ring bound needs
+(§1); it has not run in CI yet. It exercises the flow, not TWAP manipulation
+resistance.
 
 **Why bounded last-good TWAP, and not the two simpler rules:**
 
@@ -228,16 +229,13 @@ it ADJ (row 23 of its feature table).
 executions and 839,357 cycles, under 9% of the 10,000,000-cycle gas cap. A partial bid is 15
 executions and 407,700 cycles; a final bid 21 and 576,148. These are the 2026-11-03 figures, which
 the breakdown below uses. Re-measured 2026-11-11 after Plan 9, the execution counts are unchanged:
-under the legacy preset `Liquidate` is 845,645 cycles, and under the recommended preset with a full
-TWAP ring 883,636 (partial bid 431,669, final bid 606,461; `v04/CYCLES.md`, Tier 2 table). Those
-Tier 2 figures are fast-path figures at the price 0.5. Every TWAP term is guaranteed the fast path
-below a price limit, in collateral base units per coin base unit. For the recommended preset it is
-about 226,855 (its max age is below 1,500,000 ms). It is about 189,045 for a 30 min window when the
-max age is at least the window, and about 3,938 at a 24 h window and max age. Above the limit a
-term may take the frozen 128-step division: at most 8 per `Liquidate` or `Bid`. Other
-multiply-divides stay native to far higher prices. Those rows have not been measured, and whether
-they stay inside their assertions has not been established. So the budgets and "under 10 % of the
-cap" are established on the fast path only (ADR-070, open item).
+under the legacy preset `Liquidate` is 845,645 cycles. Re-measured 2026-11-12 under the recommended
+preset with a full TWAP ring it is 884,567 (partial bid 431,804, final bid 606,596;
+`v04/CYCLES.md`, Tier 2 table). Price does not move the TWAP's cost onto the frozen division:
+`risk_core::math` has two native routes: `x · y / d` when the product fits a u128, and otherwise `(x / d) · y + (x mod d) · y / d` when that second product fits, and a TWAP term always fits the second. At a price of 2,000,000 `Liquidate` is 888,662
+and a partial bid 434,981, inside the same budgets. The final bid is not measured at that price,
+and one call (`conf_bps`) can still take one frozen division at a confidence of about 34,000,000 or
+more (ADR-070).
 
 These figures include the whole conversation, not only the engine's counters: real token transfers
 through the token program, custody of the seized collateral in a per-auction vault, the host's own

@@ -157,7 +157,7 @@ every value arrives in the message. Changeable the same way as `CollateralArgs`;
 
 | Field | legacy | recommended | Bound in code (else `InvalidConfig`) | ADR |
 |---|---|---|---|---|
-| `twap_window_ms` | 0 (TWAP off) | 1_800_000 (30 min) | 0 or `TWAP_WINDOW_MIN_MS..=TWAP_WINDOW_MAX_MS` (60_000..=86_400_000); with D4 on (`stale_bid_max_age_ms > 0`), `> max_oracle_age_ms + (twap_min_obs − 2) · twap_min_spacing_ms` (saturating; `twap_min_obs − 2` floors at 0) (R9-3) | ADR-070, ADR-074 |
+| `twap_window_ms` | 0 (TWAP off) | 1_800_000 (30 min) | 0 or `TWAP_WINDOW_MIN_MS..=TWAP_WINDOW_MAX_MS` (60_000..=86_400_000); with D4 on (`stale_bid_max_age_ms > 0`), `> max_oracle_age_ms + (twap_min_obs − 2) · twap_min_spacing_ms` (saturating; `twap_min_obs − 2` floors at 0) (R9-3); TWAP on: `<= 8 · twap_min_spacing_ms` (the ring's capacity) | ADR-070, ADR-074 |
 | `twap_min_spacing_ms` | 0 | 300_000 (5 min) | TWAP on: `TWAP_SPACING_MIN_MS..=twap_window_ms` (1_000..); `<= max_oracle_age_ms` (R9-3); TWAP off: 0 | ADR-070 |
 | `twap_min_obs` | 0 | 3 | TWAP on: `1..=TWAP_MIN_OBS_MAX` (8); `<= twap_window_ms / twap_min_spacing_ms` (R9-3); TWAP off: 0 | ADR-070 |
 | `max_spot_twap_dev_bps` | 0 (breaker and bid anchor off) | 2_000 (±20 %) | 0 or `DEV_MIN_BPS..=DEV_MAX_BPS` (100..=5_000); nonzero only with the TWAP on | ADR-072 |
@@ -174,21 +174,21 @@ by its own range row, so the "TWAP off" rule decides only `twap_min_spacing_ms` 
 window 1_800_000 `> max_age + 300_000`). The harness's Tier 2 world uses 600_000
 (`TIER2_MAX_AGE_MS`, `v04/harness/src/tier2.rs`); `CollateralArgs::defaults_for_tests()`
 (3_600_000) refuses it. The e2e `tier2` stage uses a time-compressed copy (window 300_000, spacing
-10_000, `min_obs` 3, dev 2_000, stale 600_000, with `max_oracle_age_ms` 180_000). Its window is 30
-spacings, past the ring limit below, so the stage exercises the flow, not TWAP manipulation
-resistance.
+40_000, `min_obs` 3, dev 2_000, stale 600_000, with `max_oracle_age_ms` 180_000). Its window is 7.5
+spacings, inside the ring bound below. Its spacing is still below the stage's 60 s slack, so the
+stage exercises the flow, not TWAP manipulation resistance.
 
-**Known gap: window vs ring capacity (not enforced yet).** The ring holds `TWAP_CAPACITY` = 8
-samples, and the oldest has no weight before its own time. When `twap_window_ms > 8 ·
-twap_min_spacing_ms`, anyone calling the permissionless `ObserveFeed` once per spacing interval
-evicts older samples, so the TWAP covers only about the last 7-8 spacing intervals, not the
-configured window. Operators must keep `twap_window_ms <= 8 · twap_min_spacing_ms` for the TWAP to
-span its window. `RiskArgs::validate` does not check this yet; adding the check is a planned
-change, not made. The recommended preset is within it (1_800_000 / 300_000 = 6). Outside it, the
-bid anchor and the liquidation breaker track spot over that shorter span. A live bid still never
-pays more than `band(edge(M))` of a validated reading, and a D4 bid is still held at the stale
-floor (ADR-070, ADR-074). A related unenforced case: with `twap_min_spacing_ms <= slack_ms` one
-oracle publication can be recorded twice, because the sample time is the claimed `now` (ADR-070).
+**Window vs ring capacity (enforced).** The ring holds `TWAP_CAPACITY` = 8 samples, and the
+oldest has no weight before its own time. A window longer than 8 spacings could be cut short by
+anyone: one permissionless `ObserveFeed` per spacing interval evicts older samples. So
+`RiskArgs::validate` refuses `twap_window_ms > 8 · twap_min_spacing_ms` (field `twap_window_ms`,
+wire `InvalidConfig`; `risk_args_refuse_a_window_longer_than_the_ring`). At the bound, a full ring
+spans at least 7 spacings, so the TWAP always covers at least 7/8 of its window. The recommended
+preset has 6 spacings per window. Two consequences: the spacing may not exceed
+`max_oracle_age_ms` (R9-3), so the window is at most 8 feed max ages; and the longest window
+(24 h) needs a spacing of at least 3 h. A related unenforced case: with
+`twap_min_spacing_ms <= slack_ms` one oracle publication can be recorded twice, because the sample
+time is the claimed `now` (ADR-070).
 
 **Legacy is v04 as built, at confidence 0.** Legacy turns the TWAP, the breaker and D4 off, so
 every price is `band(edge(M))`. The confidence edge (ADR-071) is always on: with confidence 0, as

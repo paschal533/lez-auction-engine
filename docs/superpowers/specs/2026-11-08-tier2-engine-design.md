@@ -58,11 +58,10 @@ Anti-goals (failure even if it works)
 - A break of an existing v04 test or of `v04/scripts/e2e.sh` without a migration note in the same
   plan. The legacy preset (§3.0) exists so existing tests keep passing unchanged.
 - Per-bid or per-liquidation cycle growth that depends on history or input size. Every new loop is
-  bounded by a protocol limit (`TWAP_CAPACITY = 8`, `MAX_POINTS = 8`). As built (amended in the
-  Plan 9 final review): cost is bounded by a constant but **is** price-dependent. `risk_core::math`
-  takes a native division only while a product fits a u128, so above a price limit TWAP terms may
-  run the frozen 128-step division (§3.1.9). That growth is bounded (at most 8 terms), but it
-  depends on the input price; this goal is not met for price magnitude. Open item.
+  bounded by a protocol limit (`TWAP_CAPACITY = 8`, `MAX_POINTS = 8`). As built (amended after the
+  Plan 9 final review): the TWAP's cost does not move onto the frozen division with the price,
+  because `risk_core::math` divides every TWAP term natively (§3.1.9). One call, `conf_bps`, can
+  still take one frozen division at a very large confidence; that residue is recorded there.
 - A claim in the bid not backed by a test, run ID or record. No rival named.
 
 ### The frozen-guest rule (ADR-069)
@@ -174,10 +173,11 @@ push Sample{ts, M}; if len > 8 drop oldest; last_conf_bps = ceil(c * 10_000 / M)
 An invalid reading is never recorded. A reverted transaction drops its sample, as it drops its pause
 observation (ADR-032). Anyone can observe, but only the oracle publisher sets the values. The
 spacing rule caps recording at one sample per `twap_min_spacing_ms`, but it does not make extra
-observations harmless. As built (amended in the Plan 9 final review): the ring holds 8 samples, so
-when `twap_window_ms > 8 · twap_min_spacing_ms`, one permissionless `ObserveFeed` per spacing
-interval evicts older samples, and the TWAP spans only about the last 7-8 spacing intervals, not
-its window. `RiskArgs::validate` does not refuse such settings yet (ADR-070). The sample time is
+observations harmless. As built (amended after the Plan 9 final review): the ring holds 8 samples,
+so with `twap_window_ms > 8 · twap_min_spacing_ms` one permissionless `ObserveFeed` per spacing
+interval would evict older samples and cut the TWAP to the last 7-8 spacing intervals.
+`RiskArgs::validate` therefore refuses such settings (field `twap_window_ms`, ADR-070); at the
+bound a full ring spans at least 7/8 of the window. The sample time is
 the caller's claimed `now`, so it can sit up to `slack_ms` before the oracle's publish time; with
 `spacing <= slack_ms` one publication can be recorded twice.
 
@@ -212,9 +212,10 @@ run; amended in Plan 9 Task 14). The upper bound is exact. The lower one is not 
 floors away less than one unit, so `T` can sit up to 7 below the smallest price (prices 1 and 1
 with weights 1 and 2 give `T = 0`). Cost: at most 8 `mul_div_floor` calls. As built (Plan 9 Task 11,
 ADR-070) that is `risk_core::math::mul_div_floor`, not the frozen `auction_core::math` one: it gives
-exactly `auction_core`'s results but divides natively when `x · y` fits a u128, and calls the frozen
-128-step bit-serial division only otherwise, because that division costs about 10,000 guest cycles
-a call. The same wrapper serves `validate_feed_ext`'s confidence limit and sanity bounds,
+exactly `auction_core`'s results but divides natively when `x · y` fits a u128, or when
+`(x mod d) · y` does after splitting `x` by the divisor (always true for a TWAP term), and calls
+the frozen 128-step bit-serial division only otherwise, because that division costs about 10,000
+guest cycles a call. The same wrapper serves `validate_feed_ext`'s confidence limit and sanity bounds,
 `conf_bps`, `edge`, the TWAP anchor, `within_deviation`, the stale cap and the floored price. Two
 steps still call the frozen `auction_core::math::mul_div_floor`: `band`, which is
 `auction_core::price::bid_price` (two calls, for `R·lo` and `R·hi`) and ends every price in
@@ -304,25 +305,18 @@ TWAP at most 8 `mul_div_floor`; edge and anchor 3 more. Estimate for E1 alone ag
 `bid_cost_is_independent_of_ring_fill` (1 sample vs 8 samples differ by <= 40,000). The estimates are
 replaced by measurements in `v04/CYCLES.md` at the end of Plan 9.
 
-Measured (Plan 9, 2026-11-11, `RiskArgs::recommended()` with a full ring, at the price 0.5):
-`Bid (partial)` 431,669, `Bid (final)` 606,461, `Liquidate` 883,636, `ObserveFeed` 181,947,
-ring-fill spread 16,312; every budget holds at that price. These are fast-path figures (amended in
-the Plan 9 final review). A TWAP term `p · w` (RAY price times a weight of at most
-`min(twap_window_ms, max_oracle_age_ms)` ms) is guaranteed to fit a u128 while
-`p < 2^128 / min(window, max_age)`: the price below which every term takes the fast path. In
-collateral base units per coin base unit that is about 226,855 for the recommended preset at its
-largest accepted max age (1,499,999 ms). It is about 189,045 for a 1,800,000 ms window when the max
-age is at least the window, and about 3,938 at the 24 h maximum window and max age. Above the
-limit, only a term whose own `p · w` reaches 2^128 may take the frozen division: at most 8 per
-`Liquidate` or `Bid`. Every other multiply-divide stays native up to far higher prices (the sanity
-bound to a redemption price of about 17,000,000, the anchor to about 23,000,000, `edge` to about
-34,000,000). Slow-path rows have **not been measured**. Whether the rows stay inside their
-assertions just above the limit has not been established by measurement. The pre-change
-measurement with every multiply-divide on the frozen path (`Liquidate` 1,012,946, `Bid (partial)`
-561,253, `Bid (final)` 736,045, `SetPauseLevel` 407,582; ADR-070) is a loose upper bound,
-approached only at prices far above the limit where the remaining multiply-divides also switch.
-`SetPauseLevel` computes no TWAP. The budgets and "under 10 % of the cap" are established on the
-fast path only. Open item, not decided: a cheaper exact wide division in `risk_core::math`, or slow-path budgets. The estimate above priced each `mul_div_floor` as cheap; the frozen
+Measured (Plan 9, 2026-11-12, `RiskArgs::recommended()` with a full ring, at the price 0.5):
+`Bid (partial)` 431,804, `Bid (final)` 606,596, `Liquidate` 884,567, `ObserveFeed` 182,074,
+ring-fill spread 16,306; every budget holds. Amended after the Plan 9 final review:
+`risk_core::math` has two native routes: `x · y / d` when the product fits a u128, and otherwise `(x / d) · y + (x mod d) · y / d` when that second product fits. A TWAP term is `p · w / Σw` with both weights below 2^64, so it always fits the second
+route and never takes the frozen division, at any price. Measured at a price of 2,000,000, where
+`p · w` is past u128: `Liquidate` 888,662 and `Bid (partial)` 434,981, inside the same
+budgets. Not measured there: `Bid (final)` (the mock host admits no target-reaching bid at that
+price; it prices through the same call). One call can still switch: `conf_bps` takes one frozen
+division when the confidence, as a price, is about 34,000,000 or more. The measurement before
+`risk_core::math` existed, with every multiply-divide on the frozen division, was `Liquidate`
+1,012,946, `Bid (partial)` 561,253, `Bid (final)` 736,045, `SetPauseLevel` 407,582 (ADR-070).
+The estimate above priced each `mul_div_floor` as cheap; the frozen
 `auction_core::math` version is not (about 10,000 cycles a call), and with it the budgets failed,
 so the TWAP terms, the confidence edge, the anchor, the deviation test and the stale cap go through
 `risk_core::math`; the band clamp (`bid_price`) and the Q64x64 `to_ray` still call the frozen
@@ -479,10 +473,10 @@ config, `PauseLevelUpdate`, the 7-execution Observe block), ~330,000 cycles (com
 `SetCollateral`, 11 / 325,765).
 
 Measured (Plan 9, recommended preset, full ring): `SetPauseLevel` is 12 executions (hand-counted)
-and 360,079 cycles, 3.6 % of the cap, asserted `<= 400,000`. This is a recorded deviation from the
+and 360,206 cycles, 3.6 % of the cap, asserted `<= 400,000`. This is a recorded deviation from the
 estimate and from §4's "< 3 % of cap" (Plan 9 ruling R9-10, ADR-070): the row carries the whole
-7-execution Observe block (`ObserveFeed` alone is 181,947), and `SetCollateral`, at 11 executions,
-measures 359,048, so 300,000 is not reachable without restructuring the message.
+7-execution Observe block (`ObserveFeed` alone is 182,074), and `SetCollateral`, at 11 executions,
+measures 359,182, so 300,000 is not reachable without restructuring the message.
 
 ### 3.3 E3 — Pinned readings and the grace period (R2, R5)
 
@@ -774,32 +768,24 @@ marks these rows "(0.4 only)".
 | `ObserveFeed` | 7 / 176,218 | 7 / ~200,000 | — |
 | `SetCollateral` | 11 / 325,765 | 11 / ~350,000 | — |
 | `TakeDebt` | 11 / 271,617 | 11 / ~280,000 | — |
-| `SetPauseLevel` | — | 12 / 360,079 (measured, Plan 9) | <= 400,000 (4 % of cap; recorded deviation, below) |
+| `SetPauseLevel` | — | 12 / 360,206 (measured, Plan 9) | <= 400,000 (4 % of cap; recorded deviation, below) |
 | `ApplyPending` | — | ~6-12 | < 3 % of cap |
 
 All rows stay under 10 % of the 10,000,000-cycle cap. Every added loop is bounded by 8. Estimates
 are replaced by measurements at the end of each plan.
 
-As-built note (Plan 9 final review): the Plan 9 measurements, and the assertions they satisfy, are
-fast-path figures at the price 0.5 (§3.1.9). Above the TWAP limit of §3.1.9 the `Liquidate` and
-`Bid` rows have not been measured. Just above it only the TWAP terms can switch (at most 8 frozen
-divisions per `Liquidate` or `Bid`), and whether the rows then stay inside their assertions has
-not been established by measurement. The pre-change figures (`Liquidate` 1,012,946, `Bid
-(partial)` 561,253, `Bid (final)` 736,045) are a loose upper bound, approached only at prices far
-above that (redemption price from about 17,000,000), where the remaining multiply-divides also
-switch. So "under 10 % of the cap" and the assertions are established for the fast path only. On
-the fast path the measured E1 row (883,636) leaves 116,364 under the 1,000,000 assertion for E4
-and E5 (estimated at ~10,000 and ~8,000, §3.4-§3.5). That headroom for later plans is likewise
-established only on the fast path. Open item: a
-cheaper exact wide division in `risk_core::math`, or slow-path budgets.
+As-built note (after the Plan 9 final review): the Plan 9 assertions hold at the price 0.5 and,
+for `Liquidate` and a partial `Bid`, at a price of 2,000,000 (§3.1.9). `Bid (final)` is measured
+at 0.5 only. The largest measured E1 row (888,662, at the high price) leaves 111,338 under
+the 1,000,000 assertion for E4 and E5 (estimated at ~10,000 and ~8,000, §3.4-§3.5).
 
 Recorded deviation (Plan 9 ruling R9-10): this row first read "`SetPauseLevel` ~12 / ~330,000,
-< 3 % of cap"; the two figures contradict (3 % is 300,000). `SetPauseLevel` measured 360,079 cycles
+< 3 % of cap"; the two figures contradict (3 % is 300,000). `SetPauseLevel` measured 360,206 cycles
 (3.6 %) and is asserted `<= 400,000`. Reason: it is 12 executions including the 7-execution Observe
-block; `ObserveFeed` alone is 181,947 and `SetCollateral` at 11 executions is 359,048 (all measured
+block; `ObserveFeed` alone is 182,074 and `SetCollateral` at 11 executions is 359,182 (all measured
 under `RiskArgs::recommended()` with a full ring, `v04/CYCLES.md`). Plan 9's measured rows:
-`Bid (partial)` 15 / 431,669, `Bid (final)` 21 / 606,461, `Liquidate` 29 / 883,636 (E1 only),
-`ObserveFeed` 7 / 181,947, `SetCollateral` 11 / 359,048.
+`Bid (partial)` 15 / 431,804, `Bid (final)` 21 / 606,596, `Liquidate` 29 / 884,567 (E1 only),
+`ObserveFeed` 7 / 182,074, `SetCollateral` 11 / 359,182.
 
 ## 5. Order of work and plan split
 
@@ -826,17 +812,18 @@ message plumbing is merged; Plan 12 waits for both.
 
 e2e: the existing `slice` and `system` stages keep the legacy preset. Plan 9 adds a `tier2` stage
 to `v04/scripts/e2e.sh` with a time-compressed recommended preset (window 300 s, first written as
-60 s: see the deviation below; spacing 10 s, `min_obs` 3, grace 30 s) that shows: liquidation
+60 s: see the deviation below; spacing 40 s, first 10 s; `min_obs` 3, grace 30 s) that shows: liquidation
 refused before warm-up, nonzero confidence, a level-1 pause with a bid still filling, a stale feed
 with a fallback bid, and `SettleEmpty`/claim at level 3. Later plans extend that stage.
 
 Deviation (Plan 9 pre-flight): the `tier2` stage uses a **300 s** window, not 60 s. Its feed max
-age is 180 s, and by the §3.2.4 bound a window must exceed `180 s + (3 − 2) · 10 s = 190 s` for the
+age is 180 s, and by the §3.2.4 bound a window must exceed `180 s + (3 − 2) · 40 s = 220 s` for the
 fallback bid to be reachable: with 60 s the stale-feed TWAP holds only the newest sample and D4
 always refuses `TwapUnavailable`. The 300 s window also keeps every live sample in the window across
-the e2e's 15 s blocks. The other values stand (Plan 9 ruling R9-13). Note (Plan 9 final review):
-300 s / 10 s is 30 spacings per window, past the 8-sample ring (§3.1.2), and spacing 10 s is below
-the stage's 60 s slack. So the stage exercises the flow, not TWAP manipulation resistance.
+the e2e's 15 s blocks. The other values stand (Plan 9 ruling R9-13), except the spacing: R9-13's
+10 s gave 30 spacings per window, past the 8-sample ring (§3.1.2), which `validate` now refuses,
+so the stage uses 40 s (7.5 spacings). That is still below the stage's 60 s slack, so the stage
+exercises the flow, not TWAP manipulation resistance.
 
 ## 6. New ADRs
 

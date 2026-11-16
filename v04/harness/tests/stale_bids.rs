@@ -19,7 +19,11 @@ use engine_core::{
     state::{AuctionPhase, AuctionState, ConfigState},
 };
 use harness::{
-    World, bidding::Bidder, expect_revert, invariants, tier2::tier2_collateral_args, world::RAY,
+    World,
+    bidding::Bidder,
+    expect_revert, invariants,
+    tier2::{recommended_no_grace, tier2_collateral_args},
+    world::RAY,
 };
 use lee::{AccountId, error::LeeError};
 use lee_core::program::TransactionEvent;
@@ -51,7 +55,7 @@ type Sent = Result<Vec<TransactionEvent>, LeeError>;
 /// The Tier 2 world under the recommended preset: one unsafe position, three samples at `P`,
 /// liquidated 1_000 ms after the newest, and a funded bidder. The feed is still live.
 fn liquidated() -> (World, AccountId, Bidder) {
-    let mut w = World::new_tier2(RiskArgs::recommended());
+    let mut w = World::new_tier2(recommended_no_grace());
     w.set_now_ms(T0);
     let position = w.open_unsafe_position(COLLATERAL, DEBT);
     w.set_price(P);

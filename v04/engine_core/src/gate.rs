@@ -10,7 +10,9 @@
 use auction_core::price::FeedParams;
 use auction_engine_params::EngineError;
 use risk_core::{
-    RiskError, fallback_bid_price, fallback_twap, liq_price, live_bid_price,
+    RiskError, fallback_bid_price, fallback_twap,
+    grace::in_grace,
+    liq_price, live_bid_price,
     pause::{FeedCase, Gate, Level, Op, allowed},
     twap, within_deviation,
 };
@@ -26,18 +28,27 @@ fn level_of(level: u8) -> Result<Level, Refusal> {
     Level::from_u8(level).ok_or(Refusal::Engine(EngineError::InvalidConfig))
 }
 
-/// The collateral actor's pause gate (spec §3.2.2, ADR-073) for `op` with the feed valid or not.
+/// The feed case of this observation (ruling R10-11): `Stale` for an invalid feed, else `Grace`
+/// while `now_ms` is inside the type's grace window (ADR-075), else `Live`. `coll` is the state
+/// after `feed::record`, so the observation that ends an outage already counts (R10-12).
+#[must_use]
+pub const fn feed_case(coll: &CollateralState, obs: &Observed, now_ms: u64) -> FeedCase {
+    if obs.feed.is_err() {
+        FeedCase::Stale
+    } else if in_grace(&coll.ext.grace(), now_ms) {
+        FeedCase::Grace
+    } else {
+        FeedCase::Live
+    }
+}
+
+/// The collateral actor's pause gate (spec §3.2.2, ADR-073) for `op` in the feed case `feed`.
 /// The legacy `admin_paused` flag means level 3 for this type with v0.2.4's code: what level 3
 /// refuses is `Paused` (6020). Otherwise the table at the type's `pause_level`.
 ///
 /// # Errors
 /// `Paused`; `InvalidConfig` for a stored level above 3; the table's refusal.
-pub fn collateral_gate(coll: &CollateralState, op: Op, feed_valid: bool) -> Result<Gate, Refusal> {
-    let feed = if feed_valid {
-        FeedCase::Live
-    } else {
-        FeedCase::Stale
-    };
+pub fn collateral_gate(coll: &CollateralState, op: Op, feed: FeedCase) -> Result<Gate, Refusal> {
     if coll.admin_paused && allowed(op, Level::Halted, feed).is_err() {
         return Err(EngineError::Paused.into());
     }
@@ -54,11 +65,17 @@ pub fn system_gate(cfg: &ConfigState, op: Op) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// The liquidation's market price behind the collateral gate: the gate first, then the live
-/// feed. A `FeedRefusal` is the feed's own code; the table gives `Fallback` to bids only, and
-/// [`bid_pricing`] handles it, so here it is the feed's own code too.
-fn gated_market(coll: &CollateralState, obs: &Observed, op: Op) -> Result<u128, Refusal> {
-    match collateral_gate(coll, op, obs.feed.is_ok())? {
+/// The liquidation's market price behind the collateral gate at `now_ms`: the gate first (the
+/// level, then grace for a valid feed), then the live feed. A `FeedRefusal` is the feed's own
+/// code; the table gives `Fallback` to bids only, and [`bid_pricing`] handles it, so here it is
+/// the feed's own code too.
+fn gated_market(
+    coll: &CollateralState,
+    obs: &Observed,
+    op: Op,
+    now_ms: u64,
+) -> Result<u128, Refusal> {
+    match collateral_gate(coll, op, feed_case(coll, obs, now_ms))? {
         // The feed is valid: its market price.
         Gate::Run => require_live(coll, obs),
         // The feed is invalid: `require_live` returns its own code (`feed_refusal`).
@@ -91,7 +108,8 @@ fn twap_at(coll: &CollateralState, feed: &FeedParams, now_ms: u64) -> Option<u12
 
 /// The liquidation price, checked in this order: the pause gate (`Paused` under the admin
 /// flag, else `LiquidationsPaused` at level 1 or more); an invalid feed (its
-/// own code, `feed::feed_refusal`); with the TWAP off, `band(edge(M))`; else no TWAP (`TwapUnavailable`); a
+/// own code, `feed::feed_refusal`); the grace window (`GracePeriod`, ADR-075); with the TWAP
+/// off, `band(edge(M))`; else no TWAP (`TwapUnavailable`); a
 /// spot outside the breaker band when the breaker is on (`SpotTwapDeviation`); then
 /// `band(edge(min(M, T)))`.
 ///
@@ -103,7 +121,7 @@ pub fn liquidation_price(
     r_ray: u128,
     now_ms: u64,
 ) -> Result<u128, Refusal> {
-    let m = gated_market(coll, obs, Op::Liquidate)?;
+    let m = gated_market(coll, obs, Op::Liquidate, now_ms)?;
     let feed = coll.feed_params()?;
     let risk = coll.ext.risk;
     if risk.twap_window_ms == 0 {
@@ -163,7 +181,7 @@ pub fn bid_pricing(
     r_ray: u128,
     now_ms: u64,
 ) -> Result<BidPricing, Refusal> {
-    let gate = collateral_gate(coll, Op::Bid, obs.feed.is_ok())?;
+    let gate = collateral_gate(coll, Op::Bid, feed_case(coll, obs, now_ms))?;
     if gate == Gate::Fallback
         && let Some(pricing) = fallback_pricing(coll, r_ray, now_ms)?
     {
@@ -280,6 +298,52 @@ mod tests {
         );
     }
 
+    /// Ruling R10-11: level, then an invalid feed, then grace, then the TWAP.
+    #[test]
+    fn liq_gate_order_level_feed_grace_twap() {
+        // Grace runs until 1 ms after `NOW`; the ring is empty, so the TWAP is unavailable.
+        let at = |level: u8, grace_until_ms: u64| {
+            let base = coll();
+            CollateralState {
+                ext: CollateralExt {
+                    pause_level: level,
+                    grace_until_ms,
+                    ..base.ext.clone()
+                },
+                ..base
+            }
+        };
+        let grace = at(0, NOW + 1);
+        // 1. Level 1 before grace.
+        let one = at(1, NOW + 1);
+        assert_eq!(
+            liquidation_price(&one, &obs(&one, Ok(RAY), 0), RAY, NOW),
+            Err(Refusal::Risk(RiskError::LiquidationsPaused))
+        );
+        // 2. An invalid feed inside a grace left by an earlier outage: the feed's own code.
+        let stale = obs(&grace, Err(FeedFault::Stale), 0);
+        assert_eq!(feed_case(&grace, &stale, NOW), FeedCase::Stale);
+        assert_eq!(
+            liquidation_price(&grace, &stale, RAY, NOW),
+            Err(Refusal::Engine(EngineError::PriceFeedStale))
+        );
+        // 3. A valid feed inside grace: `GracePeriod`, although the TWAP is unavailable.
+        let live = obs(&grace, Ok(RAY), 0);
+        assert_eq!(feed_case(&grace, &live, NOW), FeedCase::Grace);
+        assert_eq!(
+            liquidation_price(&grace, &live, RAY, NOW),
+            Err(Refusal::Risk(RiskError::GracePeriod))
+        );
+        // A bid inside grace runs.
+        assert!(bid_pricing(&grace, &live, RAY, NOW).is_ok());
+        // 4. At `grace_until_ms` grace is over: the TWAP check decides.
+        assert_eq!(feed_case(&grace, &live, NOW + 1), FeedCase::Live);
+        assert_eq!(
+            liquidation_price(&grace, &live, RAY, NOW + 1),
+            Err(Refusal::Risk(RiskError::TwapUnavailable))
+        );
+    }
+
     #[test]
     fn legacy_liquidation_price_is_band_edge_m() {
         let c = coll_with(RiskArgs::legacy(), TwapRing::default());
@@ -392,39 +456,42 @@ mod tests {
         // `admin_paused` at level 1: what level 3 refuses is `Paused` (v0.2.4's code), live or
         // stale.
         let admin = at(1, true);
-        for feed_valid in [true, false] {
-            assert_eq!(collateral_gate(&admin, Op::Liquidate, feed_valid), paused);
-            assert_eq!(collateral_gate(&admin, Op::Bid, feed_valid), paused);
+        for feed in [FeedCase::Live, FeedCase::Stale] {
+            assert_eq!(collateral_gate(&admin, Op::Liquidate, feed), paused);
+            assert_eq!(collateral_gate(&admin, Op::Bid, feed), paused);
         }
         // What level 3 allows still runs under the admin flag.
         assert_eq!(
-            collateral_gate(&admin, Op::ObserveFeed, false),
+            collateral_gate(&admin, Op::ObserveFeed, FeedCase::Stale),
             Ok(Gate::Run)
         );
         assert_eq!(
-            collateral_gate(&admin, Op::SettleEmpty, true),
+            collateral_gate(&admin, Op::SettleEmpty, FeedCase::Live),
             Ok(Gate::Run)
         );
         // Level 3 without the admin flag keeps the Tier 2 codes.
         let halted = at(3, false);
         assert_eq!(
-            collateral_gate(&halted, Op::Liquidate, true),
+            collateral_gate(&halted, Op::Liquidate, FeedCase::Live),
             Err(Refusal::Risk(RiskError::LiquidationsPaused))
         );
         assert_eq!(
-            collateral_gate(&halted, Op::Bid, true),
+            collateral_gate(&halted, Op::Bid, FeedCase::Live),
             Err(Refusal::Risk(RiskError::BidsPaused))
         );
         // Level 0: a stale feed is the feed's refusal for a liquidation, the fallback for a bid.
         let normal = at(0, false);
         assert_eq!(
-            collateral_gate(&normal, Op::Liquidate, false),
+            collateral_gate(&normal, Op::Liquidate, FeedCase::Stale),
             Ok(Gate::FeedRefusal)
         );
-        assert_eq!(collateral_gate(&normal, Op::Bid, false), Ok(Gate::Fallback));
+        assert_eq!(
+            collateral_gate(&normal, Op::Bid, FeedCase::Stale),
+            Ok(Gate::Fallback)
+        );
         // An out-of-range stored level is `InvalidConfig`.
         assert_eq!(
-            collateral_gate(&at(4, false), Op::Bid, true),
+            collateral_gate(&at(4, false), Op::Bid, FeedCase::Live),
             Err(Refusal::Engine(EngineError::InvalidConfig))
         );
         // The prices refuse at the gate: level 1 stops a liquidation, not a bid.

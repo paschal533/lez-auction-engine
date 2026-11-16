@@ -17,7 +17,7 @@ use harness::{
     World,
     bidding::Bidder,
     cycles::{Row, measured, proxied, table, write_table},
-    tier2::tier2_collateral_args,
+    tier2::{recommended_no_grace, tier2_collateral_args},
     world::{MIN_CR_RAY, RAY},
 };
 use lee::{AccountId, Actor, error::LeeError};
@@ -290,7 +290,7 @@ fn tier2_rows_fit_the_budget_at_a_high_price() {
 fn partial_bid_cycles(samples: u8) -> u64 {
     let risk = RiskArgs {
         twap_min_obs: 1,
-        ..RiskArgs::recommended()
+        ..recommended_no_grace()
     };
     let (mut w, position) = warmed(BASE, risk, samples);
     w.liquidate(position, 0).expect("the keeper liquidates");

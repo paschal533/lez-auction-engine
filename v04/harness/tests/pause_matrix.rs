@@ -1,6 +1,7 @@
 //! The operation x pause-level matrix (spec §3.2.2, ADR-073, Plan 9 Task 10): every operation at
 //! every pause level with a live feed, and every operation at level 0 with a stale feed, D4 on
-//! (the recommended preset) and off (legacy). Each case is a fresh `harness::levels::fixture`
+//! (the recommended preset) and off (legacy), and every operation at level 0 inside a grace
+//! period. Each case is a fresh `harness::levels::fixture`
 //! in which the operation's own preconditions hold; `harness::levels::expected` derives the
 //! outcome from the rule table `risk_core::pause::allowed`.
 //!
@@ -13,6 +14,8 @@
 use harness::{
     invariants,
     levels::{Fixture, expected, fixture, stale_fixture},
+    levels_fixtures::grace_fixture,
+    tier2::recommended_no_grace,
 };
 use lee::PrivateKey;
 use risk_core::{
@@ -24,6 +27,8 @@ use risk_core::{
 const LEVEL_CASES: usize = 68;
 /// 17 operations x {D4 on, D4 off}.
 const STALE_CASES: usize = 34;
+/// 17 operations at level 0 inside a grace period.
+const GRACE_CASES: usize = 17;
 
 /// The risk-reducing operations, which must run end to end even at level 3 (spec §3.2.1).
 const ALWAYS_RUN: [Op; 7] = [
@@ -131,7 +136,7 @@ fn risk_reducing_operations_run_at_level_3() {
 #[test]
 fn every_operation_with_a_stale_feed() {
     let presets = [
-        ("Stale-ok", RiskArgs::recommended()),
+        ("Stale-ok", recommended_no_grace()),
         ("Stale-no", RiskArgs::legacy()),
     ];
     let (mut cases, mut mismatches) = (0_usize, Vec::new());
@@ -145,6 +150,23 @@ fn every_operation_with_a_stale_feed() {
         }
     }
     assert_eq!(cases, STALE_CASES);
+    report(&mismatches);
+}
+
+/// Every operation at level 0 inside a grace period (ADR-075), the recommended preset: only
+/// `Liquidate` is refused (`GracePeriod`); a bid runs.
+#[test]
+fn every_operation_during_grace() {
+    let risk = RiskArgs::recommended();
+    let (mut cases, mut mismatches) = (0_usize, Vec::new());
+    for op in Op::ALL {
+        let mut f = grace_fixture(op, risk);
+        let want = expected(op, Level::Normal, FeedCase::Grace, &risk);
+        let label = format!("{op:?} Grace");
+        mismatches.extend(mismatch(&mut f, want.as_deref(), &label));
+        cases = cases.checked_add(1).expect("few cases");
+    }
+    assert_eq!(cases, GRACE_CASES);
     report(&mismatches);
 }
 

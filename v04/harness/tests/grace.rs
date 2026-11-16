@@ -6,13 +6,20 @@
 //! Numbers: the Tier 2 world (R = 0.5 RAY, RAY-scale oracle so raw = RAY price, sanity window
 //! `[0.25, 1]` RAY) under the recommended preset with pin bounds `(RAY / 4, RAY)`, the edges of
 //! the sanity window, and grace off. The live price `P = 0.5 RAY` sits strictly between them.
+//!
+//! The grace period (spec §3.3 E3, ADR-075, rulings R10-11 and R10-12): after an outage of at
+//! least `grace_min_gap_ms` the type refuses `Liquidate` with `GracePeriod` (6072) until
+//! `grace_until_ms`, while bids run. Grace tests use the recommended preset (grace 1_800_000 ms,
+//! minimum gap 600_000 ms) with the pin bounds off.
 
 use engine_core::{
     bid::{BidQuote, quote},
     check::fail_text,
     state::AuctionState,
 };
-use harness::{World, bidding::Bidder, expect_revert, invariants, world::RAY};
+use harness::{
+    World, bidding::Bidder, expect_revert, invariants, tier2::tier2_collateral_args, world::RAY,
+};
 use lee::AccountId;
 use risk_core::{RiskArgs, RiskError, fallback_bid_price, floored_price, twap};
 
@@ -197,5 +204,180 @@ fn a_bid_on_a_pinned_feed_uses_d4_or_the_pinned_code() {
         &fail_text(RiskError::PriceFeedPinned),
     );
     assert_eq!(w.snapshot_all(), before, "a refusal changes nothing");
+    invariants::check(&w);
+}
+
+/// The Tier 2 world under `risk`, observed without an outage up to `T0` (`World::new_tier2_live`,
+/// `World::advance_observed`): no grace is open.
+fn live_at_t0(risk: RiskArgs) -> World {
+    let mut w = World::new_tier2_live(risk);
+    w.advance_observed(T0, P);
+    assert_eq!(w.collateral_state().ext.grace_until_ms, 0, "no grace yet");
+    w
+}
+
+/// The world under the recommended preset with two unsafe positions and three samples at `P`;
+/// 1_000 ms after the newest sample the first is liquidated and a bidder funded. Returns the
+/// world, the auctioned position, the open one and the bidder. The feed is still live and no
+/// grace is open.
+fn auction_and_open() -> (World, AccountId, AccountId, Bidder) {
+    let mut w = live_at_t0(RiskArgs::recommended());
+    let auctioned = w.open_unsafe_position(COLLATERAL, DEBT);
+    let open = w.open_unsafe_position(COLLATERAL, DEBT);
+    w.set_price(P);
+    w.warm_twap(P, 3, SPACING);
+    later(&mut w, 1_000);
+    w.liquidate(auctioned, 0).expect("the keeper liquidates");
+    let bidder = w.fund_bidder("bidder", FUNDS);
+    assert_eq!(w.collateral_state().ext.grace_until_ms, 0, "no grace yet");
+    invariants::check(&w);
+    (w, auctioned, open, bidder)
+}
+
+#[test]
+fn grace_blocks_liquidate_not_bid() {
+    let (mut w, auctioned, open, bidder) = auction_and_open();
+    w.start_grace();
+    let coll = w.collateral_state();
+    assert!(w.now_ms < coll.ext.grace_until_ms, "inside grace");
+    assert_eq!(
+        coll.ext.feed_invalid_since_ms, None,
+        "the feed is live again"
+    );
+    expect_revert(w.liquidate(open, 0), &fail_text(RiskError::GracePeriod));
+    let before = w.collateral_balance(bidder.account);
+    w.bid(&bidder, auctioned, 0, (BID_IN, 0))
+        .expect("a bid during grace fills");
+    assert!(w.collateral_balance(bidder.account) > before);
+    invariants::check(&w);
+}
+
+#[test]
+fn grace_refusal_moves_nothing() {
+    let (mut w, _, open, _) = auction_and_open();
+    w.start_grace();
+    let before = w.snapshot_all();
+    expect_revert(w.liquidate(open, 0), &fail_text(RiskError::GracePeriod));
+    assert_eq!(w.snapshot_all(), before, "a refusal changes nothing");
+    invariants::check(&w);
+}
+
+#[test]
+fn grace_expires_at_its_end() {
+    let (mut w, _, open, _) = auction_and_open();
+    w.start_grace();
+    let until = w.collateral_state().ext.grace_until_ms;
+    // Regular samples through the grace period keep the TWAP warm and do not extend it.
+    w.warm_twap(P, 5, SPACING);
+    assert_eq!(w.collateral_state().ext.grace_until_ms, until);
+    w.set_now_ms(until.checked_sub(1).expect("grace is open"));
+    w.set_price(P);
+    expect_revert(w.liquidate(open, 0), &fail_text(RiskError::GracePeriod));
+    w.set_now_ms(until);
+    w.set_price(P);
+    w.liquidate(open, 0)
+        .expect("at grace_until_ms the keeper liquidates");
+    invariants::check(&w);
+}
+
+#[test]
+fn a_short_outage_starts_no_grace() {
+    let mut w = live_at_t0(RiskArgs::recommended());
+    let open = w.open_unsafe_position(COLLATERAL, DEBT);
+    w.set_price(P);
+    w.warm_twap(P, 3, SPACING);
+    w.go_stale();
+    w.observe_feed(w.now_ms)
+        .expect("the stale feed is observed");
+    let since = w
+        .collateral_state()
+        .ext
+        .feed_invalid_since_ms
+        .expect("the outage is recorded");
+    let min_gap = RiskArgs::recommended().grace_min_gap_ms;
+    // Back 1 ms before the minimum gap.
+    let back = since
+        .checked_add(min_gap)
+        .and_then(|t| t.checked_sub(1))
+        .expect("time fits");
+    assert!(back >= w.now_ms);
+    w.set_now_ms(back);
+    w.set_price(P);
+    w.observe_feed(back).expect("the fresh feed is observed");
+    let coll = w.collateral_state();
+    assert_eq!(coll.ext.feed_invalid_since_ms, None);
+    assert_eq!(coll.ext.grace_until_ms, 0, "no grace after a short outage");
+    // A grace period would outlast these samples; the liquidation runs.
+    w.warm_twap(P, 3, SPACING);
+    w.liquidate(open, 0)
+        .expect("the keeper liquidates after a short outage");
+    invariants::check(&w);
+}
+
+/// Ruling R10-12: grace reads the state after the observation, so a `Liquidate` whose own
+/// observation ends the outage is refused with `GracePeriod`. The guest fails the whole
+/// transaction on a refusal, so it persists nothing: the stored state still has no grace and
+/// the outage recorded by the earlier `ObserveFeed`.
+#[test]
+fn a_liquidate_that_ends_the_outage_is_refused() {
+    let mut w = live_at_t0(RiskArgs::recommended());
+    let open = w.open_unsafe_position(COLLATERAL, DEBT);
+    w.set_price(P);
+    w.warm_twap(P, 3, SPACING);
+    w.go_stale();
+    w.observe_feed(w.now_ms)
+        .expect("the stale feed is observed");
+    let since = w
+        .collateral_state()
+        .ext
+        .feed_invalid_since_ms
+        .expect("the outage is recorded");
+    let back = since
+        .checked_add(RiskArgs::recommended().grace_min_gap_ms)
+        .expect("time fits");
+    w.set_now_ms(back);
+    w.set_price(P);
+    expect_revert(w.liquidate(open, 0), &fail_text(RiskError::GracePeriod));
+    let coll = w.collateral_state();
+    assert_eq!(
+        coll.ext.grace_until_ms, 0,
+        "the refused grace is not stored"
+    );
+    assert_eq!(coll.ext.feed_invalid_since_ms, Some(since));
+    invariants::check(&w);
+}
+
+#[test]
+fn turning_grace_on_does_not_start_one() {
+    let mut w = live_at_t0(RiskArgs::legacy());
+    w.warm_twap(P, 3, SPACING);
+    assert!(w.collateral_state().ext.last_good_ts_ms.is_some());
+    later(&mut w, SPACING);
+    w.set_price(P);
+    let set = w.set_collateral_msg_with(tier2_collateral_args(), RiskArgs::recommended());
+    let key = w.admin_key.clone();
+    w.send_engine(w.admin, &[&key], &set)
+        .expect("grace is turned on");
+    assert_eq!(w.collateral_state().ext.risk, RiskArgs::recommended());
+    assert_eq!(w.collateral_state().ext.grace_until_ms, 0);
+    w.warm_twap(P, 1, SPACING);
+    assert_eq!(
+        w.collateral_state().ext.grace_until_ms,
+        0,
+        "turning grace on starts none"
+    );
+    invariants::check(&w);
+}
+
+#[test]
+fn set_collateral_keeps_the_grace_state() {
+    let (mut w, _, _, _) = auction_and_open();
+    w.start_grace();
+    let until = w.collateral_state().ext.grace_until_ms;
+    let set = w.set_collateral_msg_with(tier2_collateral_args(), RiskArgs::recommended());
+    let key = w.admin_key.clone();
+    w.send_engine(w.admin, &[&key], &set)
+        .expect("the collateral is reconfigured");
+    assert_eq!(w.collateral_state().ext.grace_until_ms, until);
     invariants::check(&w);
 }

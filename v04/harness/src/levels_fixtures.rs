@@ -9,7 +9,7 @@
 //! recommended spacing; ignored under legacy), then 1_000 ms on. [`fixture`] dispatches on the
 //! groups of operations that share a setup (position, auction, surplus, debt, admin), and builds
 //! the transaction last, so [`stale_fixture`] can make the feed stale first and the message's
-//! clock claim is the stale time.
+//! clock claim is the stale time; [`grace_fixture`] likewise opens a grace period first.
 
 use auction_engine_params::{EngineError, args::EngineParamsArgs};
 use engine_core::{check::fail_text, msg::EngineMsg};
@@ -97,14 +97,60 @@ struct Tx {
 /// The fixture of `op` under `risk` with a live feed.
 #[must_use]
 pub fn fixture(op: Op, risk: RiskArgs) -> Fixture {
-    build(op, risk, |_| {})
+    build(op, risk, Clock::Jump, |_| {})
 }
 
 /// The fixture of `op` under `risk` after `World::go_stale`: the transaction claims the first
 /// time at which the feed is stale.
 #[must_use]
 pub fn stale_fixture(op: Op, risk: RiskArgs) -> Fixture {
-    build(op, risk, World::go_stale)
+    build(op, risk, Clock::Jump, World::go_stale)
+}
+
+/// The fixture of `op` under `risk` after `World::start_grace`: the feed is live again and the
+/// transaction claims the first time of the grace period (ADR-075). `risk` must turn grace on.
+/// The world is observed without an outage up to that point ([`Clock::Observed`]), so the only
+/// grace is the one `start_grace` opens.
+///
+/// # Panics
+/// If a grace period is already open before `start_grace`.
+#[must_use]
+pub fn grace_fixture(op: Op, risk: RiskArgs) -> Fixture {
+    build(op, risk, Clock::Observed, |w| {
+        assert_eq!(
+            w.collateral_state().ext.grace_until_ms,
+            0,
+            "no grace before start_grace"
+        );
+        w.start_grace();
+    })
+}
+
+/// How a fixture's world moves its clock to the start and past a system auction's TTL.
+#[derive(Clone, Copy)]
+enum Clock {
+    /// `World::new_tier2_system`, then straight to the time (no observation in between).
+    Jump,
+    /// `World::new_tier2_system_live`, observed at least every `OBSERVE_STEP_MS` on the way
+    /// (`World::advance_observed`), so the feed has no outage and no grace opens.
+    Observed,
+}
+
+impl Clock {
+    fn world(self, risk: RiskArgs) -> World {
+        match self {
+            Clock::Jump => World::new_tier2_system(risk),
+            Clock::Observed => World::new_tier2_system_live(risk),
+        }
+    }
+
+    /// Advances `w` to `to_ms`.
+    fn advance(self, w: &mut World, to_ms: u64) {
+        match self {
+            Clock::Jump => w.set_now_ms(to_ms),
+            Clock::Observed => w.advance_observed(to_ms, P),
+        }
+    }
 }
 
 /// What the matrix expects of `op` at `level` with the feed `feed` under `risk`: `None` when it
@@ -124,14 +170,14 @@ pub fn expected(op: Op, level: Level, feed: FeedCase, risk: &RiskArgs) -> Option
     }
 }
 
-fn build(op: Op, risk: RiskArgs, before_tx: impl FnOnce(&mut World)) -> Fixture {
-    let mut w = World::new_tier2_system(risk);
-    w.set_now_ms(T0);
+fn build(op: Op, risk: RiskArgs, clock: Clock, before_tx: impl FnOnce(&mut World)) -> Fixture {
+    let mut w = clock.world(risk);
+    clock.advance(&mut w, T0);
     let position = w.open_unsafe_position(COLLATERAL, DEBT);
     w.set_price(P);
     w.warm_twap(P, SAMPLES, SPACING);
     later(&mut w, AFTER_SAMPLE_MS);
-    let target = prepare(&mut w, op, position);
+    let target = prepare(&mut w, op, position, clock);
     before_tx(&mut w);
     let tx = transaction(&mut w, op, &target);
     Fixture {
@@ -151,13 +197,17 @@ fn later(w: &mut World, ms: u64) {
 }
 
 /// Past the system auctions' TTL, with a fresh publish so the feed is live again.
-fn past_ttl(w: &mut World) {
-    later(w, World::engine_params().system_ttl_ms);
+fn past_ttl(w: &mut World, clock: Clock) {
+    let to = w
+        .now_ms
+        .checked_add(World::engine_params().system_ttl_ms)
+        .expect("time fits");
+    clock.advance(w, to);
     w.set_price(P);
 }
 
 /// `op`'s own preconditions, on top of the common start.
-fn prepare(w: &mut World, op: Op, position: AccountId) -> Target {
+fn prepare(w: &mut World, op: Op, position: AccountId, clock: Clock) -> Target {
     let bidder = match op {
         Op::Liquidate
         | Op::ObserveFeed
@@ -168,11 +218,11 @@ fn prepare(w: &mut World, op: Op, position: AccountId) -> Target {
         Op::Bid | Op::ClaimLeftover => Some(prepare_auction(w, op, position)),
         Op::SettleEmpty => return prepare_empty(w),
         Op::StartSurplus | Op::TakeSurplus | Op::CloseSurplus => {
-            prepare_surplus(w, op);
+            prepare_surplus(w, op, clock);
             None
         }
         Op::StartDebt | Op::TakeDebt | Op::CloseDebt | Op::SettleDebt | Op::CheckSolvency => {
-            prepare_debt(w, op);
+            prepare_debt(w, op, clock);
             None
         }
     };
@@ -205,7 +255,7 @@ fn prepare_empty(w: &mut World) -> Target {
 
 /// Buffer stablecoin for one surplus lot and the taker's account; for a take a live surplus
 /// auction, for a close one past its TTL.
-fn prepare_surplus(w: &mut World, op: Op) {
+fn prepare_surplus(w: &mut World, op: Op, clock: Clock) {
     let buffer = w.buffer().account_id;
     w.donate_stable(buffer, SURPLUS_BUFFER);
     let (_, taker) = w.chain.key(TAKER);
@@ -217,13 +267,13 @@ fn prepare_surplus(w: &mut World, op: Op) {
     }
     w.start_surplus(0).expect("the surplus auction starts");
     if op == Op::CloseSurplus {
-        past_ttl(w);
+        past_ttl(w, clock);
     }
 }
 
 /// The lot-3 shortfall booked; for `SettleDebt` and `CheckSolvency` buffer stablecoin to burn;
 /// for a take a live debt auction and a taker with stablecoin, for a close one past its TTL.
-fn prepare_debt(w: &mut World, op: Op) {
+fn prepare_debt(w: &mut World, op: Op, clock: Clock) {
     assert!(w.book_shortfall() > 0, "a shortfall is booked");
     if matches!(op, Op::SettleDebt | Op::CheckSolvency) {
         let buffer = w.buffer().account_id;
@@ -237,7 +287,7 @@ fn prepare_debt(w: &mut World, op: Op) {
     if op == Op::TakeDebt {
         w.fund_bidder(TAKER, TAKER_STABLE);
     } else {
-        past_ttl(w);
+        past_ttl(w, clock);
     }
 }
 

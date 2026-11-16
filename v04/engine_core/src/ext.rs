@@ -3,7 +3,7 @@
 
 use auction_engine_params::{EngineError, args::CollateralArgs};
 use borsh::{BorshDeserialize, BorshSerialize};
-use risk_core::{EngineExtArgs, RiskArgs, TwapRing};
+use risk_core::{EngineExtArgs, RiskArgs, TwapRing, grace::GraceState};
 
 use crate::state::CollateralState;
 
@@ -37,16 +37,36 @@ pub struct CollateralExt {
     pub pause_level: u8,
     /// The TWAP observation ring (spec §3.1.1).
     pub ring: TwapRing,
+    /// The reading timestamp (clamped to `now`) of the newest valid observation (ruling R10-10).
+    pub last_good_ts_ms: Option<u64>,
+    /// When the current feed outage began, if one has been observed since the last valid
+    /// reading.
+    pub feed_invalid_since_ms: Option<u64>,
+    /// `Liquidate` waits while `now_ms < grace_until_ms` (ADR-075, ruling R10-12); 0 = never.
+    pub grace_until_ms: u64,
 }
 
 impl CollateralExt {
-    /// A fresh extension: level 0 and an empty ring.
+    /// A fresh extension: level 0, an empty ring and no grace history.
     #[must_use]
     pub fn new(risk: RiskArgs) -> Self {
         Self {
             risk,
             pause_level: 0,
             ring: TwapRing::default(),
+            last_good_ts_ms: None,
+            feed_invalid_since_ms: None,
+            grace_until_ms: 0,
+        }
+    }
+
+    /// The three grace fields as the pure rule's state (`risk_core::grace`).
+    #[must_use]
+    pub const fn grace(&self) -> GraceState {
+        GraceState {
+            last_good_ts_ms: self.last_good_ts_ms,
+            feed_invalid_since_ms: self.feed_invalid_since_ms,
+            grace_until_ms: self.grace_until_ms,
         }
     }
 }

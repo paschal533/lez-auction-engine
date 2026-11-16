@@ -18,7 +18,7 @@ use harness::{
     World,
     bidding::Bidder,
     expect_revert, invariants,
-    tier2::{TIER2_MAX_AGE_MS, tier2_collateral_args},
+    tier2::{TIER2_MAX_AGE_MS, recommended_no_grace, tier2_collateral_args},
     world::RAY,
 };
 use lee::AccountId;
@@ -139,7 +139,7 @@ fn bid_out(w: &mut World, bidder: &Bidder, position: AccountId) -> u128 {
 
 #[test]
 fn liquidate_refused_until_twap_has_min_obs() {
-    let (mut w, position) = world(RiskArgs::recommended());
+    let (mut w, position) = world(recommended_no_grace());
     w.warm_twap(P, 2, SPACING);
     later(&mut w, 1_000);
     let before = w.collateral_state();
@@ -160,7 +160,7 @@ fn liquidate_refused_until_twap_has_min_obs() {
 
 #[test]
 fn keeper_reward_uses_the_smaller_of_spot_and_twap() {
-    let (mut w, position) = world(RiskArgs::recommended());
+    let (mut w, position) = world(recommended_no_grace());
     w.warm_twap(P, 3, SPACING);
     // 1.1 p, 1_000 ms after the newest sample: closer than the spacing, so it is not recorded.
     let spike = P / 10 * 11;
@@ -198,7 +198,7 @@ fn keeper_reward_uses_the_smaller_of_spot_and_twap() {
 
 #[test]
 fn a_spot_spike_is_refused_by_the_deviation_breaker() {
-    let (mut w, position) = world(RiskArgs::recommended());
+    let (mut w, position) = world(recommended_no_grace());
     w.warm_twap(P, 3, SPACING);
     later(&mut w, 1_000);
     w.set_price(P / 10 * 13);
@@ -214,7 +214,7 @@ fn a_spot_spike_is_refused_by_the_deviation_breaker() {
 
 #[test]
 fn bid_price_takes_the_confidence_edge() {
-    let (mut w, position) = world(RiskArgs::recommended());
+    let (mut w, position) = world(recommended_no_grace());
     w.warm_twap(P, 3, SPACING);
     later(&mut w, 1_000);
     w.liquidate(position, 0).expect("the keeper liquidates");
@@ -236,7 +236,7 @@ fn bid_price_takes_the_confidence_edge() {
 
 #[test]
 fn bid_payout_capped_by_the_twap_anchor() {
-    let (mut w, position) = world(RiskArgs::recommended());
+    let (mut w, position) = world(recommended_no_grace());
     w.warm_twap(P, 3, SPACING);
     later(&mut w, 1_000);
     w.liquidate(position, 0).expect("the keeper liquidates");

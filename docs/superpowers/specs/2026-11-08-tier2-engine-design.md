@@ -140,6 +140,13 @@ As built (Plan 9, ruling R9-1; amended in Plan 9 Task 14): the presets are inher
 re-exports `RiskArgs`. `recommended()` takes no argument in Plan 9. There is no `EngineExtArgs`
 yet: it arrives with E9 in Plan 10.
 
+As built (Plan 10): `EngineExtArgs` is in `risk_core::engine_ext` and its `legacy()` /
+`recommended()` in `risk_core::presets` (ruling R10-1); `Init` and `SetEngineParams` carry
+`ext: Box<EngineExtArgs>` as their last field. `SetEngineParams` has **no `now_ms`** in Plan 10
+(ruling R10-3): it belongs to E8 (Plan 12), so the message list above is ahead of the code there.
+`RiskArgs::recommended()` still takes no argument; the oracle's bounds enter through the SDK's
+`recommended_risk(OracleBounds)` (§3.3).
+
 ### 3.1 E1 — TWAP and confidence-adjusted pricing (R2)
 
 #### 3.1.1 Data
@@ -164,7 +171,7 @@ too (`pause.rs:68`, `observe.rs:171-191`). Size: 4 + 8x24 + 2 =
 On each observation whose reading passes `validate_feed_ext` (§3.1.5):
 
 ```
-ts = min(reading.timestamp_ms, now_ms)                 // same clamp as pause.rs:316
+ts = min(reading.timestamp_ms, now_ms)                 // same clamp as crates/auction_core/src/pause.rs:44
 if newest exists and ts <= newest.ts            -> no change (same publish seen again)
 if newest exists and ts - newest.ts < spacing   -> no change
 push Sample{ts, M}; if len > 8 drop oldest; last_conf_bps = ceil(c * 10_000 / M)
@@ -444,7 +451,9 @@ pre-flight, with the plan's ruling R9-3.)
 #### 3.2.6 Tests
 
 `risk_core`: `pause_table_is_exhaustive` (every `Op` x level x feed has an entry, compile-time
-match; the grace column arrives with E3 in Plan 10, as-built amendment, Plan 9 Task 14),
+match; the grace column arrives with E3 in Plan 10, as-built amendment, Plan 9 Task 14; as built
+in Plan 10 the feed argument is `FeedCase { Live, Stale, Grace }` and the table has 17 x 4 x 3
+cells, see §3.3),
 `risk_reducing_ops_allowed_everywhere`, `fallback_price_clamped_to_the_floor`,
 `floor_uses_the_capped_max_discount`; Kani `fallback_price_never_breaches_the_floor` (written, not
 run).
@@ -501,7 +510,8 @@ feed_invalid_since = None
 ```
 
 and on an invalid one `feed_invalid_since.get_or_insert(min(last_good_ts + max_age, now))` (the
-derived onset of `pause.rs:335-339`). The oracle publishes by transaction, so a sequencer halt shows
+derived onset of `crates/auction_core/src/pause.rs:63-67`; first cited as `pause.rs:335-339`, a
+stale line reference). The oracle publishes by transaction, so a sequencer halt shows
 up as a publish gap; one rule covers feed and chain outages. Grace refuses **`Liquidate` only**
 (`GracePeriod`, 6072); bids, settles and system operations run. A gap that nobody observed but the
 oracle filled can start a spurious grace (the engine sees only the latest publication); the cost is
@@ -521,6 +531,44 @@ Tests: `pinned_low_and_high_readings_pause_the_type`, `pinned_reading_is_not_rec
 `grace_refusal_moves_nothing`; incident replays for V4 reuse these (LUNA pinned floor, Compound
 single +30 % print → `SpotTwapDeviation`).
 Cycles: a few compares and two `u64` fields; within the E1 estimate.
+
+As built (Plan 10, rulings R10-8 to R10-12; ADR-075):
+- **Check order.** `validate_feed_ext` checks age, pinned, zero price, confidence, sanity window,
+  so a stale pinned reading is `Stale`. `FeedFault::Pinned` has no frozen `PauseReason`, so
+  `FeedFault::pause_reason` returns `Option<PauseReason>` (`None` for `Pinned`), `Observed.feed`
+  is `Result<u128, FeedFault>`, and `engine_core::feed::require_live` returns `Result<u128,
+  Refusal>`, mapping `Pinned` to `PriceFeedPinned` (6076).
+- **`last_good_ts_ms`.** `CollateralState.last_seen_oracle_ts` advances on invalid readings too,
+  so the `last_good_ts` of the rule above is a third appended field, `CollateralExt.last_good_ts_ms:
+  Option<u64>`, the reading timestamp (clamped to `now`) of the newest valid observation. The
+  state is `last_good_ts_ms, feed_invalid_since_ms, grace_until_ms`, in that order. A grace opens
+  only when the gap is also nonzero; a first valid observation with no earlier one opens none.
+- **The matrix column.** Grace is a feed case, not a separate check: `pause::FeedCase { Live,
+  Stale, Grace }`, `Grace` meaning a valid feed inside the grace period; `allowed` keeps its
+  signature. The `Liquidate` order is level (6073), then the feed, then grace (6072), then the
+  TWAP checks. `SetCollateral` keeps the three grace fields, like the ring.
+- **Timing.** Grace reads the state after the transaction's own observation, so the `Liquidate`
+  that ends an outage is refused; a refusal reverts, so that grace is not stored, and a keeper
+  must send `ObserveFeed` (or a bid) to store it. Grace ends at `now_ms == grace_until_ms`.
+- **Spurious grace.** A type whose first observation is invalid, or any gap of at least
+  `grace_min_gap_ms` that nobody observed, opens a grace on the next valid observation, including
+  right after deployment, as accepted above.
+- **`OracleBounds` (R10-8).** "The SDK refuses to build a recommended config ... without them" is
+  done by a type: `OracleBounds { Undeclared, Declared { min_raw, max_raw } }` and
+  `recommended_risk(bounds) -> RiskArgs` in `v04/sdk`. `RiskArgs::recommended()` stays public
+  with the bounds off, so the type covers callers of `recommended_risk` only, and the SDK does not
+  validate a `Declared` pair (`SetCollateral` refuses `min_raw >= max_raw`).
+- **Validation.** `grace_ms > 0` requires `grace_min_gap_ms > 0` (`grace_needs_a_nonzero_min_gap`);
+  both are `<= 86_400_000`.
+- **Tests.** The tests named above exist; the harness ones are in `v04/harness/tests/grace.rs`
+  (ruling R10-14), with `a_short_outage_starts_no_grace`, `a_liquidate_that_ends_the_outage_is_refused`,
+  `turning_grace_on_does_not_start_one`, `set_collateral_keeps_the_grace_state` and
+  `a_bid_on_a_pinned_feed_uses_d4_or_the_pinned_code` added; the matrix column is
+  `every_operation_during_grace`. Existing Tier 2 fixtures that jump time without observing run
+  with grace off (`harness::tier2::recommended_no_grace()`), because under the full recommended
+  preset they open a grace before their setup `Liquidate`.
+- **Cycles.** `Liquidate` with grace configured but not active: 909,517 (`v04/CYCLES.md`, Plan 10
+  re-measure).
 
 ### 3.4 E4 — Health-aware discount cap (F2)
 
@@ -733,6 +781,21 @@ each legacy value equals the shared constant it replaces), and a check in `scrip
 or a new script that `f8-parameters.md` has no "production default — Tier 2" row left.
 Cycles: none beyond decoding ~30 more bytes in `SystemCtx`.
 
+As built (Plan 10, rulings R10-1 to R10-7): `debt_precheck` reads `SystemCtx.ext.debt_relist_delay_ms`
+(`SystemCtx` gained one field, `ext: EngineExtArgs`, 21 bytes, ruling R10-6), and the reference
+sanity window is `ref_sanity_lo_bps` / `ref_sanity_hi_bps` in `EngineExtArgs` with
+`1_000 <= lo <= 10_000 <= hi <= 100_000`. The tests are `ref_conf_limit_is_a_parameter`,
+`ref_clamp_is_a_parameter`, `q64_reference_oracle_reads`, `ref_sanity_window_is_a_parameter`,
+`debt_relist_delay_is_a_parameter` and `legacy_preset_equals_the_v024_constants` in
+`v04/engine_core/src/system_ref_tests.rs` (ruling R10-14), the proptest
+`effective_ref_price_ext_matches_v024_at_2000` (`v04/risk_core/src/feed.rs`),
+`sanity_window_is_a_parameter` (`v04/engine_core/src/feed.rs`) and, in the harness,
+`relist_delay_follows_the_engine_ext` beside the unchanged `relist_delay_boundary_uses_the_claimed_time`
+(`v04/harness/tests/debt.rs`). The script check is in `scripts/check-requirements.py`
+(`test_f8_gap_rows_fail_the_check`). A `SetEngineParams` that changes `ref_scale` needs an idle
+system (ruling R10-5). Measured: `SetEngineParams` 204,961 cycles (`v04/CYCLES.md`, Plan 10
+re-measure).
+
 ### 3.10 Refusal codes (ADR-076)
 
 `risk_core::RiskError` with codes 70-80 (wire 6070-6080), chosen above the shared enum's highest
@@ -757,6 +820,9 @@ both; `fail` and `fail_text` (`check.rs:51-64`) take `impl Into<Refusal>` and pr
 `Program error [6000+code]: Program error {code}: {Name}` text, so every existing call site compiles
 unchanged. `scripts/gen-refusal-codes.py` learns to parse `risk_core/src/error.rs`; the catalogue
 marks these rows "(0.4 only)".
+
+As built: Plan 9 defines 70, 71, 73, 74, 75 and 77; Plan 10 adds `GracePeriod` (72) and
+`PriceFeedPinned` (76); 78-80 wait for Plan 12.
 
 ## 4. Cycle budget summary
 
@@ -815,6 +881,11 @@ to `v04/scripts/e2e.sh` with a time-compressed recommended preset (window 300 s,
 60 s: see the deviation below; spacing 40 s, first 10 s; `min_obs` 3, grace 30 s) that shows: liquidation
 refused before warm-up, nonzero confidence, a level-1 pause with a bid still filling, a stale feed
 with a fallback bid, and `SettleEmpty`/claim at level 3. Later plans extend that stage.
+As built in Plan 10 (ruling R10-13): the stage adds `grace_ms` 30 s and `grace_min_gap_ms` 30 s, a
+third unsafe position P3 and a step `grace_refused` after `fallback_final` (`SetPauseLevel 0`,
+publish, `ObserveFeed`, then a simulated `Liquidate` of P3 refused with 6072). The warm-up step
+now publishes, observes and waits out any grace before it simulates, so it still shows 6070. The
+grace step has about one block (15 s) of margin. It passed on a local run (2026-11-16).
 
 Deviation (Plan 9 pre-flight): the `tier2` stage uses a **300 s** window, not 60 s. Its feed max
 age is 180 s, and by the §3.2.4 bound a window must exceed `180 s + (3 − 2) · 40 s = 220 s` for the

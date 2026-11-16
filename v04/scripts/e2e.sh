@@ -9,8 +9,11 @@
 #   7. run `cargo run -p sdk --example system` (Plan 6: settle_debt, one debt auction, one surplus
 #      auction, check_solvency; expects "system complete" and "scan ok:", the SDK block scanner
 #      finding both system auctions),
-#   8. run `cargo run -p sdk --example tier2` (Plan 9: TWAP warm-up refusal, confidence-edge
-#      prices, a level 1 bid, a stale-feed fallback bid, level 3 settles; expects "tier2 complete"),
+#   8. run `cargo run -p sdk --example tier2` (Plan 9: the TWAP warm-up refusal, simulated after
+#      a publish, an ObserveFeed and a wait past any grace that observation opens; confidence-edge
+#      prices, a level 1 bid, a stale-feed fallback bid; Plan 10: `grace_refused`, a simulated
+#      Liquidate of a third position refused with 6072 once the feed is back; level 3 settles;
+#      expects "tier2 complete"),
 #   9. stop the sequencer by its exact process name.
 # `e2e.sh` (or `e2e.sh all`) runs every step; `up`, `deploy`, `slice`, `system`, `tier2`, `down` run
 # them in stages. Exits non-zero on any failed step. Runs locally and on hosted CI

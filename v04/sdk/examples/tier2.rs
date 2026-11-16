@@ -1,21 +1,29 @@
 //! The Tier 2 risk features end to end on a live LEZ v0.4.0-rc1 sequencer, through the SDK (Plan 9
 //! Task 12), with the time-compressed values of Plan 9 ruling R9-13 (its spacing raised from 10 s
-//! to 40 s, so the window is at most 8 spacings, the ring's capacity):
+//! to 40 s, so the window is at most 8 spacings, the ring's capacity) and Plan 10 ruling R10-13
+//! (a 30 s grace after an outage of at least 30 s):
 //!
 //! 1. `Init` (legacy engine params), then `SetCollateral` with the R9-13 `RiskArgs` (window
-//!    300_000 ms, spacing 40_000 ms, `min_obs` 3, breaker 2_000 bps, stale window 600_000 ms) and
-//!    collateral (`max_oracle_age_ms` 180_000, `max_conf_bps` 100, `band_hi_bps` 15_000).
-//! 2. A large unsafe position P1 and a tiny one P2 (the lot-3 case), and a funded bidder.
+//!    300_000 ms, spacing 40_000 ms, `min_obs` 3, breaker 2_000 bps, stale window 600_000 ms),
+//!    grace 30_000 ms after a gap of at least 30_000 ms, and collateral (`max_oracle_age_ms`
+//!    180_000, `max_conf_bps` 100, `band_hi_bps` 15_000).
+//! 2. A large unsafe position P1, two tiny ones P2 (the lot-3 case) and P3, and a funded bidder.
 //! 3. `Liquidate` P1 is refused during the TWAP warm-up (6070, `TwapUnavailable`): simulated, not
-//!    sent. A fresh price is published first, so the refusal is the warm-up and not a stale feed.
+//!    sent. A fresh price is published and observed first, so the refusal is the warm-up and not
+//!    a stale feed. Opening the positions outlasts the first price's 180 s age by more than 30 s,
+//!    so that observation may open a grace (6072 comes before 6070); the step waits it out.
 //! 4. Three prices at least one spacing apart, each with `confidence = price / 200` (50 bps) and
-//!    each followed by `ObserveFeed`, so the ring holds three samples.
+//!    each followed by `ObserveFeed`, so the ring's newest three samples are those prices.
 //! 5. `Liquidate` P1 and P2 right after the third `ObserveFeed`.
 //! 6. `SetPauseLevel 1`, then a partial bid on P1 fills (level 1 stops liquidations, not bids).
 //! 7. No more publishing until the feed is stale (`now + slack > ts + 180_000`); a final bid on P1
 //!    fills as a D4 fallback bid at the last-good TWAP and settles the auction. R9-3 makes D4
-//!    reachable: 300_000 > 180_000 + (3 - 2) · 40_000, and 600_000 > 180_000.
-//! 8. `SetPauseLevel 3`: `ClaimLeftover` on P1 and `SettleEmpty` on P2 still run.
+//!    reachable: 300_000 > 180_000 + (3 - 2) · 40_000, and 600_000 > 180_000. The bid records
+//!    when the outage began.
+//! 8. `SetPauseLevel 0`, then, at least 30 s after the outage began, a fresh price and
+//!    `ObserveFeed`, which opens the grace; `Liquidate` P3 inside it is refused with 6072
+//!    (`GracePeriod`): simulated, not sent.
+//! 9. `SetPauseLevel 3`: `ClaimLeftover` on P1 and `SettleEmpty` on P2 still run.
 //!
 //! Prints each transaction's hash, simulated cycles, `gas_limit` and fee, and `tier2 complete` on
 //! success; any failed check exits non-zero. Driven by `v04/scripts/e2e.sh` (stage `tier2`, after
@@ -51,6 +59,11 @@ const SALT: u64 = 1;
 const MAX_AGE_MS: u64 = 180_000;
 /// The sample spacing, ms: the 300 s window is at most 8 spacings, the ring's capacity.
 const SPACING_MS: u64 = 40_000;
+/// The R10-13 grace, ms: `Liquidate` waits this long after the feed returns from an outage of
+/// at least [`GRACE_MIN_GAP_MS`].
+const GRACE_MS: u64 = 30_000;
+/// The R10-13 shortest outage that opens a grace, ms.
+const GRACE_MIN_GAP_MS: u64 = 30_000;
 /// P1: the scenario of `harness/tests/cycles.rs`, collateral 500_000, debt 600_000.
 const COLLATERAL: u128 = 500_000;
 const DEBT: u128 = 600_000;
@@ -59,7 +72,8 @@ const TARGET: u128 = 660_000;
 const PENALTY: u128 = TARGET - DEBT;
 /// The level 1 partial bid's coin in.
 const PARTIAL: u128 = 100_000;
-/// P2: Plan 5's lot-3 case, where the keeper reward takes the whole seizure.
+/// P2: Plan 5's lot-3 case, where the keeper reward takes the whole seizure; P3, refused in the
+/// grace, has the same size.
 const SMALL_COLLATERAL: u128 = 3;
 const SMALL_DEBT: u128 = 10_000;
 /// The bidder's stablecoin.
@@ -69,7 +83,7 @@ const POLL: Duration = Duration::from_secs(5);
 /// The longest a wait for the head clock may take.
 const WAIT_LIMIT: Duration = Duration::from_secs(900);
 
-/// The R9-13 `RiskArgs`.
+/// The R9-13 `RiskArgs` with the R10-13 grace.
 const fn risk_args() -> RiskArgs {
     RiskArgs {
         twap_window_ms: 300_000,
@@ -77,6 +91,8 @@ const fn risk_args() -> RiskArgs {
         twap_min_obs: 3,
         max_spot_twap_dev_bps: 2_000,
         stale_bid_max_age_ms: 600_000,
+        grace_ms: GRACE_MS,
+        grace_min_gap_ms: GRACE_MIN_GAP_MS,
         ..RiskArgs::legacy()
     }
 }
@@ -184,38 +200,69 @@ async fn open_unsafe(run: &mut Run, label: &str, collateral: u128, debt: u128) -
     Ok(Pos { owner, position })
 }
 
-/// Step 2: P1 (large) and P2 (lot 3), and the funded bidder.
-async fn open_positions(run: &mut Run) -> Res<(Pos, Pos, Signer)> {
+/// The positions of step 2 and the funded bidder.
+struct Positions {
+    p1: Pos,
+    p2: Pos,
+    p3: Pos,
+    bidder: Signer,
+}
+
+/// Step 2: P1 (large), P2 (lot 3), P3 (P2's size), and the funded bidder.
+async fn open_positions(run: &mut Run) -> Res<Positions> {
     let p1 = open_unsafe(run, "owner-large", COLLATERAL, DEBT).await?;
     let p2 = open_unsafe(run, "owner-small", SMALL_COLLATERAL, SMALL_DEBT).await?;
+    let p3 = open_unsafe(run, "owner-grace", SMALL_COLLATERAL, SMALL_DEBT).await?;
     let bidder = run.live.signer("bidder");
     run.s
         .open_position(&mut run.live, &bidder, FUNDS, FUNDS)
         .await?;
-    Ok((p1, p2, bidder))
+    Ok(Positions { p1, p2, p3, bidder })
 }
 
 /// The keeper's `Liquidate` of `p`'s auction 0 at the head clock.
 async fn liquidate_plan(run: &mut Run, p: &Pos) -> Res<Plan> {
+    let now_ms = run.live.now_ms().await?;
+    liquidate_plan_at(run, p, now_ms)
+}
+
+/// The keeper's `Liquidate` of `p`'s auction 0 with the clock claim `now_ms`.
+fn liquidate_plan_at(run: &mut Run, p: &Pos, now_ms: u64) -> Res<Plan> {
     let keeper = run.live.signer("keeper");
     let args = LiquidateArgs {
         keeper: keeper.account,
         collateral_def: run.s.collateral_def,
         position: p.position,
         nonce: 0,
-        now_ms: run.live.now_ms().await?,
+        now_ms,
     };
     let host_actors = run.s.seized_actors(p.owner.account);
     Ok(sdk::plan_liquidate(&run.d, &args, &host_actors)?)
 }
 
-/// Simulates `plan` (nothing is sent) and requires it to revert with `err`'s text.
+/// The program error code `NNNN` of a revert reason's `Program error [NNNN]`, if it has one.
+fn refusal_code(reason: &str) -> Option<u32> {
+    const MARK: &str = "Program error [";
+    let start = reason.find(MARK)?.checked_add(MARK.len())?;
+    let rest = reason.get(start..)?;
+    rest.get(..rest.find(']')?)?.parse().ok()
+}
+
+/// Simulates `plan` (nothing is sent), prints the refusal code it saw, and requires `err`'s code
+/// and text.
 async fn expect_refusal(run: &Run, label: &str, plan: &Plan, err: RiskError) -> Res<()> {
     let needle = fail_text(err);
+    let expected = err.code().checked_add(6000).ok_or("the code overflows")?;
     match sdk::simulate(&run.live.client, &run.wallet, plan, run.live.payer).await {
-        Err(SdkError::WouldRevert(reason)) if reason.contains(&needle) => {
-            println!("{label}: refused as expected: {needle}");
-            Ok(())
+        Err(SdkError::WouldRevert(reason)) => {
+            let code = refusal_code(&reason);
+            println!("{label}: refusal code {code:?}");
+            if code == Some(expected) && reason.contains(&needle) {
+                println!("{label}: refused as expected: {needle}");
+                Ok(())
+            } else {
+                Err(format!("{label}: expected {needle:?}, got {reason}").into())
+            }
         }
         Err(other) => Err(format!("{label}: expected {needle:?}, got {other}").into()),
         Ok(cycles) => {
@@ -224,38 +271,50 @@ async fn expect_refusal(run: &Run, label: &str, plan: &Plan, err: RiskError) -> 
     }
 }
 
-/// Step 3: with a fresh feed and fewer than `min_obs` weighted samples, `Liquidate` P1 is refused
-/// with 6070.
-async fn warm_up_refused(run: &mut Run, p1: &Pos) -> Res<()> {
-    let label = "oracle: fresh price (warm-up check)";
+/// Publishes a fresh price and observes it; returns its publish time.
+async fn publish_observed(run: &mut Run, publish: &str, observe: &str) -> Res<u64> {
     run.s
-        .publish_with_confidence(&mut run.live, label, PRICE_RAY, CONFIDENCE)
+        .publish_with_confidence(&mut run.live, publish, PRICE_RAY, CONFIDENCE)
         .await?;
-    let liq = liquidate_plan(run, p1).await?;
-    let label = "engine: Liquidate P1 (warm-up)";
-    expect_refusal(run, label, &liq, RiskError::TwapUnavailable).await
+    let published = oracle_ts(run).await?;
+    let now = run.live.now_ms().await?;
+    let plan = sdk::plan_observe_feed(&run.d, run.s.collateral_def, now)?;
+    run.live.run(observe, &plan).await?;
+    Ok(published)
 }
 
-/// Step 4: three publications at least [`SPACING_MS`] apart, each observed; checks the ring's
-/// newest three samples are exactly those publications. Returns the newest publish time.
-async fn warm_twap(run: &mut Run) -> Res<u64> {
+/// Step 3: with a fresh feed, outside any grace and with fewer than `min_obs` weighted samples,
+/// `Liquidate` P1 is refused with 6070. Returns the fresh price's publish time.
+async fn warm_up_refused(run: &mut Run, p1: &Pos) -> Res<u64> {
+    let fresh = publish_observed(
+        run,
+        "oracle: fresh price (warm-up check)",
+        "engine: ObserveFeed (warm-up)",
+    )
+    .await?;
+    let until = collateral(run).await?.ext.grace_until_ms;
+    let now = wait_for_head(run, until, "the end of the grace").await?;
+    println!("warm-up: grace until {until}, head {now}");
+    let liq = liquidate_plan(run, p1).await?;
+    let label = "engine: Liquidate P1 (warm-up)";
+    expect_refusal(run, label, &liq, RiskError::TwapUnavailable).await?;
+    Ok(fresh)
+}
+
+/// Step 4: three publications at least [`SPACING_MS`] apart, the first one spacing after the
+/// warm-up price `after` (which the ring took), each observed; checks the ring's newest three
+/// samples are exactly those publications. Returns the newest publish time.
+async fn warm_twap(run: &mut Run, after: u64) -> Res<u64> {
     let mut published: Vec<u64> = Vec::new();
     for (publish, observe) in [
         ("oracle: sample 1", "engine: ObserveFeed 1"),
         ("oracle: sample 2", "engine: ObserveFeed 2"),
         ("oracle: sample 3", "engine: ObserveFeed 3"),
     ] {
-        if let Some(prev) = published.last() {
-            let at = prev.checked_add(SPACING_MS).ok_or("time overflows")?;
-            wait_for_head(run, at, "the sample spacing").await?;
-        }
-        run.s
-            .publish_with_confidence(&mut run.live, publish, PRICE_RAY, CONFIDENCE)
-            .await?;
-        published.push(oracle_ts(run).await?);
-        let now = run.live.now_ms().await?;
-        let plan = sdk::plan_observe_feed(&run.d, run.s.collateral_def, now)?;
-        run.live.run(observe, &plan).await?;
+        let prev = published.last().copied().unwrap_or(after);
+        let at = prev.checked_add(SPACING_MS).ok_or("time overflows")?;
+        wait_for_head(run, at, "the sample spacing").await?;
+        published.push(publish_observed(run, publish, observe).await?);
     }
     let ring = collateral(run).await?.ext.ring;
     let newest: Vec<u64> = ring.samples.iter().rev().take(3).map(|s| s.ts_ms).collect();
@@ -375,7 +434,48 @@ async fn fallback_final(run: &mut Run, p1: &Pos, bidder: &Signer, newest: u64) -
     Ok(())
 }
 
-/// Step 8: at level 3, P1's owner claims the leftover and P2 settles empty.
+/// Step 8: back at level 0, the feed returns at least [`GRACE_MIN_GAP_MS`] after the outage that
+/// step 7 recorded began; the `ObserveFeed` that sees it opens the grace, and `Liquidate` P3
+/// inside it is refused with 6072.
+async fn grace_refused(run: &mut Run, p3: &Pos) -> Res<()> {
+    set_level(run, 0).await?;
+    let since = collateral(run)
+        .await?
+        .ext
+        .feed_invalid_since_ms
+        .ok_or("no outage is recorded after the stale feed")?;
+    let back_at = since
+        .checked_add(GRACE_MIN_GAP_MS)
+        .ok_or("time overflows")?;
+    wait_for_head(run, back_at, "the shortest outage").await?;
+    let back = publish_observed(
+        run,
+        "oracle: price (feed back)",
+        "engine: ObserveFeed (feed back)",
+    )
+    .await?;
+    let ext = collateral(run).await?.ext;
+    let now = run.live.now_ms().await?;
+    println!(
+        "grace: outage since {since}, feed back at {back}, grace until {}, head {now}",
+        ext.grace_until_ms
+    );
+    if ext.feed_invalid_since_ms.is_some() || ext.grace_until_ms <= back {
+        return Err("the feed's return opened no grace".into());
+    }
+    if now >= ext.grace_until_ms {
+        return Err(format!(
+            "the grace ended at {} before the Liquidate (head {now}): the blocks ran slower than 15 s",
+            ext.grace_until_ms
+        )
+        .into());
+    }
+    let liq = liquidate_plan_at(run, p3, now)?;
+    let label = "engine: Liquidate P3 (grace)";
+    expect_refusal(run, label, &liq, RiskError::GracePeriod).await
+}
+
+/// Step 9: at level 3, P1's owner claims the leftover and P2 settles empty.
 async fn level_3_settles(run: &mut Run, p1: &Pos, p2: &Pos) -> Res<()> {
     set_level(run, 3).await?;
     let cdef = run.s.collateral_def;
@@ -403,14 +503,15 @@ async fn level_3_settles(run: &mut Run, p1: &Pos, p2: &Pos) -> Res<()> {
     Ok(())
 }
 
-/// Steps 2 to 8.
+/// Steps 2 to 9.
 async fn scenario(run: &mut Run) -> Res<()> {
-    let (p1, p2, bidder) = open_positions(run).await?;
-    warm_up_refused(run, &p1).await?;
-    let newest = warm_twap(run).await?;
+    let Positions { p1, p2, p3, bidder } = open_positions(run).await?;
+    let fresh = warm_up_refused(run, &p1).await?;
+    let newest = warm_twap(run, fresh).await?;
     liquidate_both(run, &p1, &p2).await?;
     level_1_partial(run, &p1, &bidder, newest).await?;
     fallback_final(run, &p1, &bidder, newest).await?;
+    grace_refused(run, &p3).await?;
     level_3_settles(run, &p1, &p2).await
 }
 

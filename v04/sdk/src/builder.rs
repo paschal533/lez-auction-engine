@@ -334,6 +334,32 @@ pub fn plan_set_collateral_with(
     Plan::new(proxy, actors, vec![d.admin], Vec::new(), &msg)
 }
 
+/// What the caller knows of the oracle's own answer bounds (ruling R10-8): a feed that answers at
+/// either bound is pinned there, not priced (E3, code 6076).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OracleBounds {
+    /// The oracle states no bounds: the pinned check stays off.
+    Undeclared,
+    /// The oracle's smallest and largest raw answer.
+    Declared { min_raw: u128, max_raw: u128 },
+}
+
+/// [`RiskArgs::recommended`] with the oracle's answer bounds (ruling R10-8): a caller cannot get
+/// the recommended config without stating them, even when the answer is
+/// [`OracleBounds::Undeclared`]. `SetCollateral` refuses bounds with `min_raw >= max_raw`.
+#[must_use]
+pub const fn recommended_risk(bounds: OracleBounds) -> RiskArgs {
+    let recommended = RiskArgs::recommended();
+    match bounds {
+        OracleBounds::Undeclared => recommended,
+        OracleBounds::Declared { min_raw, max_raw } => RiskArgs {
+            feed_min_raw: min_raw,
+            feed_max_raw: max_raw,
+            ..recommended
+        },
+    }
+}
+
 /// The actors of an admin message the collateral actor observes after: the admin's proxy, the
 /// config, the collateral actor, and what it observes (host params, oracle, clock).
 fn admin_observe_actors(d: &Deployment, collateral_def: AccountId) -> Vec<Actor> {

@@ -11,8 +11,9 @@ account is absent (`StartDebt` below).
 
 - **Gas cap:** 10,000,000 cycles per transaction (`max_gas_exec`, spike S8). The test asserts every
   row succeeds and stays below it; the most expensive measured instruction, `Liquidate` under the
-  Tier 2 preset with a full ring, uses under 9% of it, at the price 0.5 (884,567) and at a price
-  of 2,000,000 (888,662; see "Price and cost" in the Tier 2 section).
+  Tier 2 preset with a full ring, uses under 10% of it, at the price 0.5 (909,608) and at a price
+  of 2,000,000 (913,706; Plan 10 re-measure, 2026-11-16, at the end; Plan 9's figures were 884,567
+  and 888,662, see "Price and cost" in the Tier 2 section).
 - **Gas limit:** the SDK simulates, then declares `ceil(cycles x 1.2)` (ADR-061): 20% headroom over
   the simulated cycles, still far below the cap for every row. A revert is charged its whole limit.
 - **Executions** are counted from the message sequences: every message delivered in the
@@ -183,3 +184,74 @@ At a price of 2,000,000 (`tier2_rows_fit_the_budget_at_a_high_price`, same prese
   collateral actor; then the Observe block (`Observe`, the host's and the oracle's `ReadState` and
   their replies, the clock's `AssertTimestamp`, `Proceed`). The TWAP and the level checks add
   computation, not messages, so the other rows keep their slice and system counts.
+
+## Plan 10 re-measure (2026-11-16)
+
+Re-measured during Plan 10 Task 8 (the five engine parameters in `ConfigExt.engine` and
+`SystemCtx.ext`, the three grace fields appended to `CollateralExt`, the pinned check and the grace
+rule on every observation) by `cargo test -p harness --test cycles --test cycles_tier2 --
+--nocapture`, same scenarios as above. "Before" is the figure in the tables above (2026-11-11 for
+the slice and system rows, 2026-11-12 for Tier 2). No row gained an execution, every budget still
+holds, and the budgets and `HIGH_PRICE_EXTRA` are unchanged. The growth is decode and commit of the
+longer collateral, config and context states, and the grace and pinned checks.
+
+Slice (legacy preset):
+
+| Instruction | Executions | Cycles (2026-11-16) | Fee at base fee 8 | Before | Delta |
+|---|---|---|---|---|---|
+| Init | 9 | 273,602 | 2,188,816 | 268,510 | +5,092 |
+| SetCollateral | 11 | 334,872 | 2,678,976 | 321,027 | +13,845 |
+| Liquidate | 29 | 870,879 | 6,967,032 | 845,645 | +25,234 |
+| Bid (partial) | 15 | 419,829 | 3,358,632 | 410,776 | +9,053 |
+| Bid (final) | 21 | 595,312 | 4,762,496 | 582,089 | +13,223 |
+| ClaimLeftover | 6 | 138,105 | 1,104,840 | 137,873 | +232 |
+| SettleEmpty | 6 | 217,684 | 1,741,472 | 212,506 | +5,178 |
+
+System:
+
+| Instruction | Executions | Cycles (2026-11-16) | Fee at base fee 8 | Before | Delta |
+|---|---|---|---|---|---|
+| SetEngineParams | 6 | 204,961 | 1,639,688 | 197,182 | +7,779 |
+| SetSlack | 5 | 166,099 | 1,328,792 | 159,059 | +7,040 |
+| ObserveFeed | 7 | 178,246 | 1,425,968 | 169,522 | +8,724 |
+| SettleDebt | 8 | 211,680 | 1,693,440 | 207,540 | +4,140 |
+| StartSurplus | 10 | 258,912 | 2,071,296 | 255,707 | +3,205 |
+| TakeSurplus (partial) | 11 | 244,694 | 1,957,552 | 243,219 | +1,475 |
+| TakeSurplus (final) | 11 | 246,923 | 1,975,384 | 245,448 | +1,475 |
+| CloseSurplus | 11 | 235,794 | 1,886,352 | 234,480 | +1,314 |
+| StartDebt | 7 | 221,946 | 1,775,568 | 218,152 | +3,794 |
+| TakeDebt | 11 | 274,546 | 2,196,368 | 271,714 | +2,832 |
+| CloseDebt | 5 | 113,130 | 905,040 | 111,562 | +1,568 |
+| CheckSolvency (Healthy, burns the buffer) | 9 | 221,888 | 1,775,104 | 219,264 | +2,624 |
+| CheckSolvency (Freeze) | 8 | 241,523 | 1,932,184 | 237,436 | +4,087 |
+
+Tier 2, `RiskArgs::recommended()` (grace included; no grace is active when the rows run), ring
+full (only the ring-fill rows use `recommended_no_grace()`):
+
+| Instruction | Executions | Cycles (2026-11-16) | Fee at base fee 8 | Before | Delta | Budget |
+|---|---|---|---|---|---|---|
+| Liquidate | 29 | 909,608 | 7,276,864 | 884,567 | +25,041 | <= 1,000,000 |
+| Bid (partial) | 15 | 440,420 | 3,523,360 | 431,804 | +8,616 | <= 520,000 |
+| Bid (final) | 21 | 619,344 | 4,954,752 | 606,596 | +12,748 | <= 720,000 |
+| ObserveFeed | 7 | 190,322 | 1,522,576 | 182,074 | +8,248 | gas cap |
+| SetCollateral | 11 | 374,644 | 2,997,152 | 359,182 | +15,462 | gas cap |
+| SetPauseLevel | 12 | 375,448 | 3,003,584 | 360,206 | +15,242 | <= 400,000 (R9-10) |
+
+At a price of 2,000,000:
+
+| Instruction | Executions | Cycles (2026-11-16) | Fee at base fee 8 | Before | Delta | Budget |
+|---|---|---|---|---|---|---|
+| Liquidate | 29 | 913,706 | 7,309,648 | 888,662 | +25,044 | <= 1,000,000 |
+| Bid (partial) | 15 | 443,600 | 3,548,800 | 434,981 | +8,619 | <= 520,000 |
+
+- `Liquidate` at 2,000,000 costs 4,098 more than at 0.5 (`HIGH_PRICE_EXTRA` 20,000) and a
+  partial `Bid` 3,180 more.
+- **Grace configured, not active** (`liquidate_with_grace_configured_but_inactive_fits_the_budget`):
+  `Liquidate` under the full `RiskArgs::recommended()` (grace 30 min after an outage of at least
+  10 min) in the gap-free `World::new_tier2_live`, ring full, `grace_until_ms == 0` asserted before
+  measuring: 29 executions, 909,517 cycles (fee 7,276,136), against the `Liquidate` budget of
+  1,000,000. The Tier 2 `Liquidate` row above runs the same preset in `World::new_tier2`; the
+  two worlds' histories differ, and the rows by 91 cycles.
+- **Ring fill:** a partial bid with `twap_min_obs` 1 costs 423,308 cycles with 1 sample and 440,327
+  with 8, a spread of 17,019 (asserted at most 40,000).
+- The most expensive row, `Liquidate` at a price of 2,000,000, is 9.1 % of the gas cap.

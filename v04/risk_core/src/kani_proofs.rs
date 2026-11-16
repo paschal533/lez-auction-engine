@@ -33,7 +33,7 @@ mod proofs {
         assert_eq!(
             validate_feed_ext(&reading, &FeedPolicy::legacy(&p), r, now)
                 .map_err(FeedFault::pause_reason),
-            validate_feed(&reading, &p, r, now)
+            validate_feed(&reading, &p, r, now).map_err(Some)
         );
     }
 

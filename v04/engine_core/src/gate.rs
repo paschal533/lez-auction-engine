@@ -60,9 +60,9 @@ pub fn system_gate(cfg: &ConfigState, op: Op) -> Result<(), Refusal> {
 fn gated_market(coll: &CollateralState, obs: &Observed, op: Op) -> Result<u128, Refusal> {
     match collateral_gate(coll, op, obs.feed.is_ok())? {
         // The feed is valid: its market price.
-        Gate::Run => Ok(require_live(coll, obs)?),
-        // The feed is invalid: `require_live` returns its own code.
-        Gate::FeedRefusal | Gate::Fallback => Ok(require_live(coll, obs)?),
+        Gate::Run => require_live(coll, obs),
+        // The feed is invalid: `require_live` returns its own code (`feed_refusal`).
+        Gate::FeedRefusal | Gate::Fallback => require_live(coll, obs),
     }
 }
 
@@ -91,7 +91,7 @@ fn twap_at(coll: &CollateralState, feed: &FeedParams, now_ms: u64) -> Option<u12
 
 /// The liquidation price, checked in this order: the pause gate (`Paused` under the admin
 /// flag, else `LiquidationsPaused` at level 1 or more); an invalid feed (its
-/// own `EngineError`); with the TWAP off, `band(edge(M))`; else no TWAP (`TwapUnavailable`); a
+/// own code, `feed::feed_refusal`); with the TWAP off, `band(edge(M))`; else no TWAP (`TwapUnavailable`); a
 /// spot outside the breaker band when the breaker is on (`SpotTwapDeviation`); then
 /// `band(edge(min(M, T)))`.
 ///
@@ -147,7 +147,8 @@ fn fallback_pricing(
 /// The bid price. The pause gate runs first (`Paused` under the admin flag, `BidsPaused` at
 /// level 3). On an invalid feed at level 2 or below the D4 fallback decides (spec §3.2.3):
 /// `TwapUnavailable` without `min_obs` samples, `LastGoodTwapTooOld` past
-/// `stale_bid_max_age_ms`, else the fallback price; with D4 off, the feed's own code.
+/// `stale_bid_max_age_ms`, else the fallback price; with D4 off, the feed's own code
+/// (`feed::feed_refusal`: `PriceFeedPinned` for a pinned reading).
 ///
 /// A live bid is priced at `band(min(edge(M), floor(T · (10_000 + dev) / 10_000)))`. The anchor
 /// applies only with the TWAP and the breaker band both on, and only once the TWAP is
@@ -155,7 +156,7 @@ fn fallback_pricing(
 ///
 /// # Errors
 /// `Paused`, `BidsPaused`, `InvalidConfig`, `TwapUnavailable`, `LastGoodTwapTooOld` or the
-/// feed's own `EngineError`.
+/// feed's own refusal.
 pub fn bid_pricing(
     coll: &CollateralState,
     obs: &Observed,
@@ -190,9 +191,9 @@ mod tests {
     use super::*;
     use crate::ext::{CollateralExt, ConfigExt};
     use crate::state::fixtures;
-    use auction_core::{error::PauseReason, math::mul_div_floor, price::bid_price, units::RAY};
+    use auction_core::{math::mul_div_floor, price::bid_price, units::RAY};
     use auction_engine_params::EngineError;
-    use risk_core::{RiskArgs, TwapRing, edge, record};
+    use risk_core::{RiskArgs, TwapRing, edge, feed::FeedFault, record};
 
     /// Spacing of the recommended preset, ms.
     const SPACING: u64 = 300_000;
@@ -225,7 +226,7 @@ mod tests {
             })
     }
 
-    fn obs(c: &CollateralState, feed: Result<u128, PauseReason>, conf_bps: u16) -> Observed {
+    fn obs(c: &CollateralState, feed: Result<u128, FeedFault>, conf_bps: u16) -> Observed {
         Observed {
             clock: c.pause_clock(),
             feed,
@@ -242,7 +243,7 @@ mod tests {
             admin_paused: true,
             ..coll()
         };
-        let stale = Err(PauseReason::Stale);
+        let stale = Err(FeedFault::Stale);
         // 1. Admin pause before an invalid feed and a missing TWAP.
         assert_eq!(
             liquidation_price(&paused, &obs(&paused, stale, 0), RAY, NOW),
@@ -435,15 +436,16 @@ mod tests {
         assert!(bid_pricing(&one, &obs(&one, Ok(RAY), 0), RAY, NOW).is_ok());
         // A stale bid at level 0 takes the D4 fallback: with an empty ring, TwapUnavailable.
         assert_eq!(
-            bid_pricing(&normal, &obs(&normal, Err(PauseReason::Stale), 0), RAY, NOW),
+            bid_pricing(&normal, &obs(&normal, Err(FeedFault::Stale), 0), RAY, NOW),
             Err(Refusal::Risk(RiskError::TwapUnavailable))
         );
     }
 
     /// The D4 redemption price inside the fixture's band.
     const R_D4: u128 = RAY * 13 / 10;
-    const STALE: Result<u128, PauseReason> = Err(PauseReason::Stale);
-    const WIDE: Result<u128, PauseReason> = Err(PauseReason::LowConfidence);
+    const STALE: Result<u128, FeedFault> = Err(FeedFault::Stale);
+    const WIDE: Result<u128, FeedFault> = Err(FeedFault::LowConfidence);
+    const PINNED: Result<u128, FeedFault> = Err(FeedFault::Pinned);
 
     /// The recommended fixture, warm, with its pause opened at `NOW` and a feed max age that
     /// passes ruling R9-3 (the fixture's 1 h would leave only the newest sample inside the frozen
@@ -508,6 +510,25 @@ mod tests {
             bid_pricing(&no_d4, &obs(&no_d4, WIDE, 0), R_D4, NOW),
             Err(Refusal::Engine(EngineError::PriceFeedLowConfidence))
         );
+        assert_eq!(
+            bid_pricing(&no_d4, &obs(&no_d4, PINNED, 0), R_D4, NOW),
+            Err(Refusal::Risk(RiskError::PriceFeedPinned))
+        );
+    }
+
+    #[test]
+    fn pinned_feed_refuses_liquidation_and_gives_a_bid_the_fallback() {
+        let warm = warm_stale();
+        assert_eq!(
+            liquidation_price(&warm, &obs(&warm, PINNED, 0), R_D4, NOW),
+            Err(Refusal::Risk(RiskError::PriceFeedPinned))
+        );
+        let fallback = bid_pricing(&warm, &obs(&warm, PINNED, 0), R_D4, NOW);
+        assert_eq!(
+            fallback,
+            bid_pricing(&warm, &obs(&warm, STALE, 0), R_D4, NOW)
+        );
+        assert_eq!(fallback.map(|p| p.fallback), Ok(true));
     }
 
     #[test]

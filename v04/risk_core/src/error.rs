@@ -15,6 +15,8 @@ pub enum RiskError {
     SystemAuctionsPaused,
     /// Bids and takes are paused at this level (6075).
     BidsPaused,
+    /// The reading sits at or beyond the feed's own answer bound (6076, ADR-075).
+    PriceFeedPinned,
     /// The last good TWAP is older than the D4 window allows (6077).
     LastGoodTwapTooOld,
 }
@@ -29,6 +31,7 @@ impl RiskError {
             Self::LiquidationsPaused => 73,
             Self::SystemAuctionsPaused => 74,
             Self::BidsPaused => 75,
+            Self::PriceFeedPinned => 76,
             Self::LastGoodTwapTooOld => 77,
         }
     }
@@ -53,11 +56,12 @@ mod tests {
             LiquidationsPaused,
             SystemAuctionsPaused,
             BidsPaused,
+            PriceFeedPinned,
             LastGoodTwapTooOld,
         ]
         .iter()
         .map(RiskError::code)
         .collect();
-        assert_eq!(codes, [70, 71, 73, 74, 75, 77]);
+        assert_eq!(codes, [70, 71, 73, 74, 75, 76, 77]);
     }
 }

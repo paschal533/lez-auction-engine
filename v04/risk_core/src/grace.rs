@@ -143,8 +143,11 @@ mod tests {
         let first = s.grace_until_ms;
         let s = step(s, obs(true, 1_300_000));
         assert_eq!(s.grace_until_ms, first);
+        // Waiting out the grace unobserved re-opens it: at 3_000_000 the unobserved gap since
+        // 1_300_000 + max age is 1_100_000 >= the minimum gap, so grace runs to now + grace.
         let s = step(s, obs(true, 3_000_000));
         assert!(s.grace_until_ms >= first);
+        assert_eq!(s.grace_until_ms, 4_800_000);
     }
 
     #[test]

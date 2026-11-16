@@ -202,9 +202,10 @@ flow, not TWAP manipulation resistance.
 reporting that bound while the market moves past it (the LUNA `minAnswer` case). Each type has
 `feed_min_raw` and `feed_max_raw` in raw oracle units (`RiskArgs`; 0 and `u128::MAX` mean off). A
 reading with `feed_min_raw > 0 && price_raw <= feed_min_raw`, or `feed_max_raw < u128::MAX &&
-price_raw >= feed_max_raw`, is invalid with fault `Pinned`. `validate_feed_ext` checks it after the
-age and before the zero price, so a pinned reading that is also stale is reported stale. A pinned
-reading takes the same path as any invalid feed: it pauses the type and opens its pause clock, it
+price_raw >= feed_max_raw`, is invalid with fault `Pinned`. `validate_feed_ext` checks, in order:
+age, pinned, the scale conversion, zero price, confidence, sanity window, so a pinned reading that
+is also stale is reported stale. A pinned reading takes the same path as any invalid feed: it
+pauses the type and opens its pause clock, it
 is not recorded in the TWAP ring, `Liquidate` and a bid with D4 off are refused with
 `PriceFeedPinned` (6076), and with D4 on a bid uses the last-good TWAP as above. The frozen
 `PauseReason` has no variant for it, so `FeedFault::pause_reason` returns `None` for `Pinned` and
@@ -231,8 +232,16 @@ feed, then grace, then the TWAP checks. Grace reads the state after the transact
 observation, so the `Liquidate` that ends an outage is refused. That refusal reverts the
 transaction, so the grace it would open is not stored: a keeper that only sends `Liquidate` is
 refused on every attempt until a transaction that does not revert (`ObserveFeed`, or a bid)
-stores the observation, and the grace then runs from that observation. The cost is liquidation
-latency only; a keeper should send `ObserveFeed` when the feed returns. A spurious grace is
+stores the observation, and the grace then runs from that observation. Waiting out a grace
+without observing re-opens it: the first valid observation at `grace_until_ms` sees an unobserved
+gap of `grace_ms − max_oracle_age_ms`, which opens a new grace whenever `grace_ms >=
+max_oracle_age_ms + grace_min_gap_ms` (the recommended values on a 10 min max age), and its
+`Liquidate` is refused and stores nothing. So a keeper must send `ObserveFeed` when the feed
+returns and keep observing, during the grace too, at intervals shorter than `max_oracle_age_ms +
+grace_min_gap_ms`; with the TWAP on, observing every `twap_min_spacing_ms` does it when that
+spacing is the shorter, with the TWAP off nothing else forces it. Under that interval the cost is
+liquidation latency of about `grace_ms`; otherwise `Liquidate` stays refused until someone sends
+`ObserveFeed`, which is permissionless. It never gives a wrong price. A spurious grace is
 accepted for the same reason: a type whose first observation is invalid, or any gap of at least
 `grace_min_gap_ms` that nobody observed, opens a grace on the next valid observation, including
 right after deployment. Legacy has grace off; recommended has `grace_ms` 1_800_000 (30 min) after
@@ -242,7 +251,9 @@ Tests: the unit tests of `v04/risk_core/src/grace.rs` (`observed_outage_starts_g
 `grace_until_is_monotone_and_bounded`); `grace_blocks_liquidate_not_bid`,
 `grace_refusal_moves_nothing`, `grace_expires_at_its_end`, `a_short_outage_starts_no_grace`,
 `a_liquidate_that_ends_the_outage_is_refused`, `turning_grace_on_does_not_start_one`,
-`set_collateral_keeps_the_grace_state` (`v04/harness/tests/grace.rs`); `every_operation_during_grace`
+`set_collateral_keeps_the_grace_state`, `waiting_out_a_grace_unobserved_reopens_it`
+(`v04/harness/tests/grace.rs`); `a_second_outage_only_extends` (`v04/risk_core/src/grace.rs`);
+`record_starts_grace_after_an_unobserved_gap` (`v04/engine_core/src/feed.rs`); `every_operation_during_grace`
 (`v04/harness/tests/pause_matrix.rs`). The `tier2` e2e stage ends its outage with an `ObserveFeed`
 and simulates a `Liquidate` refused with 6072 (`grace_refused`, grace 30 s after a 30 s gap); that
 step has run locally and passed (2026-11-16), not yet on a hosted runner.

@@ -252,6 +252,35 @@ fn grace_blocks_liquidate_not_bid() {
     invariants::check(&w);
 }
 
+/// Keeper rule (ADR-075): observe when the feed returns and keep observing, during the grace
+/// too, at intervals below `max_oracle_age_ms + grace_min_gap_ms`. A keeper that waits out the
+/// grace unobserved re-opens it at its `Liquidate`; observing through the new grace ends it.
+#[test]
+fn waiting_out_a_grace_unobserved_reopens_it() {
+    let (mut w, _, open, _) = auction_and_open();
+    w.start_grace();
+    let until = w.collateral_state().ext.grace_until_ms;
+    // Straight to the end of the grace, no observation on the way.
+    w.set_now_ms(until);
+    w.set_price(P);
+    let before = w.snapshot_all();
+    expect_revert(w.liquidate(open, 0), &fail_text(RiskError::GracePeriod));
+    assert_eq!(w.snapshot_all(), before, "a refusal changes nothing");
+    assert_eq!(w.collateral_state().ext.grace_until_ms, until);
+    // An `ObserveFeed` stores the re-opened grace.
+    w.observe_feed(w.now_ms).expect("the feed is observed");
+    let reopened = w.collateral_state().ext.grace_until_ms;
+    let grace_ms = RiskArgs::recommended().grace_ms;
+    assert_eq!(reopened, until.checked_add(grace_ms).expect("time fits"));
+    // Observed every `OBSERVE_STEP_MS` to its end: the TWAP is warm and the grace does not
+    // re-open, so the keeper liquidates.
+    w.advance_observed(reopened, P);
+    assert_eq!(w.collateral_state().ext.grace_until_ms, reopened);
+    w.liquidate(open, 0)
+        .expect("observed through the grace, the keeper liquidates");
+    invariants::check(&w);
+}
+
 #[test]
 fn grace_refusal_moves_nothing() {
     let (mut w, _, open, _) = auction_and_open();

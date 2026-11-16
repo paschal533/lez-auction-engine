@@ -370,6 +370,31 @@ mod tests {
     }
 
     #[test]
+    fn record_starts_grace_after_an_unobserved_gap() {
+        // Recommended preset: grace 1_800_000, minimum gap 600_000; fixture max age 3_600_000.
+        let on = CollateralState {
+            ext: CollateralExt::new(risk_core::RiskArgs::recommended()),
+            ..fresh()
+        };
+        let step = |c: &CollateralState, r: &OracleReading, now: u64| {
+            let obs = observe(c, r, RAY, now, 6_000).expect("observes");
+            assert_eq!(obs.feed, Ok(RAY));
+            record(c, r, &obs, now)
+        };
+        let good = step(&on, &reading(1_000), 1_000);
+        // No invalid observation between: the gap is the reading's ts - (1_000 + max age).
+        let back = step(&good, &reading(4_201_000), 4_201_000);
+        assert_eq!(back.ext.grace_until_ms, 4_201_000 + 1_800_000);
+        assert_eq!(back.ext.last_good_ts_ms, Some(4_201_000));
+        assert_eq!(back.ext.feed_invalid_since_ms, None);
+        // One millisecond short of max age + minimum gap: no grace.
+        let short = step(&good, &reading(4_200_999), 4_200_999);
+        assert_eq!(short.ext.grace_until_ms, 0);
+        assert_eq!(short.ext.last_good_ts_ms, Some(4_200_999));
+        assert_eq!(short.ext.feed_invalid_since_ms, None);
+    }
+
+    #[test]
     fn observe_reports_conf_bps_and_record_takes_valid_readings_only() {
         let off = fresh();
         let on = CollateralState {

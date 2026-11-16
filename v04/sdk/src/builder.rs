@@ -344,9 +344,10 @@ pub enum OracleBounds {
     Declared { min_raw: u128, max_raw: u128 },
 }
 
-/// [`RiskArgs::recommended`] with the oracle's answer bounds (ruling R10-8): a caller cannot get
-/// the recommended config without stating them, even when the answer is
-/// [`OracleBounds::Undeclared`]. `SetCollateral` refuses bounds with `min_raw >= max_raw`.
+/// [`RiskArgs::recommended`] with the oracle's answer bounds (ruling R10-8): the SDK's entry
+/// point for the recommended config, which makes the caller state the bounds, even when the
+/// answer is [`OracleBounds::Undeclared`]. [`RiskArgs::recommended`] stays public and leaves the
+/// pin bounds off. `SetCollateral` refuses bounds with `min_raw >= max_raw`.
 #[must_use]
 pub const fn recommended_risk(bounds: OracleBounds) -> RiskArgs {
     let recommended = RiskArgs::recommended();

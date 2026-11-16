@@ -533,8 +533,9 @@ single +30 % print → `SpotTwapDeviation`).
 Cycles: a few compares and two `u64` fields; within the E1 estimate.
 
 As built (Plan 10, rulings R10-8 to R10-12; ADR-075):
-- **Check order.** `validate_feed_ext` checks age, pinned, zero price, confidence, sanity window,
-  so a stale pinned reading is `Stale`. `FeedFault::Pinned` has no frozen `PauseReason`, so
+- **Check order.** `validate_feed_ext` checks age, pinned, the scale conversion (a raw price that
+  does not convert is `OutOfRange`), zero price, confidence, sanity window, so a stale pinned
+  reading is `Stale`. `FeedFault::Pinned` has no frozen `PauseReason`, so
   `FeedFault::pause_reason` returns `Option<PauseReason>` (`None` for `Pinned`), `Observed.feed`
   is `Result<u128, FeedFault>`, and `engine_core::feed::require_live` returns `Result<u128,
   Refusal>`, mapping `Pinned` to `PriceFeedPinned` (6076).
@@ -550,6 +551,25 @@ As built (Plan 10, rulings R10-8 to R10-12; ADR-075):
 - **Timing.** Grace reads the state after the transaction's own observation, so the `Liquidate`
   that ends an outage is refused; a refusal reverts, so that grace is not stored, and a keeper
   must send `ObserveFeed` (or a bid) to store it. Grace ends at `now_ms == grace_until_ms`.
+- **Waiting out a grace unobserved re-opens it (ADR-075).** After the observation that ends an
+  outage at `t0`, `last_good_ts` is `t0` and the grace runs to `t0 + grace_ms`. If nobody observes
+  during it, the first valid observation at `t0 + grace_ms` sees an unobserved gap of
+  `grace_ms − max_oracle_age_ms`, so whenever `grace_ms >= max_oracle_age_ms + grace_min_gap_ms`
+  (the recommended 30 min after 10 min on a 10 min max age) it opens a new grace and its
+  `Liquidate` is refused and stores nothing. Keeper rule: observe when the feed returns and keep
+  observing, during the grace too, at intervals shorter than `max_oracle_age_ms +
+  grace_min_gap_ms`. With the TWAP on, the K1 keeper's observation every `twap_min_spacing_ms`
+  satisfies it when that spacing is the shorter; with the TWAP off nothing else forces it. The
+  "liquidation latency only" above holds only under that interval: otherwise `Liquidate` stays
+  refused until someone sends `ObserveFeed`, which is permissionless. Tests:
+  `a_second_outage_only_extends`, `record_starts_grace_after_an_unobserved_gap`,
+  `waiting_out_a_grace_unobserved_reopens_it`. Open option for the owner: refuse
+  `grace_ms >= max_oracle_age_ms + grace_min_gap_ms` with the TWAP off in `RiskArgs::validate`;
+  Plan 10 does not.
+- **Turning grace off, claimed time.** A `SetCollateral` with `grace_ms: 0` does not end a running
+  grace (`in_grace` reads only `grace_until_ms`, and the grace state is kept), so `Liquidate` stays
+  refused until the old `grace_until_ms`, at most 24 h away. The claimed `now_ms` can shift an
+  observed gap or the end of a grace by up to `slack_ms`, the bounded backdating ADR-058 accepts.
 - **Spurious grace.** A type whose first observation is invalid, or any gap of at least
   `grace_min_gap_ms` that nobody observed, opens a grace on the next valid observation, including
   right after deployment, as accepted above.
@@ -562,7 +582,8 @@ As built (Plan 10, rulings R10-8 to R10-12; ADR-075):
   both are `<= 86_400_000`.
 - **Tests.** The tests named above exist; the harness ones are in `v04/harness/tests/grace.rs`
   (ruling R10-14), with `a_short_outage_starts_no_grace`, `a_liquidate_that_ends_the_outage_is_refused`,
-  `turning_grace_on_does_not_start_one`, `set_collateral_keeps_the_grace_state` and
+  `turning_grace_on_does_not_start_one`, `set_collateral_keeps_the_grace_state`,
+  `waiting_out_a_grace_unobserved_reopens_it` and
   `a_bid_on_a_pinned_feed_uses_d4_or_the_pinned_code` added; the matrix column is
   `every_operation_during_grace`. Existing Tier 2 fixtures that jump time without observing run
   with grace off (`harness::tier2::recommended_no_grace()`), because under the full recommended
@@ -746,7 +767,7 @@ Mechanism: a change that only tightens applies as today. Any other change is sto
 tightening-only change also clears it; the admin re-queues if still wanted). `ApplyPending` (49) is
 root at `K`, permissionless, asserts the clock, refuses before `eta` (`ChangeNotDue`, 6079) or with
 nothing pending (`NoPendingChange`, 6080), re-validates, re-checks the system-auction lock
-(`ProtocolTokenLocked`, `v04/engine_core/src/assertions.rs:68-76`) and applies through the same path
+(`ProtocolTokenLocked`, `v04/engine_core/src/assertions.rs:73-84`) and applies through the same path
 as the original message. `CancelPending` (50) is admin-only. `SetEngineParams` gains `now_ms` for
 `eta`.
 

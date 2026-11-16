@@ -9,6 +9,8 @@ pub enum RiskError {
     TwapUnavailable,
     /// Spot and TWAP differ by more than the configured band (6071).
     SpotTwapDeviation,
+    /// Liquidations wait while the feed's grace window is open (6072, ADR-075).
+    GracePeriod,
     /// Liquidations are paused at this level (6073).
     LiquidationsPaused,
     /// Surplus and debt auctions are paused at the system level (6074).
@@ -28,6 +30,7 @@ impl RiskError {
         match self {
             Self::TwapUnavailable => 70,
             Self::SpotTwapDeviation => 71,
+            Self::GracePeriod => 72,
             Self::LiquidationsPaused => 73,
             Self::SystemAuctionsPaused => 74,
             Self::BidsPaused => 75,
@@ -53,6 +56,7 @@ mod tests {
         let codes: Vec<u32> = [
             TwapUnavailable,
             SpotTwapDeviation,
+            GracePeriod,
             LiquidationsPaused,
             SystemAuctionsPaused,
             BidsPaused,
@@ -62,6 +66,6 @@ mod tests {
         .iter()
         .map(RiskError::code)
         .collect();
-        assert_eq!(codes, [70, 71, 73, 74, 75, 76, 77]);
+        assert_eq!(codes, [70, 71, 72, 73, 74, 75, 76, 77]);
     }
 }

@@ -103,16 +103,18 @@ impl Level {
     }
 }
 
-/// The collateral feed as the gate sees it: valid, or stale / invalid.
+/// The collateral feed as the gate sees it: valid, stale / invalid, or valid again inside the
+/// grace window after an outage (ADR-075).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedCase {
     Live,
     Stale,
+    Grace,
 }
 
 impl FeedCase {
-    /// Both cases.
-    pub const ALL: [FeedCase; 2] = [FeedCase::Live, FeedCase::Stale];
+    /// Every case.
+    pub const ALL: [FeedCase; 3] = [FeedCase::Live, FeedCase::Stale, FeedCase::Grace];
 }
 
 /// What an allowed operation does next.
@@ -129,19 +131,21 @@ pub enum Gate {
 /// The rule table of spec §3.2.2: whether `op` runs at `level` with the collateral feed `feed`.
 ///
 /// # Errors
-/// `LiquidationsPaused` for `Liquidate` at level 1 or more; `SystemAuctionsPaused` for a system
+/// `LiquidationsPaused` for `Liquidate` at level 1 or more; `GracePeriod` for `Liquidate` at
+/// level 0 inside the grace window; `SystemAuctionsPaused` for a system
 /// start at level 2 or more; `BidsPaused` for `Bid` and the system takes at level 3.
 pub fn allowed(op: Op, level: Level, feed: FeedCase) -> Result<Gate, RiskError> {
     let halted = level == Level::Halted;
     match op {
         Op::Liquidate if level != Level::Normal => Err(RiskError::LiquidationsPaused),
-        Op::Liquidate => Ok(match feed {
-            FeedCase::Live => Gate::Run,
-            FeedCase::Stale => Gate::FeedRefusal,
-        }),
+        Op::Liquidate => match feed {
+            FeedCase::Live => Ok(Gate::Run),
+            FeedCase::Stale => Ok(Gate::FeedRefusal),
+            FeedCase::Grace => Err(RiskError::GracePeriod),
+        },
         Op::Bid if halted => Err(RiskError::BidsPaused),
         Op::Bid => Ok(match feed {
-            FeedCase::Live => Gate::Run,
+            FeedCase::Live | FeedCase::Grace => Gate::Run,
             FeedCase::Stale => Gate::Fallback,
         }),
         Op::StartSurplus | Op::StartDebt => match level {
@@ -177,29 +181,53 @@ mod tests {
     const LIQ: Cell = Err(RiskError::LiquidationsPaused);
     const SYS: Cell = Err(RiskError::SystemAuctionsPaused);
     const BIDS: Cell = Err(RiskError::BidsPaused);
+    const GRACE: Cell = Err(RiskError::GracePeriod);
 
-    /// Spec §3.2.2, row by row: L0-L3 with a live feed, then L0-L3 with a stale feed.
-    const TABLE: [(Op, [Cell; 8]); 17] = [
-        (Op::Liquidate, [RUN, LIQ, LIQ, LIQ, FEED, LIQ, LIQ, LIQ]),
+    /// Spec §3.2.2, row by row: L0-L3 with a live feed, then with a stale feed, then in grace.
+    const TABLE: [(Op, [Cell; 12]); 17] = [
+        (
+            Op::Liquidate,
+            [
+                RUN, LIQ, LIQ, LIQ, FEED, LIQ, LIQ, LIQ, GRACE, LIQ, LIQ, LIQ,
+            ],
+        ),
         (
             Op::Bid,
-            [RUN, RUN, RUN, BIDS, FALLBACK, FALLBACK, FALLBACK, BIDS],
+            [
+                RUN, RUN, RUN, BIDS, FALLBACK, FALLBACK, FALLBACK, BIDS, RUN, RUN, RUN, BIDS,
+            ],
         ),
-        (Op::StartSurplus, [RUN, RUN, SYS, SYS, RUN, RUN, SYS, SYS]),
-        (Op::StartDebt, [RUN, RUN, SYS, SYS, RUN, RUN, SYS, SYS]),
-        (Op::TakeSurplus, [RUN, RUN, RUN, BIDS, RUN, RUN, RUN, BIDS]),
-        (Op::TakeDebt, [RUN, RUN, RUN, BIDS, RUN, RUN, RUN, BIDS]),
-        (Op::SettleEmpty, [RUN; 8]),
-        (Op::ClaimLeftover, [RUN; 8]),
-        (Op::SettleDebt, [RUN; 8]),
-        (Op::CheckSolvency, [RUN; 8]),
-        (Op::CloseSurplus, [RUN; 8]),
-        (Op::CloseDebt, [RUN; 8]),
-        (Op::ObserveFeed, [RUN; 8]),
-        (Op::SetCollateral, [RUN; 8]),
-        (Op::SetEngineParams, [RUN; 8]),
-        (Op::SetSlack, [RUN; 8]),
-        (Op::SetPauseLevel, [RUN; 8]),
+        (
+            Op::StartSurplus,
+            [RUN, RUN, SYS, SYS, RUN, RUN, SYS, SYS, RUN, RUN, SYS, SYS],
+        ),
+        (
+            Op::StartDebt,
+            [RUN, RUN, SYS, SYS, RUN, RUN, SYS, SYS, RUN, RUN, SYS, SYS],
+        ),
+        (
+            Op::TakeSurplus,
+            [
+                RUN, RUN, RUN, BIDS, RUN, RUN, RUN, BIDS, RUN, RUN, RUN, BIDS,
+            ],
+        ),
+        (
+            Op::TakeDebt,
+            [
+                RUN, RUN, RUN, BIDS, RUN, RUN, RUN, BIDS, RUN, RUN, RUN, BIDS,
+            ],
+        ),
+        (Op::SettleEmpty, [RUN; 12]),
+        (Op::ClaimLeftover, [RUN; 12]),
+        (Op::SettleDebt, [RUN; 12]),
+        (Op::CheckSolvency, [RUN; 12]),
+        (Op::CloseSurplus, [RUN; 12]),
+        (Op::CloseDebt, [RUN; 12]),
+        (Op::ObserveFeed, [RUN; 12]),
+        (Op::SetCollateral, [RUN; 12]),
+        (Op::SetEngineParams, [RUN; 12]),
+        (Op::SetSlack, [RUN; 12]),
+        (Op::SetPauseLevel, [RUN; 12]),
     ];
 
     /// Every `(level, feed)` in the column order of [`TABLE`].
@@ -220,7 +248,7 @@ mod tests {
                 cases = cases.checked_add(1).expect("few cases");
             }
         }
-        assert_eq!(cases, 136);
+        assert_eq!(cases, 204);
     }
 
     #[test]

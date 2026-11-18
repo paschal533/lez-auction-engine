@@ -79,6 +79,8 @@ fn expected_config(w: &World) -> ConfigState {
 /// `[0, 200, 2_700_000, 1_000]`). Its Observe block saw the oracle's publish at 0 (valid), and
 /// it carries the config's observe context.
 fn expected_collateral(w: &World) -> CollateralState {
+    // The oracle's publish time the first observation sees (also `last_seen_oracle_ts`).
+    let oracle_publish_ts_ms = 0;
     CollateralState {
         tag: TAG_COLL,
         config: w.config.account_id,
@@ -109,7 +111,7 @@ fn expected_collateral(w: &World) -> CollateralState {
         admin_paused: false,
         paused_since_ms: None,
         paused_total_ms: 0,
-        last_seen_oracle_ts: Some(0),
+        last_seen_oracle_ts: Some(oracle_publish_ts_ms),
         ctx: ObserveCtx {
             host: w.params,
             oracle: w.oracle,
@@ -117,7 +119,11 @@ fn expected_collateral(w: &World) -> CollateralState {
             slack_ms: SLACK_MS,
         },
         pending: None,
-        ext: CollateralExt::new(RiskArgs::legacy()),
+        // `SetCollateral` observes the feed and `record` stores the reading time (Plan 10, R10-10).
+        ext: CollateralExt {
+            last_good_ts_ms: Some(oracle_publish_ts_ms),
+            ..CollateralExt::new(RiskArgs::legacy())
+        },
     }
 }
 

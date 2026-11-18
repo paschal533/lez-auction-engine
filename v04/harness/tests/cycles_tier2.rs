@@ -11,13 +11,16 @@
 //!
 //! `Liquidate` and a partial `Bid` are measured a second time at a price of 2_000_000
 //! ([`HIGH`]), where `price · weight` of a TWAP term is past u128, against the same budgets.
+//!
+//! `Liquidate` is measured a third time with the grace of the full recommended preset configured
+//! but not active (Plan 10), in the gap-free `World::new_tier2_live`, against the same budget.
 
 use engine_core::msg::EngineMsg;
 use harness::{
     World,
     bidding::Bidder,
     cycles::{Row, measured, proxied, table, write_table},
-    tier2::tier2_collateral_args,
+    tier2::{recommended_no_grace, tier2_collateral_args},
     world::{MIN_CR_RAY, RAY},
 };
 use lee::{AccountId, Actor, error::LeeError};
@@ -290,7 +293,7 @@ fn tier2_rows_fit_the_budget_at_a_high_price() {
 fn partial_bid_cycles(samples: u8) -> u64 {
     let risk = RiskArgs {
         twap_min_obs: 1,
-        ..RiskArgs::recommended()
+        ..recommended_no_grace()
     };
     let (mut w, position) = warmed(BASE, risk, samples);
     w.liquidate(position, 0).expect("the keeper liquidates");
@@ -317,5 +320,36 @@ fn bid_cost_is_independent_of_ring_fill() {
     assert!(
         one.abs_diff(full) <= RING_FILL_SPREAD,
         "ring of 1: {one}, ring of 8: {full}, spread above {RING_FILL_SPREAD}"
+    );
+}
+
+/// `Liquidate` under the full recommended preset, grace configured (30 min after an outage of at
+/// least 10 min) but not active, on a full ring: the gap-free live world, so the grace check runs
+/// and passes. Fits the `Liquidate` budget.
+#[test]
+fn liquidate_with_grace_configured_but_inactive_fits_the_budget() {
+    let mut w = World::new_tier2_live(RiskArgs::recommended());
+    w.advance_observed(T, P);
+    let position = w.open_unsafe_position(BASE.collateral, BASE.debt);
+    w.set_price(P);
+    w.warm_twap(P, full_ring(), SPACING);
+    later(&mut w, AFTER_SAMPLE_MS);
+    assert_eq!(ring_len(&w), TWAP_CAPACITY);
+    let ext = w.collateral_state().ext;
+    assert!(ext.risk.grace_ms > 0, "grace is configured");
+    assert_eq!(ext.grace_until_ms, 0, "no grace is active");
+
+    let rows = [measured(
+        "Liquidate (grace configured, inactive)",
+        LIQUIDATE_EXECUTIONS,
+        liquidate_cycles(&w, position),
+    )];
+    let markdown = table(&rows);
+    println!("{markdown}");
+    write_table("cycles-v04-tier2-grace.md", &markdown);
+    w.liquidate(position, 0).expect("the keeper liquidates");
+    assert_budgets(
+        &rows,
+        &[("Liquidate (grace configured, inactive)", LIQUIDATE_BUDGET)],
     );
 }

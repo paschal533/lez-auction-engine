@@ -27,7 +27,7 @@ use engine_core::{
     },
     assertions,
     check::{expect_from, fail, slack_in_range},
-    ext::{CollateralExt, ConfigExt, validate_risk},
+    ext::{CollateralExt, ConfigExt, validate_engine_ext, validate_risk},
     msg::{EngineMsg, ProbeKind, ProtocolGenesis},
     state::{
         AccountingState, CollateralState, ConfigState, ObserveCtx, SystemParamsRec, TAG_COLL,
@@ -40,7 +40,7 @@ use lee_core::{
 };
 use mock_host_core::HostMsg;
 use oracle_core::OracleMsg;
-use risk_core::RiskArgs;
+use risk_core::{EngineExtArgs, RiskArgs};
 use token_core::TokenMsg;
 
 /// The engine program `E`: the receiver's program.
@@ -89,6 +89,7 @@ pub fn on_init(input: &ReceiveInput, message: &EngineMsg) -> Response {
         slack_ms,
         ref_oracle,
         protocol_genesis,
+        ext,
     } = message
     else {
         panic!("engine: BadMessage")
@@ -106,6 +107,7 @@ pub fn on_init(input: &ReceiveInput, message: &EngineMsg) -> Response {
         slack_ms: *slack_ms,
         ref_oracle: *ref_oracle,
         protocol_genesis: *protocol_genesis,
+        ext: **ext,
     };
     init_config(input, &config)
 }
@@ -122,6 +124,7 @@ struct InitConfig<'a> {
     slack_ms: u64,
     ref_oracle: Option<Actor>,
     protocol_genesis: Option<ProtocolGenesis>,
+    ext: EngineExtArgs,
 }
 
 /// The reference-oracle slot (v0.2.4 `optional_slot` / `check_distinct_slots`): an actor iff
@@ -171,6 +174,7 @@ fn init_config(input: &ReceiveInput, c: &InitConfig<'_>) -> Response {
         fail(EngineError::WrongAccount("config"));
     }
     let system = c.params.validate().unwrap_or_else(|err| fail(err));
+    validate_engine_ext(&c.ext).unwrap_or_else(|err| fail(err));
     slack_in_range(c.slack_ms).unwrap_or_else(|err| fail(err));
     nonzero_actor(c.host);
     nonzero(c.token);
@@ -212,7 +216,7 @@ fn init_config(input: &ReceiveInput, c: &InitConfig<'_>) -> Response {
         pending_genesis: c.protocol_genesis,
         collateral_def: None,
         pending_host_read: true,
-        ext: ConfigExt::default(),
+        ext: ConfigExt::new(c.ext),
     };
     Response::set_state(state.encode())
 }
@@ -273,13 +277,14 @@ fn init_accounting(input: &ReceiveInput) -> Response {
 /// `SetEngineParams` at the config, forwarded by the admin's proxy, in v0.2.4's order: admin,
 /// `validate`, the reference-oracle slot (as at `Init`), the reference-price step, write. Then
 /// the cap check of the config's recorded collateral type and, if the protocol token, the
-/// reference oracle or the system parameters change, `AssertSystemIdle` at the accounting, so a
-/// cap error is reported before the lock error, as in v0.2.4.
+/// reference oracle, the system parameters or `ext.ref_scale` change (R10-5), `AssertSystemIdle`
+/// at the accounting, so a cap error is reported before the lock error, as in v0.2.4.
 pub fn on_set_engine_params(input: &ReceiveInput, message: &EngineMsg) -> Response {
     let EngineMsg::SetEngineParams {
         salt,
         params,
         ref_oracle,
+        ext,
     } = message
     else {
         panic!("engine: BadMessage")
@@ -290,10 +295,11 @@ pub fn on_set_engine_params(input: &ReceiveInput, message: &EngineMsg) -> Respon
     if config.admin != admin {
         fail(EngineError::NotAdmin);
     }
-    let next = updated_config(input, &config, params, *ref_oracle);
+    let next = updated_config(input, &config, params, *ref_oracle, ext);
     let locked_fields_change = next.protocol_token != config.protocol_token
         || next.protocol_token_oracle != config.protocol_token_oracle
-        || next.system != config.system;
+        || next.system != config.system
+        || next.ext.engine.ref_scale != config.ext.engine.ref_scale;
     let capped = cap_check(input, Response::set_state(next.encode()), &next);
     if locked_fields_change {
         let accounting = accounting_actor(engine(input), input.receiver.account_id);
@@ -350,14 +356,17 @@ pub fn on_slack_update(input: &ReceiveInput, slack_ms: u64) -> Response {
     Response::set_state(next.encode())
 }
 
-/// `config` with the validated `params` and reference oracle (v0.2.4 checks and codes).
+/// `config` with the validated `params`, reference oracle and engine `ext` (v0.2.4 checks and
+/// codes; an out-of-bound `ext` is `InvalidConfig`); the system level is kept.
 fn updated_config(
     input: &ReceiveInput,
     config: &ConfigState,
     params: &EngineParamsArgs,
     ref_oracle: Option<Actor>,
+    ext: &EngineExtArgs,
 ) -> ConfigState {
     let system = params.validate().unwrap_or_else(|err| fail(err));
+    validate_engine_ext(ext).unwrap_or_else(|err| fail(err));
     let (e, k) = (engine(input), input.receiver.account_id);
     let ref_oracle = ref_oracle_slot(
         params.ref_oracle_enabled,
@@ -379,6 +388,10 @@ fn updated_config(
         freeze_on_bad_debt: params.freeze_on_bad_debt,
         bad_debt_freeze_threshold: params.bad_debt_freeze_threshold,
         system: SystemParamsRec::from_core(&system),
+        ext: ConfigExt {
+            engine: *ext,
+            ..config.ext
+        },
         ..config.clone()
     }
 }
@@ -457,7 +470,7 @@ pub fn on_set_collateral(
     }
     args.validate(config.global_cap)
         .unwrap_or_else(|err| fail(err));
-    validate_risk(risk, args.max_oracle_age_ms).unwrap_or_else(|err| fail(err));
+    validate_risk(risk, args).unwrap_or_else(|err| fail(err));
     let k = input.receiver.account_id;
     let configure = EngineMsg::Configure {
         collateral_def,
@@ -580,6 +593,12 @@ fn fresh_collateral(
             twap_min_obs: 0,
             max_spot_twap_dev_bps: 0,
             stale_bid_max_age_ms: 0,
+            sanity_lo_bps: 5_000,
+            sanity_hi_bps: 20_000,
+            feed_min_raw: 0,
+            feed_max_raw: u128::MAX,
+            grace_ms: 0,
+            grace_min_gap_ms: 0,
         }),
     }
 }

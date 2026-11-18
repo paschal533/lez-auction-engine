@@ -25,7 +25,7 @@ use engine_core::{
     state::ConfigState,
 };
 use lee::{AccountId, Actor, PublicAccountEvidence};
-use risk_core::RiskArgs;
+use risk_core::{EngineExtArgs, RiskArgs};
 use token_core::holding_actor;
 
 use crate::{SdkError, simulate::StateSource};
@@ -225,6 +225,8 @@ pub struct InitArgs {
     pub ref_oracle: Option<Actor>,
     /// The protocol token's genesis supply and recipient, if any.
     pub protocol_genesis: Option<ProtocolGenesis>,
+    /// The engine's reference-oracle and relist parameters (Plan 10, R10-1).
+    pub ext: EngineExtArgs,
 }
 
 /// The keeper's `Liquidate`.
@@ -287,6 +289,7 @@ pub fn plan_init(engine: AccountId, admin: AccountId, args: InitArgs) -> Result<
         slack_ms: args.slack_ms,
         ref_oracle: args.ref_oracle,
         protocol_genesis: args.protocol_genesis,
+        ext: Box::new(args.ext),
     };
     Plan::new(proxy, actors, vec![admin], Vec::new(), &msg)
 }
@@ -329,6 +332,33 @@ pub fn plan_set_collateral_with(
         risk: Box::new(risk),
     };
     Plan::new(proxy, actors, vec![d.admin], Vec::new(), &msg)
+}
+
+/// What the caller knows of the oracle's own answer bounds (ruling R10-8): a feed that answers at
+/// either bound is pinned there, not priced (E3, code 6076).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OracleBounds {
+    /// The oracle states no bounds: the pinned check stays off.
+    Undeclared,
+    /// The oracle's smallest and largest raw answer.
+    Declared { min_raw: u128, max_raw: u128 },
+}
+
+/// [`RiskArgs::recommended`] with the oracle's answer bounds (ruling R10-8): the SDK's entry
+/// point for the recommended config, which makes the caller state the bounds, even when the
+/// answer is [`OracleBounds::Undeclared`]. [`RiskArgs::recommended`] stays public and leaves the
+/// pin bounds off. `SetCollateral` refuses bounds with `min_raw >= max_raw`.
+#[must_use]
+pub const fn recommended_risk(bounds: OracleBounds) -> RiskArgs {
+    let recommended = RiskArgs::recommended();
+    match bounds {
+        OracleBounds::Undeclared => recommended,
+        OracleBounds::Declared { min_raw, max_raw } => RiskArgs {
+            feed_min_raw: min_raw,
+            feed_max_raw: max_raw,
+            ..recommended
+        },
+    }
 }
 
 /// The actors of an admin message the collateral actor observes after: the admin's proxy, the

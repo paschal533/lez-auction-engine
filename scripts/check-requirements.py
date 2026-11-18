@@ -14,6 +14,8 @@ crates, programs, cli, fuzz and v04):
   ci:FILE/JOB       JOB is a key under `jobs:` in .github/workflows/FILE
   doc:PATH          an existing file or directory
 Plan 4, M1-M7 and Descoped rows need a note.
+F8 (Plan 10): docs/architecture/f8-parameters.md under the root must exist and have no table row whose
+Kind cell is "production default — Tier 2" (a value the admin cannot set).
 """
 import os
 import re
@@ -30,6 +32,8 @@ NONE_MARKER = "—"  # em dash alone in an evidence cell: no evidence for that e
 NEEDS_EVIDENCE = {"PoC", "PoC (partial)"}
 TOKEN = re.compile(r"`([A-Za-z0-9_]+)`(\[ignored\])?|(golden|script|ci|doc):([^\s,|]+)")
 SOURCE_DIRS = ("crates", "programs", "cli", "fuzz", "v04")
+F8_DOC_PATH = "docs/architecture/f8-parameters.md"  # relative to --root
+F8_GAP_KIND = "production default — Tier 2"
 
 
 def rust_sources(root):
@@ -133,12 +137,36 @@ def check(text, root, required=REQUIRED):
     return errors
 
 
+def f8_gap_errors(root):
+    """One error per table row of F8_DOC_PATH whose Kind cell is the F8-gap kind (Plan 10 closed them).
+
+    The Kind column is found from each table's header row, so the kind's definition line in the doc's
+    Kinds list, and the same words in another column, do not count."""
+    path = os.path.join(root, F8_DOC_PATH)
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except OSError as e:
+        return [f"cannot read {F8_DOC_PATH}: {e}"]
+    errors, kind_col = [], None
+    for line in lines:
+        if not line.startswith("|"):
+            kind_col = None
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if kind_col is None:
+            kind_col = cells.index("Kind") if "Kind" in cells else -1
+        elif kind_col >= 0 and len(cells) > kind_col and cells[kind_col].startswith(F8_GAP_KIND):
+            errors.append(f"{F8_DOC_PATH}: F8 gap row {cells[0]} (Kind `{F8_GAP_KIND}`): "
+                          "make it an init parameter or say why it is not an economic value")
+    return errors
+
+
 def main(argv):
     if len(argv) < 2:
         print(__doc__, file=sys.stderr)
         return 2
     root = argv[argv.index("--root") + 1] if "--root" in argv else os.path.dirname(os.path.abspath(argv[1]))
-    errors = check(open(argv[1], encoding="utf-8").read(), root)
+    errors = check(open(argv[1], encoding="utf-8").read(), root) + f8_gap_errors(root)
     for e in errors:
         print("check-requirements: " + e, file=sys.stderr)
     if not errors:

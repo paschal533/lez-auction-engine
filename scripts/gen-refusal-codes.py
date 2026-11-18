@@ -96,6 +96,8 @@ MEANINGS = {
     'SystemAuctionsPaused': 'The engine is at pause level 2 or above; no new surplus or debt auction.',
     'BidsPaused': 'Pause level 3: no bids or system takes.',
     'LastGoodTwapTooOld': 'The last good TWAP is older than `stale_bid_max_age_ms`; stale-feed bid refused.',
+    'GracePeriod': 'Liquidation refused during the grace period after a feed or chain gap (`grace_ms`).',
+    'PriceFeedPinned': "The reading is at or beyond the feed's configured answer bound (`feed_min_raw` / `feed_max_raw`), which pauses the type.",
     'Math': 'Arithmetic overflow, underflow or division by zero.',
 }
 

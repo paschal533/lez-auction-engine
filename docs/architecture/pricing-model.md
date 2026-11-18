@@ -187,8 +187,8 @@ Tests: `stale_feed_bid_uses_the_last_good_twap`, `stale_feed_bid_refused_past_ma
 `fallback_price_never_breaches_the_floor` is written, not run (ADR-015). The `tier2` stage of
 `v04/scripts/e2e.sh` settles an auction with a fallback bid on a standalone sequencer; it passed
 locally with a 10 s spacing and again on 2026-11-13 with the 40 s spacing the ring bound needs
-(§1); it has not run in CI yet. It exercises the flow, not TWAP manipulation
-resistance.
+(§1), and on a hosted runner: `v04-e2e` run 43392160297 on `06fedda`, 2026-11-13. It exercises the
+flow, not TWAP manipulation resistance.
 
 **Why bounded last-good TWAP, and not the two simpler rules:**
 
@@ -197,6 +197,66 @@ resistance.
 | Refuse every bid (D4 off) | No recovery for the length of the outage. Black Thursday (Maker, March 2020: congestion, failing keepers, zero-bid auctions; `docs/research/research-3-auction-mechanics.md` §3, incident 1) showed that the hours the chain or a feed is degraded are the hours liquidations matter most. |
 | Freeze the price seen at auction open | The fixed-`top` problem of §1, plus no `redo` to escape it: the price drifts from the market for as long as the outage lasts. |
 | Last good TWAP, bounded by age and floor | Bids keep clearing on the most recent price the engine trusted. The age bound stops it once that price is too old to trust; the floor bounds the worst sale. A TWAP is harder to move with one bad print than a spot reading. |
+
+**Pinned readings as built (ADR-075), v04 only.** A feed that hits its own answer bound keeps
+reporting that bound while the market moves past it (the LUNA `minAnswer` case). Each type has
+`feed_min_raw` and `feed_max_raw` in raw oracle units (`RiskArgs`; 0 and `u128::MAX` mean off). A
+reading with `feed_min_raw > 0 && price_raw <= feed_min_raw`, or `feed_max_raw < u128::MAX &&
+price_raw >= feed_max_raw`, is invalid with fault `Pinned`. `validate_feed_ext` checks, in order:
+age, pinned, the scale conversion, zero price, confidence, sanity window, so a pinned reading that
+is also stale is reported stale. A pinned reading takes the same path as any invalid feed: it
+pauses the type and opens its pause clock, it
+is not recorded in the TWAP ring, `Liquidate` and a bid with D4 off are refused with
+`PriceFeedPinned` (6076), and with D4 on a bid uses the last-good TWAP as above. The frozen
+`PauseReason` has no variant for it, so `FeedFault::pause_reason` returns `None` for `Pinned` and
+the engine maps it to the v04-only code (ruling R10-9). Both presets have the bounds off, because
+they are the oracle's; the SDK's `recommended_risk(OracleBounds)` makes the caller state them. Tests:
+`pinned_is_checked_after_stale_and_before_zero` (`v04/risk_core/src/feed.rs`);
+`pinned_low_and_high_readings_pause_the_type`, `pinned_reading_is_not_recorded`,
+`a_bid_on_a_pinned_feed_uses_d4_or_the_pinned_code` (`v04/harness/tests/grace.rs`).
+
+**Grace period as built (ADR-075), v04 only.** When a feed comes back after an outage, borrowers
+need time to top up against the fresh price before keepers liquidate them on it. The collateral
+actor keeps `last_good_ts_ms` (the newest valid reading's timestamp, clamped to `now`),
+`feed_invalid_since_ms` and `grace_until_ms` (`CollateralExt`). An invalid observation sets the
+outage's onset once, at `min(last_good_ts_ms + max_oracle_age_ms, now)`. A valid observation
+measures the gap: `now − feed_invalid_since_ms` if an outage was observed, else
+`reading_ts − (last_good_ts_ms + max_oracle_age_ms)` (saturating), which covers an outage nobody
+observed. If `grace_ms > 0` and the gap is at least `grace_min_gap_ms`, `grace_until_ms` becomes
+`max(grace_until_ms, now + grace_ms)`. The oracle publishes by transaction, so a halted sequencer
+shows up as a publish gap: one rule covers feed and chain outages.
+
+While `now < grace_until_ms` and the feed is valid, `Liquidate` is refused with `GracePeriod`
+(6072); bids, settles and system operations run. The `Liquidate` order is level (6073), then the
+feed, then grace, then the TWAP checks. Grace reads the state after the transaction's own
+observation, so the `Liquidate` that ends an outage is refused. That refusal reverts the
+transaction, so the grace it would open is not stored: a keeper that only sends `Liquidate` is
+refused on every attempt until a transaction that does not revert (`ObserveFeed`, or a bid)
+stores the observation, and the grace then runs from that observation. Waiting out a grace
+without observing re-opens it: the first valid observation at `grace_until_ms` sees an unobserved
+gap of `grace_ms − max_oracle_age_ms`, which opens a new grace whenever `grace_ms >=
+max_oracle_age_ms + grace_min_gap_ms` (the recommended values on a 10 min max age), and its
+`Liquidate` is refused and stores nothing. So a keeper must send `ObserveFeed` when the feed
+returns and keep observing, during the grace too, at intervals shorter than `max_oracle_age_ms +
+grace_min_gap_ms`; with the TWAP on, observing every `twap_min_spacing_ms` does it when that
+spacing is the shorter, with the TWAP off nothing else forces it. Under that interval the cost is
+liquidation latency of about `grace_ms`; otherwise `Liquidate` stays refused until someone sends
+`ObserveFeed`, which is permissionless. It never gives a wrong price. A spurious grace is
+accepted for the same reason: a type whose first observation is invalid, or any gap of at least
+`grace_min_gap_ms` that nobody observed, opens a grace on the next valid observation, including
+right after deployment. Legacy has grace off; recommended has `grace_ms` 1_800_000 (30 min) after
+a `grace_min_gap_ms` of 600_000 (10 min), and `validate` refuses `grace_ms > 0` with a zero gap.
+Tests: the unit tests of `v04/risk_core/src/grace.rs` (`observed_outage_starts_grace`,
+`grace_needs_a_gap_of_at_least_min`, `unobserved_gap_starts_grace`, the proptest
+`grace_until_is_monotone_and_bounded`); `grace_blocks_liquidate_not_bid`,
+`grace_refusal_moves_nothing`, `grace_expires_at_its_end`, `a_short_outage_starts_no_grace`,
+`a_liquidate_that_ends_the_outage_is_refused`, `turning_grace_on_does_not_start_one`,
+`set_collateral_keeps_the_grace_state`, `waiting_out_a_grace_unobserved_reopens_it`
+(`v04/harness/tests/grace.rs`); `a_second_outage_only_extends` (`v04/risk_core/src/grace.rs`);
+`record_starts_grace_after_an_unobserved_gap` (`v04/engine_core/src/feed.rs`); `every_operation_during_grace`
+(`v04/harness/tests/pause_matrix.rs`). The `tier2` e2e stage ends its outage with an `ObserveFeed`
+and simulates a `Liquidate` refused with 6072 (`grace_refused`, grace 30 s after a 30 s gap); that
+step has run locally and passed (2026-11-16), not yet on a hosted runner.
 
 ## 3. Oracle-extractable value
 

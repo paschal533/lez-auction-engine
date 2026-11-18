@@ -16,7 +16,7 @@ pub const LEGACY_SANITY_LO_BPS: u32 = 5_000;
 pub const LEGACY_SANITY_HI_BPS: u32 = 20_000;
 
 /// The per-type feed policy: v0.2.4's [`FeedParams`] fields plus the sanity window and the raw
-/// pin bounds (carried, not checked, in Plan 9).
+/// raw pin bounds (`validate_feed_ext` refuses a reading at or beyond them as `Pinned`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeedPolicy {
     pub scale: OracleScale,
@@ -44,30 +44,35 @@ impl FeedPolicy {
     }
 }
 
-/// Why a reading is unusable. Maps one-to-one onto the feed [`PauseReason`]s.
+/// Why a reading is unusable. The first four map one-to-one onto the feed [`PauseReason`]s;
+/// `Pinned` (a reading at the feed's own answer bound, ADR-075) is v04-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedFault {
     Stale,
     ZeroPrice,
     LowConfidence,
     OutOfRange,
+    Pinned,
 }
 
 impl FeedFault {
-    /// The pause this fault causes.
+    /// The v0.2.4 pause reason of this fault; `None` for `Pinned`, which the frozen
+    /// [`PauseReason`] cannot name (ruling R10-9).
     #[must_use]
-    pub const fn pause_reason(self) -> PauseReason {
+    pub const fn pause_reason(self) -> Option<PauseReason> {
         match self {
-            Self::Stale => PauseReason::Stale,
-            Self::ZeroPrice => PauseReason::ZeroPrice,
-            Self::LowConfidence => PauseReason::LowConfidence,
-            Self::OutOfRange => PauseReason::OutOfRange,
+            Self::Stale => Some(PauseReason::Stale),
+            Self::ZeroPrice => Some(PauseReason::ZeroPrice),
+            Self::LowConfidence => Some(PauseReason::LowConfidence),
+            Self::OutOfRange => Some(PauseReason::OutOfRange),
+            Self::Pinned => None,
         }
     }
 }
 
 /// The market price `M` in RAY when the feed is usable, else the fault. Checks in v0.2.4's
-/// order: age, scale, zero, confidence, sanity window.
+/// order with the pin bounds after the age: age, pin bounds, scale, zero, confidence, sanity
+/// window. A bound of 0 (low) or `u128::MAX` (high) is off, so the legacy policy pins nothing.
 pub fn validate_feed_ext(
     r: &OracleReading,
     policy: &FeedPolicy,
@@ -76,6 +81,11 @@ pub fn validate_feed_ext(
 ) -> Result<u128, FeedFault> {
     if age_now_ms.saturating_sub(r.timestamp_ms) > policy.max_age_ms {
         return Err(FeedFault::Stale);
+    }
+    if (policy.feed_min_raw > 0 && r.price_raw <= policy.feed_min_raw)
+        || (policy.feed_max_raw < u128::MAX && r.price_raw >= policy.feed_max_raw)
+    {
+        return Err(FeedFault::Pinned);
     }
     let m = to_ray(r.price_raw, policy.scale).map_err(|_| FeedFault::OutOfRange)?;
     if m == 0 {
@@ -97,15 +107,53 @@ pub fn validate_feed_ext(
     Ok(m)
 }
 
+/// The admin price, overridden by a valid oracle price clamped to `±clamp_bps` of it (v0.2.4's
+/// `effective_ref_price` with the clamp lifted into a parameter; at 2_000 the results are equal).
+/// A missing or faulty reading gives the admin price. A `clamp_bps` of 0 pins the admin price.
+#[must_use]
+pub fn effective_ref_price_ext(
+    admin_ray: u128,
+    oracle: Option<Result<u128, FeedFault>>,
+    clamp_bps: u16,
+) -> u128 {
+    let Some(Ok(o)) = oracle else {
+        return admin_ray;
+    };
+    let clamp = u128::from(clamp_bps);
+    let lo = mul_div_floor(admin_ray, BPS.saturating_sub(clamp), BPS).unwrap_or(0);
+    let hi = mul_div_floor(admin_ray, BPS.saturating_add(clamp), BPS).unwrap_or(u128::MAX);
+    o.clamp(lo, hi)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use auction_core::{
         math::mul_div_floor,
-        price::{MAX_ORACLE_AGE_MS, validate_feed},
+        price::{MAX_ORACLE_AGE_MS, effective_ref_price, validate_feed},
         units::RAY,
     };
     use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn effective_ref_price_ext_matches_v024_at_2000(
+            admin in any::<u128>(), oracle in prop::option::of(prop::result::maybe_ok(any::<u128>(), Just(()))),
+        ) {
+            let v024 = oracle.map(|r| r.map_err(|()| PauseReason::OutOfRange));
+            let ext = oracle.map(|r| r.map_err(|()| FeedFault::OutOfRange));
+            prop_assert_eq!(
+                effective_ref_price_ext(admin, ext, 2_000),
+                effective_ref_price(admin, v024));
+        }
+    }
+
+    #[test]
+    fn ref_clamp_zero_pins_to_the_admin_price() {
+        for o in [0, RAY, 2 * RAY, 3 * RAY, u128::MAX] {
+            assert_eq!(effective_ref_price_ext(2 * RAY, Some(Ok(o)), 0), 2 * RAY);
+        }
+    }
 
     fn params(scale: OracleScale) -> FeedParams {
         FeedParams {
@@ -130,7 +178,7 @@ mod tests {
             prop_assert_eq!(
                 validate_feed_ext(&reading, &FeedPolicy::legacy(&p), r, age_now)
                     .map_err(FeedFault::pause_reason),
-                validate_feed(&reading, &p, r, age_now));
+                validate_feed(&reading, &p, r, age_now).map_err(Some));
         }
     }
 
@@ -212,7 +260,7 @@ mod tests {
             prop_assert_eq!(
                 validate_feed_ext(&reading, &FeedPolicy::legacy(&p), r, age_now)
                     .map_err(FeedFault::pause_reason),
-                validate_feed(&reading, &p, r, age_now));
+                validate_feed(&reading, &p, r, age_now).map_err(Some));
         }
 
         /// The only steps where ext differs in form from v0.2.4: the legacy bounds equal
@@ -270,16 +318,73 @@ mod tests {
                 FeedFault::Stale,
                 FeedFault::ZeroPrice,
                 FeedFault::LowConfidence,
-                FeedFault::OutOfRange
+                FeedFault::OutOfRange,
+                FeedFault::Pinned
             ]
             .map(FeedFault::pause_reason),
             [
-                PauseReason::Stale,
-                PauseReason::ZeroPrice,
-                PauseReason::LowConfidence,
-                PauseReason::OutOfRange
+                Some(PauseReason::Stale),
+                Some(PauseReason::ZeroPrice),
+                Some(PauseReason::LowConfidence),
+                Some(PauseReason::OutOfRange),
+                None
             ]
         );
+    }
+
+    /// Redemption price for the pin tests: with `sanity_lo_bps` 1_000 the window is
+    /// `[50, 1_000]`, which holds every raw price in `100..=1_000`.
+    const PIN_R: u128 = 500;
+
+    /// The legacy policy with pin bounds `(100, 1_000)` and a sanity floor of `R / 10`.
+    fn pinned_policy() -> FeedPolicy {
+        FeedPolicy {
+            sanity_lo_bps: 1_000,
+            feed_min_raw: 100,
+            feed_max_raw: 1_000,
+            ..FeedPolicy::legacy(&params(OracleScale::Ray))
+        }
+    }
+
+    fn fresh_at(policy: &FeedPolicy, price_raw: u128, now: u64) -> Result<u128, FeedFault> {
+        let reading = OracleReading {
+            price_raw,
+            confidence_raw: 0,
+            timestamp_ms: 0,
+        };
+        validate_feed_ext(&reading, policy, PIN_R, now)
+    }
+
+    #[test]
+    fn pinned_low_and_high_readings_are_invalid() {
+        let policy = pinned_policy();
+        for raw in [99, 100, 1_000, 1_001] {
+            assert_eq!(fresh_at(&policy, raw, 0), Err(FeedFault::Pinned), "{raw}");
+        }
+        for raw in [101, 999] {
+            assert_eq!(fresh_at(&policy, raw, 0), Ok(raw), "{raw}");
+        }
+    }
+
+    #[test]
+    fn pinned_is_checked_after_stale_and_before_zero() {
+        let policy = pinned_policy();
+        assert_eq!(fresh_at(&policy, 100, 3_600_001), Err(FeedFault::Stale));
+        assert_eq!(fresh_at(&policy, 0, 0), Err(FeedFault::Pinned));
+        let legacy = FeedPolicy::legacy(&params(OracleScale::Ray));
+        assert_eq!(fresh_at(&legacy, 0, 0), Err(FeedFault::ZeroPrice));
+    }
+
+    #[test]
+    fn unset_pin_bounds_pin_nothing() {
+        let policy = FeedPolicy {
+            feed_min_raw: 0,
+            feed_max_raw: u128::MAX,
+            ..pinned_policy()
+        };
+        for raw in [1, u128::MAX] {
+            assert_ne!(fresh_at(&policy, raw, 0), Err(FeedFault::Pinned), "{raw}");
+        }
     }
 
     #[test]

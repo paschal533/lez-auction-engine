@@ -559,7 +559,7 @@ pub(crate) mod fixtures {
             pending_genesis: None,
             collateral_def: None,
             pending_host_read: false,
-            ext: ConfigExt::default(),
+            ext: ConfigExt::new(risk_core::EngineExtArgs::legacy()),
         }
     }
 

@@ -125,7 +125,7 @@ fn buffer_reader(e: AccountId, ctx: &SystemCtx) -> Actor {
 /// `System` at the accounting, from exactly its config (`system_sender`): start the Read block.
 pub fn on_system(input: &ReceiveInput, op: SystemOp, now_ms: u64, ctx: SystemCtx) -> Response {
     let acc = system_sender(input, ctx.config).unwrap_or_else(|err| fail(err));
-    precheck(op, now_ms, &acc);
+    precheck(op, now_ms, &acc, ctx.ext.debt_relist_delay_ms);
     let pending = SystemPending {
         op,
         now_ms,
@@ -151,8 +151,9 @@ pub fn on_system(input: &ReceiveInput, op: SystemOp, now_ms: u64, ctx: SystemCtx
 
 /// The op's checks before any read: a surplus start names the accounting's next nonce
 /// (`NonceMismatch`); a debt start too, and its relist delay has elapsed at the claimed time
-/// `now_ms` (`DelayNotElapsed`, ADR-039); `SettleDebt` and `CheckSolvency` check nothing.
-fn precheck(op: SystemOp, now_ms: u64, acc: &AccountingState) {
+/// `now_ms` (`DelayNotElapsed`, ADR-039; the delay is the config's `debt_relist_delay_ms`, carried in
+/// the `System` context); `SettleDebt` and `CheckSolvency` check nothing.
+fn precheck(op: SystemOp, now_ms: u64, acc: &AccountingState, relist_delay_ms: u64) {
     match op {
         SystemOp::SettleDebt { .. } | SystemOp::CheckSolvency => {}
         SystemOp::StartSurplus { nonce } => {
@@ -161,7 +162,7 @@ fn precheck(op: SystemOp, now_ms: u64, acc: &AccountingState) {
             }
         }
         SystemOp::StartDebt { nonce } => {
-            debt_precheck(acc, nonce, now_ms).unwrap_or_else(|err| fail(err));
+            debt_precheck(acc, nonce, now_ms, relist_delay_ms).unwrap_or_else(|err| fail(err));
         }
     }
 }

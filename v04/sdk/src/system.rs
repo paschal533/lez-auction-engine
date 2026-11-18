@@ -54,6 +54,7 @@ use engine_core::{
 };
 use lee::{AccountId, Actor, PublicAccountEvidence};
 use oracle_core::OracleState;
+use risk_core::EngineExtArgs;
 use token_core::{Holding, holding_seed};
 
 use crate::{
@@ -69,6 +70,8 @@ pub struct SetEngineParamsArgs {
     pub params: EngineParamsArgs,
     /// The reference oracle, present iff `params.ref_oracle_enabled`.
     pub ref_oracle: Option<Actor>,
+    /// The engine's reference-oracle and relist parameters (Plan 10, R10-1).
+    pub ext: EngineExtArgs,
 }
 
 /// A take from a surplus or debt auction.
@@ -86,8 +89,8 @@ pub struct TakeArgs {
 
 /// `SetEngineParams` at the admin's proxy, signed by the admin: proxy and config; the config's
 /// recorded collateral actor (`AssertCapAtMost`) if it has one; the accounting
-/// (`AssertSystemIdle`) if the protocol token, the reference oracle or the system parameters
-/// change, as the engine decides it from the config's state in `source`.
+/// (`AssertSystemIdle`) if the protocol token, the reference oracle, the system parameters or
+/// `ext.ref_scale` change (R10-5), as the engine decides it from the config's state in `source`.
 ///
 /// # Errors
 /// [`SdkError::MissingState`] if the config is absent or does not decode; [`SdkError::Encode`].
@@ -114,7 +117,8 @@ pub fn plan_set_engine_params(
             .then(|| protocol_def(engine, config.account_id));
         let locked_fields_change = next_token != state.protocol_token
             || args.ref_oracle != state.protocol_token_oracle
-            || SystemParamsRec::from_core(&system) != state.system;
+            || SystemParamsRec::from_core(&system) != state.system
+            || args.ext.ref_scale != state.ext.engine.ref_scale;
         if locked_fields_change {
             actors.push(accounting_actor(engine, config.account_id));
         }
@@ -123,6 +127,7 @@ pub fn plan_set_engine_params(
         salt: args.salt,
         params: Box::new(args.params),
         ref_oracle: args.ref_oracle,
+        ext: Box::new(args.ext),
     };
     Plan::new(proxy, actors, vec![admin], Vec::new(), &msg)
 }

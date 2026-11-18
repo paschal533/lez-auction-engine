@@ -1,9 +1,11 @@
 """Review Focus 5: the requirements checker must not be fooled (Plan 3b Task 15)."""
 import importlib.util
+import io
 import os
 import pathlib
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 
 SPEC = importlib.util.spec_from_file_location(
     "check_requirements", pathlib.Path(__file__).resolve().parents[1] / "check-requirements.py")
@@ -129,6 +131,41 @@ fn middle_ignored() {}
     def test_f8_required(self):
         errs = cr.check(HEADER + "| F1 | x | PoC | `real_test` | — | |\n", self.root)
         self.assertIn("F8: missing from REQUIREMENTS.md", errs)
+
+    F8_DOC = ("# F8\n\nKinds:\n\n"
+              "- **production default — Tier 2**: a value the admin cannot set (an F8 gap).\n\n"
+              "| Constant | Value | File:line | Kind | Why |\n|---|---|---|---|---|\n"
+              "| `RAY` | 10^27 | `units.rs:3` | math constant | scale |\n"
+              "| `X_MAX` | 5 | `x.rs:1` | init parameter bound | caps x |\n")
+    GAP_ROW = "| `FIXED` | 7 | `y.rs:2` | production default — Tier 2 | the admin cannot set it |\n"
+
+    def run_main(self, f8_doc):
+        if f8_doc is not None:
+            self.write(cr.F8_DOC_PATH, f8_doc)
+        rows = "".join(f"| {rid} | x | Descoped | — | — | out of scope |\n" for rid in cr.REQUIRED)
+        self.write("REQUIREMENTS.md", HEADER + rows)
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            code = cr.main(["check", os.path.join(self.root, "REQUIREMENTS.md"), "--root", self.root])
+        # Only the checker's own lines: the interpreter may print ResourceWarnings to stderr too.
+        return code, "".join(l for l in err.getvalue().splitlines(True) if l.startswith("check-requirements: "))
+
+    def test_f8_gap_rows_fail_the_check(self):
+        # The doc's Kinds list defines the kind on a bullet line, not a table row: it must not trip.
+        self.assertEqual((0, ""), self.run_main(self.F8_DOC))
+        code, err = self.run_main(self.F8_DOC + self.GAP_ROW)
+        self.assertEqual(1, code)
+        self.assertIn("F8 gap", err)
+        self.assertIn("`FIXED`", err)
+
+    def test_f8_gap_text_outside_the_kind_cell_does_not_trip(self):
+        row = "| `NOTE` | 1 | `z.rs:3` | math constant | was production default — Tier 2 before Plan 10 |\n"
+        self.assertEqual((0, ""), self.run_main(self.F8_DOC + row))
+
+    def test_missing_f8_doc_fails(self):
+        code, err = self.run_main(None)
+        self.assertEqual(1, code)
+        self.assertIn(cr.F8_DOC_PATH, err)
 
     def test_five_column_row_reports_format_error(self):
         errs = self.errors("| F1 | x | PoC | `real_test` | |\n")

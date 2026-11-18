@@ -6,8 +6,10 @@
 extern crate alloc;
 
 pub mod args;
+pub mod engine_ext;
 pub mod error;
 pub mod feed;
+pub mod grace;
 mod kani_proofs;
 pub mod math;
 pub mod pause;
@@ -21,10 +23,16 @@ pub use args::{
     DEV_MAX_BPS, DEV_MIN_BPS, RiskArgs, RiskArgsError, TWAP_MIN_OBS_MAX, TWAP_SPACING_MIN_MS,
     TWAP_WINDOW_MAX_MS, TWAP_WINDOW_MIN_MS,
 };
+pub use engine_ext::{
+    EngineExtArgs, REF_CLAMP_MAX_BPS, REF_CONF_MAX_BPS, RELIST_DELAY_MAX_MS, RELIST_DELAY_MIN_MS,
+    SANITY_HI_MAX_BPS, SANITY_LO_MIN_BPS,
+};
 pub use error::RiskError;
 pub use feed::{
-    FeedFault, FeedPolicy, LEGACY_SANITY_HI_BPS, LEGACY_SANITY_LO_BPS, validate_feed_ext,
+    FeedFault, FeedPolicy, LEGACY_SANITY_HI_BPS, LEGACY_SANITY_LO_BPS, effective_ref_price_ext,
+    validate_feed_ext,
 };
+pub use grace::{GraceObservation, GraceState, in_grace, observed};
 pub use pause::{FeedCase, Gate, Level, Op, allowed};
 pub use price::{conf_bps, edge, fallback_bid_price, liq_price, live_bid_price, within_deviation};
 pub use stale::{fallback_twap, floored_price, stale_cap};

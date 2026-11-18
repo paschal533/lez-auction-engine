@@ -9,35 +9,43 @@
 //! past (ADR-058; design note §4.1).
 
 use auction_core::{
-    error::PauseReason,
     pause::{Observation, OnsetPolicy, PauseClock},
     price::{OracleReading, to_ray},
 };
 use auction_engine_params::EngineError;
 use risk_core::{
+    RiskError,
     feed::{FeedFault, FeedPolicy, validate_feed_ext},
+    grace::{self, GraceObservation},
     price::conf_bps,
 };
 
-use crate::{ext::CollateralExt, state::CollateralState};
+use crate::{check::Refusal, ext::CollateralExt, state::CollateralState};
 
 /// The confidence of an unconvertible reading, bps: the widest edge.
 const CONF_SATURATED_BPS: u16 = 10_000;
 
-/// One observation: the next pause clock, the feed verdict (the market price if valid) and the
-/// reading's confidence in bps of the price (0 when the feed is invalid).
+/// One observation: the next pause clock, the feed verdict (the market price if valid, else the
+/// fault) and the reading's confidence in bps of the price (0 when the feed is invalid).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Observed {
     pub clock: PauseClock,
-    pub feed: Result<u128, PauseReason>,
+    pub feed: Result<u128, FeedFault>,
     pub conf_bps: u16,
 }
 
-/// The type's feed policy. Plan 9 runs every type under v0.2.4's policy (sanity `[R/2, 2R]`,
-/// no pin bounds). A free fn rather than a `CollateralState` method: `state.rs` is at its size
-/// limit.
+/// The type's feed policy: v0.2.4's feed parameters with the sanity window and the pin bounds
+/// from the type's `RiskArgs`. A free fn rather than a `CollateralState` method: `state.rs` is at
+/// its size limit.
 pub fn feed_policy(coll: &CollateralState) -> Result<FeedPolicy, EngineError> {
-    Ok(FeedPolicy::legacy(&coll.feed_params()?))
+    let risk = &coll.ext.risk;
+    Ok(FeedPolicy {
+        sanity_lo_bps: risk.sanity_lo_bps,
+        sanity_hi_bps: risk.sanity_hi_bps,
+        feed_min_raw: risk.feed_min_raw,
+        feed_max_raw: risk.feed_max_raw,
+        ..FeedPolicy::legacy(&coll.feed_params()?)
+    })
 }
 
 /// One pause observation at `now_ms` (policy (b), ADR-007). `feed_valid` comes from
@@ -53,7 +61,7 @@ pub fn observe(
 ) -> Result<Observed, EngineError> {
     let policy = feed_policy(coll)?;
     let age_now = now_ms.checked_add(slack_ms).ok_or(EngineError::Math)?;
-    let feed = validate_feed_ext(reading, &policy, r_ray, age_now).map_err(FeedFault::pause_reason);
+    let feed = validate_feed_ext(reading, &policy, r_ray, age_now);
     let clock = coll.pause_clock().observed(
         Observation {
             now_ms,
@@ -77,8 +85,9 @@ pub fn observe(
     })
 }
 
-/// Offers this observation's reading to the TWAP ring (spec §3.1.2): `coll` with the ring after
-/// `risk_core::record` when the feed is valid and the TWAP is on, else `coll` unchanged.
+/// Records this observation (spec §3.1.2, ADR-075): the grace state after
+/// `risk_core::grace::observed` on every observation, valid or not; and the ring after
+/// `risk_core::record` when the feed is valid and the TWAP is on. Everything else is `coll`'s.
 #[must_use]
 pub fn record(
     coll: &CollateralState,
@@ -87,34 +96,67 @@ pub fn record(
     now_ms: u64,
 ) -> CollateralState {
     let risk = coll.ext.risk;
-    match obs.feed {
-        Ok(m) if risk.twap_window_ms > 0 => CollateralState {
-            ext: CollateralExt {
-                risk,
-                pause_level: coll.ext.pause_level,
-                ring: risk_core::record(
-                    &coll.ext.ring,
-                    reading.timestamp_ms,
-                    m,
-                    obs.conf_bps,
-                    now_ms,
-                    risk.twap_min_spacing_ms,
-                ),
-            },
-            ..coll.clone()
+    let grace = grace::observed(
+        coll.ext.grace(),
+        GraceObservation {
+            valid: obs.feed.is_ok(),
+            reading_ts_ms: reading.timestamp_ms,
+            now_ms,
+            max_age_ms: coll.max_oracle_age_ms,
         },
-        Ok(_) | Err(_) => coll.clone(),
+        risk.grace_ms,
+        risk.grace_min_gap_ms,
+    );
+    let graced = CollateralExt {
+        last_good_ts_ms: grace.last_good_ts_ms,
+        feed_invalid_since_ms: grace.feed_invalid_since_ms,
+        grace_until_ms: grace.grace_until_ms,
+        ..coll.ext.clone()
+    };
+    let ext = match obs.feed {
+        Ok(m) if risk.twap_window_ms > 0 => CollateralExt {
+            ring: risk_core::record(
+                &coll.ext.ring,
+                reading.timestamp_ms,
+                m,
+                obs.conf_bps,
+                now_ms,
+                risk.twap_min_spacing_ms,
+            ),
+            ..graced
+        },
+        Ok(_) | Err(_) => graced,
+    };
+    CollateralState {
+        ext,
+        ..coll.clone()
     }
 }
 
+/// A feed fault's refusal (ruling R10-9): `Pinned` is `PriceFeedPinned` (6076); every other
+/// fault keeps v0.2.4's `EngineError` for its pause reason.
+#[must_use]
+pub fn feed_refusal(fault: FeedFault) -> Refusal {
+    // `pause_reason` is `None` for `Pinned` only.
+    fault
+        .pause_reason()
+        .map_or(Refusal::Risk(RiskError::PriceFeedPinned), |reason| {
+            Refusal::Engine(EngineError::from(reason))
+        })
+}
+
 /// The market price if the type is live, else the pause as an error (`Paused`, `PriceFeedStale`,
-/// `PriceFeedLowConfidence`, `PriceFeedOutOfRange`). A reverting transaction drops its observation;
-/// policy (b) recovers the onset from the oracle timestamp at the next successful one (ADR-032).
-pub fn require_live(coll: &CollateralState, obs: &Observed) -> Result<u128, EngineError> {
+/// `PriceFeedLowConfidence`, `PriceFeedOutOfRange`, `PriceFeedPinned`). A reverting transaction
+/// drops its observation; policy (b) recovers the onset from the oracle timestamp at the next
+/// successful one (ADR-032).
+///
+/// # Errors
+/// The refusals above.
+pub fn require_live(coll: &CollateralState, obs: &Observed) -> Result<u128, Refusal> {
     if coll.admin_paused {
-        return Err(EngineError::Paused);
+        return Err(EngineError::Paused.into());
     }
-    obs.feed.map_err(EngineError::from)
+    obs.feed.map_err(feed_refusal)
 }
 
 /// v0.2.4 `liquidate`'s price: `require_live`, then the bid price `P = clamp(M, R·lo, R·hi)`.
@@ -122,11 +164,7 @@ pub fn require_live(coll: &CollateralState, obs: &Observed) -> Result<u128, Engi
 /// `gate::bid_pricing`; the tests keep it as the v0.2.4 reference those prices must equal at a
 /// zero-confidence reading under the legacy preset.
 #[cfg(test)]
-pub fn live_price(
-    coll: &CollateralState,
-    obs: &Observed,
-    r_ray: u128,
-) -> Result<u128, EngineError> {
+pub fn live_price(coll: &CollateralState, obs: &Observed, r_ray: u128) -> Result<u128, Refusal> {
     let m = require_live(coll, obs)?;
     Ok(auction_core::price::bid_price(
         m,
@@ -159,14 +197,32 @@ mod tests {
     }
 
     #[test]
+    fn sanity_window_is_a_parameter() {
+        let wide = OracleReading {
+            price_raw: 3 * RAY,
+            ..reading(0)
+        };
+        let legacy = fresh();
+        let obs = observe(&legacy, &wide, RAY, 0, 0).expect("observes");
+        assert_eq!(obs.feed, Err(FeedFault::OutOfRange));
+        let mut widened = fresh();
+        widened.ext.risk.sanity_hi_bps = 40_000;
+        let obs = observe(&widened, &wide, RAY, 0, 0).expect("observes");
+        assert_eq!(obs.feed, Ok(3 * RAY));
+    }
+
+    #[test]
     fn feed_age_counts_the_slack() {
         let c = fresh();
         // max age 3_600_000: at now + slack exactly max age old, still valid.
         let ok = observe(&c, &reading(0), RAY, 3_600_000 - 6_000, 6_000).expect("observes");
         assert_eq!(ok.feed, Ok(RAY));
         let stale = observe(&c, &reading(0), RAY, 3_600_001 - 6_000, 6_000).expect("observes");
-        assert_eq!(stale.feed, Err(PauseReason::Stale));
-        assert_eq!(require_live(&c, &stale), Err(EngineError::PriceFeedStale));
+        assert_eq!(stale.feed, Err(FeedFault::Stale));
+        assert_eq!(
+            require_live(&c, &stale),
+            Err(EngineError::PriceFeedStale.into())
+        );
         // The derived onset is ts + max age, capped at the claimed now.
         assert_eq!(stale.clock.paused_since_ms, Some(3_600_001 - 6_000));
     }
@@ -179,7 +235,7 @@ mod tests {
         };
         let obs = observe(&paused, &reading(100), RAY, 500, 6_000).expect("observes");
         assert_eq!(obs.clock.paused_since_ms, Some(500));
-        assert_eq!(require_live(&paused, &obs), Err(EngineError::Paused));
+        assert_eq!(require_live(&paused, &obs), Err(EngineError::Paused.into()));
         let resumed = CollateralState {
             admin_paused: false,
             ..paused.with_pause_clock(obs.clock)
@@ -218,7 +274,7 @@ mod tests {
         let obs = observe(&c, &low, RAY, 0, 6_000).expect("observes");
         assert_eq!(
             require_live(&c, &obs),
-            Err(EngineError::PriceFeedOutOfRange)
+            Err(EngineError::PriceFeedOutOfRange.into())
         );
         let bad = CollateralState {
             oracle_scale: 9,
@@ -228,6 +284,114 @@ mod tests {
             observe(&bad, &reading(0), RAY, 0, 6_000),
             Err(EngineError::InvalidConfig)
         );
+    }
+
+    #[test]
+    fn pinned_reading_pauses_refuses_with_its_own_code_and_is_not_recorded() {
+        let on = CollateralState {
+            ext: CollateralExt::new(risk_core::RiskArgs {
+                feed_min_raw: RAY / 4,
+                feed_max_raw: RAY * 2,
+                ..risk_core::RiskArgs::recommended()
+            }),
+            ..fresh()
+        };
+        for price_raw in [RAY / 4, RAY * 2] {
+            let pinned = OracleReading {
+                price_raw,
+                ..reading(1_000)
+            };
+            let obs = observe(&on, &pinned, RAY, 1_000, 6_000).expect("observes");
+            assert_eq!(obs.feed, Err(FeedFault::Pinned));
+            assert_eq!(obs.conf_bps, 0);
+            assert_eq!(obs.clock.paused_since_ms, Some(1_000));
+            assert_eq!(
+                require_live(&on, &obs),
+                Err(Refusal::Risk(RiskError::PriceFeedPinned))
+            );
+            assert_eq!(graced_like(record(&on, &pinned, &obs, 1_000), &on), on);
+        }
+        // A stale fault keeps its v0.2.4 code.
+        assert_eq!(
+            feed_refusal(FeedFault::Stale),
+            Refusal::Engine(EngineError::PriceFeedStale)
+        );
+    }
+
+    /// `coll` with the three grace fields of `like` (Task 7: `record` writes them on every
+    /// observation, so the ring checks below compare everything else).
+    fn graced_like(coll: CollateralState, like: &CollateralState) -> CollateralState {
+        CollateralState {
+            ext: CollateralExt {
+                last_good_ts_ms: like.ext.last_good_ts_ms,
+                feed_invalid_since_ms: like.ext.feed_invalid_since_ms,
+                grace_until_ms: like.ext.grace_until_ms,
+                ..coll.ext.clone()
+            },
+            ..coll
+        }
+    }
+
+    #[test]
+    fn record_tracks_the_grace_state() {
+        // Recommended preset: grace 1_800_000, minimum gap 600_000; fixture max age 3_600_000.
+        let on = CollateralState {
+            ext: CollateralExt::new(risk_core::RiskArgs::recommended()),
+            ..fresh()
+        };
+        let step = |c: &CollateralState, r: &OracleReading, now: u64| {
+            let obs = observe(c, r, RAY, now, 6_000).expect("observes");
+            record(c, r, &obs, now)
+        };
+        let good = step(&on, &reading(1_000), 1_000);
+        assert_eq!(good.ext.last_good_ts_ms, Some(1_000));
+        assert_eq!(good.ext.ring.samples.len(), 1);
+        // Stale at 3_700_000: the outage began when the reading aged out, at 3_601_000.
+        let invalid = step(&good, &reading(1_000), 3_700_000);
+        assert_eq!(invalid.ext.feed_invalid_since_ms, Some(3_601_000));
+        assert_eq!(invalid.ext.last_good_ts_ms, Some(1_000));
+        assert_eq!(invalid.ext.ring, good.ext.ring, "the ring is left");
+        assert_eq!(invalid.ext.grace_until_ms, 0);
+        // Back after 499_000 ms: below the minimum gap, no grace.
+        let short = step(&invalid, &reading(4_100_000), 4_100_000);
+        assert_eq!(short.ext.feed_invalid_since_ms, None);
+        assert_eq!(short.ext.last_good_ts_ms, Some(4_100_000));
+        assert_eq!(short.ext.grace_until_ms, 0);
+        // Back after 699_000 ms: grace until now + 1_800_000.
+        let back = step(&invalid, &reading(4_300_000), 4_300_000);
+        assert_eq!(back.ext.feed_invalid_since_ms, None);
+        assert_eq!(back.ext.last_good_ts_ms, Some(4_300_000));
+        assert_eq!(back.ext.grace_until_ms, 6_100_000);
+        assert_eq!(
+            back.ext.ring.samples.len(),
+            2,
+            "the valid reading is recorded"
+        );
+    }
+
+    #[test]
+    fn record_starts_grace_after_an_unobserved_gap() {
+        // Recommended preset: grace 1_800_000, minimum gap 600_000; fixture max age 3_600_000.
+        let on = CollateralState {
+            ext: CollateralExt::new(risk_core::RiskArgs::recommended()),
+            ..fresh()
+        };
+        let step = |c: &CollateralState, r: &OracleReading, now: u64| {
+            let obs = observe(c, r, RAY, now, 6_000).expect("observes");
+            assert_eq!(obs.feed, Ok(RAY));
+            record(c, r, &obs, now)
+        };
+        let good = step(&on, &reading(1_000), 1_000);
+        // No invalid observation between: the gap is the reading's ts - (1_000 + max age).
+        let back = step(&good, &reading(4_201_000), 4_201_000);
+        assert_eq!(back.ext.grace_until_ms, 4_201_000 + 1_800_000);
+        assert_eq!(back.ext.last_good_ts_ms, Some(4_201_000));
+        assert_eq!(back.ext.feed_invalid_since_ms, None);
+        // One millisecond short of max age + minimum gap: no grace.
+        let short = step(&good, &reading(4_200_999), 4_200_999);
+        assert_eq!(short.ext.grace_until_ms, 0);
+        assert_eq!(short.ext.last_good_ts_ms, Some(4_200_999));
+        assert_eq!(short.ext.feed_invalid_since_ms, None);
     }
 
     #[test]
@@ -259,11 +423,11 @@ mod tests {
         );
         // TWAP off: nothing recorded.
         let obs_off = observe(&off, &good, RAY, 1_000, 6_000).expect("observes");
-        assert_eq!(record(&off, &good, &obs_off, 1_000), off);
+        assert_eq!(graced_like(record(&off, &good, &obs_off, 1_000), &off), off);
         // Out of range: conf 0 and nothing recorded.
         let low = at(RAY / 2 - 1, 0, 1_000);
         let bad = observe(&on, &low, RAY, 1_000, 6_000).expect("observes");
         assert_eq!(bad.conf_bps, 0);
-        assert_eq!(record(&on, &low, &bad, 1_000), on);
+        assert_eq!(graced_like(record(&on, &low, &bad, 1_000), &on), on);
     }
 }

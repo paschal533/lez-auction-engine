@@ -24,7 +24,67 @@ pub fn tier2_collateral_args() -> CollateralArgs {
     }
 }
 
+/// The step [`World::advance_observed`] observes at, ms: below the Tier 2 max age, so no two
+/// valid observations are a grace-opening gap apart (ADR-075).
+pub const OBSERVE_STEP_MS: u64 = 300_000;
+
+/// The recommended preset with grace off, for Tier 2 fixtures that are not about grace. These
+/// worlds jump time without observing (setup at t = 0, then straight to their start time), and by
+/// spec §3.3 such a gap opens a grace period on the next valid observation, which would refuse
+/// their `Liquidate` with `GracePeriod`. Grace tests use [`World::new_tier2_live`] instead.
+#[must_use]
+pub fn recommended_no_grace() -> RiskArgs {
+    RiskArgs {
+        grace_ms: 0,
+        grace_min_gap_ms: 0,
+        ..RiskArgs::recommended()
+    }
+}
+
 impl World {
+    /// [`World::new_tier2`] whose feed is valid from its first observation: the oracle publishes
+    /// `RAY / 2` (inside the sanity window) at t = 0 before `SetCollateral` observes it. With
+    /// [`World::advance_observed`] it reaches any time without an outage, so grace stays closed.
+    #[must_use]
+    pub fn new_tier2_live(risk: RiskArgs) -> World {
+        let mut w = World::bare_with(RAY / 2, |_| {});
+        w.set_price(RAY / 2);
+        let key = w.admin_key.clone();
+        let init = w.init_msg();
+        w.send_engine(w.admin, &[&key], &init)
+            .expect("the engine is initialised");
+        let set = w.set_collateral_msg_with(tier2_collateral_args(), risk);
+        w.send_engine(w.admin, &[&key], &set)
+            .expect("the collateral is configured");
+        w.bind_host().expect("the host binds the config actor");
+        w
+    }
+
+    /// [`World::new_tier2_system`] whose feed is valid from its first observation, as
+    /// [`World::new_tier2_live`].
+    #[must_use]
+    pub fn new_tier2_system_live(risk: RiskArgs) -> World {
+        let mut w = World::bare_with(RAY / 2, |_| {});
+        w.set_price(RAY / 2);
+        w.init_system_with(World::engine_params(), None, tier2_collateral_args(), risk);
+        w
+    }
+
+    /// Advances the world's time to `to_ms` in steps of at most [`OBSERVE_STEP_MS`], publishing
+    /// `price_ray` and sending `ObserveFeed` at each, so the feed never has an outage.
+    ///
+    /// # Panics
+    /// If an `ObserveFeed` reverts or the time overflows.
+    pub fn advance_observed(&mut self, to_ms: u64, price_ray: u128) {
+        while self.now_ms < to_ms {
+            let step = self.now_ms.checked_add(OBSERVE_STEP_MS).expect("time fits");
+            self.set_now_ms(step.min(to_ms));
+            self.set_price(price_ray);
+            self.observe_feed(self.now_ms)
+                .expect("the feed is observed");
+        }
+    }
+
     /// [`World::new`] at redemption price `RAY / 2` with [`tier2_collateral_args`] and `risk`.
     #[must_use]
     pub fn new_tier2(risk: RiskArgs) -> World {
@@ -113,12 +173,7 @@ impl World {
     /// If the oracle or the collateral actor holds no state, or the time does not fit.
     pub fn go_stale(&mut self) {
         let coll = self.collateral_state();
-        let newest = self
-            .chain
-            .raw_state(self.oracle)
-            .and_then(|bytes| OracleState::decode(&bytes))
-            .expect("an oracle state")
-            .timestamp_ms;
+        let newest = self.oracle_state().timestamp_ms;
         let stale = newest
             .checked_add(coll.max_oracle_age_ms)
             .and_then(|t| t.checked_sub(coll.ctx.slack_ms))
@@ -126,6 +181,42 @@ impl World {
             .expect("time fits");
         assert!(stale > self.now_ms, "the feed is already stale");
         self.set_now_ms(stale);
+    }
+
+    /// Opens a grace period (ADR-075) through an observed outage: [`World::go_stale`], an
+    /// `ObserveFeed` that records the outage, then `grace_min_gap_ms` later a fresh publish of
+    /// the oracle's last price and confidence and an `ObserveFeed` that ends the outage. The
+    /// world's time is then the start of the grace period.
+    ///
+    /// # Panics
+    /// If an `ObserveFeed` reverts, the time does not fit, or no grace period opened (grace off,
+    /// or the collateral risk parameters' minimum gap is 0).
+    pub fn start_grace(&mut self) {
+        self.go_stale();
+        self.observe_feed(self.now_ms)
+            .expect("the stale feed is observed");
+        let min_gap = self.collateral_state().ext.risk.grace_min_gap_ms;
+        let back = self.now_ms.checked_add(min_gap).expect("time fits");
+        self.set_now_ms(back);
+        let last = self.oracle_state();
+        self.set_price_with_confidence(last.price_ray, last.confidence);
+        self.observe_feed(back).expect("the fresh feed is observed");
+        assert!(
+            self.collateral_state().ext.grace_until_ms > back,
+            "a grace period opened"
+        );
+    }
+
+    /// The world's oracle state.
+    ///
+    /// # Panics
+    /// If the oracle holds no oracle state.
+    #[must_use]
+    pub fn oracle_state(&self) -> OracleState {
+        self.chain
+            .raw_state(self.oracle)
+            .and_then(|bytes| OracleState::decode(&bytes))
+            .expect("an oracle state")
     }
 
     /// The world's collateral actor state.

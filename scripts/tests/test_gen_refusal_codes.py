@@ -3,6 +3,7 @@ import importlib.util
 import io
 import os
 import pathlib
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -174,6 +175,29 @@ class RiskErrorTest(Fixture):
         code, _, err = self.run_main()
         self.assertEqual(1, code)
         self.assertIn("TwapUnavailable: no proving test", err)
+
+
+class Plan10CodesTest(unittest.TestCase):
+    """Plan 10: 6072 GracePeriod and 6076 PriceFeedPinned are catalogued from the real tree."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.doc, cls.problems = g.render(str(pathlib.Path(__file__).resolve().parents[2]))
+
+    def assert_row(self, wire, name):
+        row = re.search(rf"^\| {wire} \| `{name}` \(0\.4 only\) \| {wire - g.WIRE_BASE} \|[^\n]*$",
+                        self.doc, re.MULTILINE)
+        self.assertIsNotNone(row, f"no (0.4 only) row for {wire} {name}")
+        cells = [c.strip() for c in row.group(0).strip("|").split("|")]
+        self.assertRegex(cells[4], r"`\(0\.4\) \w+`", f"{name} has no proving test")
+        self.assertTrue(cells[5], f"{name} has no meaning")
+        self.assertEqual([], [p for p in self.problems if p.startswith(name + ":")])
+
+    def test_grace_period_row(self):
+        self.assert_row(6072, "GracePeriod")
+
+    def test_price_feed_pinned_row(self):
+        self.assert_row(6076, "PriceFeedPinned")
 
 
 class CheckTest(Fixture):

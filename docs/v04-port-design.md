@@ -133,17 +133,22 @@ read the `ProgramHeader` at the loader actor, compare `image_id` with the reprod
 `DEPLOYMENTS.md` (ADR-047), and require `immutable == true` (or accept a named upgrade authority as a new,
 documented trust assumption).
 
-**Tier 2 state (Plan 9, ADR-070 to ADR-074).** Appended only: every existing field keeps its position, and
-each new field is the last of its struct (`v04/engine_core/src/state.rs`, `ext.rs`, `msg.rs`).
+**Tier 2 state (Plans 9 and 10, ADR-070 to ADR-075, ADR-082).** Appended only: every existing field keeps its
+position, and each new field is the last of its struct (`v04/engine_core/src/state.rs`, `ext.rs`, `msg.rs`,
+`system_state.rs`). Plan 10 appended `ConfigExt.engine`, the three grace fields of `CollateralExt`,
+`SystemCtx.ext`, six `RiskArgs` fields and the `ext` field of `Init` and `SetEngineParams`.
 
 | Actor / message | Appended | Holds |
 |---|---|---|
-| config `ConfigState` | `ext: ConfigExt { system_level: u8 }` | the system pause level (0-3) that gates `StartSurplus`/`StartDebt` (level >= 2) and the system takes (level 3), written by `SetPauseLevel` |
-| collateral actor `CollateralState` | `ext: CollateralExt { risk: RiskArgs, pause_level: u8, ring: TwapRing }` | the type's validated `RiskArgs` (twap_window_ms, twap_min_spacing_ms, twap_min_obs, max_spot_twap_dev_bps, stale_bid_max_age_ms), its pause level (0-3; `admin_paused` counts as 3), and the TWAP ring `TwapRing { samples: Vec<Sample { ts_ms: u64, price_ray: u128 }>, last_conf_bps: u16 }`, oldest first, at most 8 samples (198 bytes encoded when full) |
+| config `ConfigState` | `ext: ConfigExt { system_level: u8, engine: EngineExtArgs }` | the system pause level (0-3) that gates `StartSurplus`/`StartDebt` (level >= 2) and the system takes (level 3), written by `SetPauseLevel` (which keeps `engine`); and, since Plan 10, the validated engine parameters of the last `Init` or `SetEngineParams`: `EngineExtArgs { ref_conf_bps: u16, ref_clamp_bps: u16, debt_relist_delay_ms: u64, ref_sanity_lo_bps: u32, ref_sanity_hi_bps: u32, ref_scale: u8 }` (ruling R10-4: `ConfigExt::new(engine)`, no `Default`) |
+| collateral actor `CollateralState` | `ext: CollateralExt { risk: RiskArgs, pause_level: u8, ring: TwapRing, last_good_ts_ms: Option<u64>, feed_invalid_since_ms: Option<u64>, grace_until_ms: u64 }` | the type's validated `RiskArgs` (Plan 9: twap_window_ms, twap_min_spacing_ms, twap_min_obs, max_spot_twap_dev_bps, stale_bid_max_age_ms; Plan 10: sanity_lo_bps, sanity_hi_bps, feed_min_raw, feed_max_raw, grace_ms, grace_min_gap_ms), its pause level (0-3; `admin_paused` counts as 3), the TWAP ring `TwapRing { samples: Vec<Sample { ts_ms: u64, price_ray: u128 }>, last_conf_bps: u16 }`, oldest first, at most 8 samples (198 bytes encoded when full), and, since Plan 10, the grace state (ADR-075): the clamped timestamp of the newest valid reading, the onset of the current outage, and the end of the grace period (`Liquidate` waits while `now_ms < grace_until_ms`; 0 = none). `SetCollateral` keeps the ring, the level and the three grace fields |
+| `SystemCtx` (the context the config sends with `System` to its accounting) | `ext: EngineExtArgs` | a copy of `ConfigExt.engine` made by `SystemCtx::from_config` (ruling R10-6), so `ref_price` and `debt_precheck` read the reference-oracle parameters and the relist delay |
 | auction `AuctionState` | `stale_cap_ray: u128` | the D4 stale floor, set at `Seized` only while D4 is on; 0 otherwise, and in every legacy auction |
+| `Init` (0) | `ext: Box<EngineExtArgs>` | the engine parameters (Plan 10), validated at the config (`InvalidConfig` if out of bound) |
 | `SetCollateral` (1) | `risk: Box<RiskArgs>` | the type's Tier 2 parameters, validated at the config |
 | `BidCtx` (13) | `paused_since_ms: Option<u64>`, `fallback: bool` | a D4 fallback bid's open pause (so the auction's discount stays frozen) and its flag; `None`/`false` for a live bid |
 | `Configure` (15) | `risk: Box<RiskArgs>` | the validated `RiskArgs`, relayed from the config to the collateral actor (Plan 9 ruling R9-4) |
+| `SetEngineParams` (20) | `ext: Box<EngineExtArgs>` | replaces `ConfigExt.engine` (Plan 10); a change of `ref_scale` needs an idle system, like the reference oracle (ruling R10-5). No `now_ms` field (R10-3) |
 | `SetPauseLevel { salt, collateral_def, level, now_ms }` (47, new) | — | root at the admin's proxy; the config checks the admin, `level <= 3` (`InvalidConfig`) and that `collateral_def` is its recorded type (`WrongAccount("collateral_def")`), writes `system_level`, then sends a seeded `Probe { Collateral }`, `PauseLevelUpdate` and `Observe { now_ms }` to the collateral actor |
 | `PauseLevelUpdate { level }` (48, new) | — | config to its collateral actor, accepted only from that config: writes `ext.pause_level`, sends nothing |
 
@@ -152,7 +157,7 @@ ring (`CollateralState::for_quote`). Indices 49 and 50 are reserved for Plan 12.
 the v04-only crate `v04/risk_core` (`no_std` outside its tests; it depends on `auction_core` and,
 behind a feature, `borsh`), so the frozen v0.2.4 sources are untouched (ADR-069).
 
-Migration note: Borsh does not decode a pre-Plan-9 encoding into the new layout. No 0.4 state exists outside
+Migration note: Borsh does not decode a pre-Plan-9 encoding, nor a Plan 9 encoding after Plan 10, into the new layout. No 0.4 state exists outside
 local runs, so: **recreate local state; tags unchanged.**
 
 ## 4. Instruction-by-instruction mapping

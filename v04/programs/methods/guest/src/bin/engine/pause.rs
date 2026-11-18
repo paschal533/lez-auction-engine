@@ -53,6 +53,7 @@ pub fn on_set_pause_level(input: &ReceiveInput, message: &EngineMsg) -> Response
     let next = ConfigState {
         ext: ConfigExt {
             system_level: level,
+            ..config.ext
         },
         ..config
     };
